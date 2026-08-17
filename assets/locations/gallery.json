@@ -1,0 +1,52 @@
+{
+ "amber-fort": {
+  "label": "Amber Fort, Jaipur",
+  "region": "India",
+  "file": "assets/locations/amber-fort-0.png"
+ },
+ "udaipur-palace": {
+  "label": "City Palace, Udaipur",
+  "region": "India",
+  "file": "assets/locations/udaipur-palace-0.png"
+ },
+ "kerala-backwaters": {
+  "label": "Kerala Backwaters",
+  "region": "India",
+  "file": "assets/locations/kerala-backwaters-0.png"
+ },
+ "taj-mahal": {
+  "label": "Taj Mahal, Agra",
+  "region": "India",
+  "file": "assets/locations/taj-mahal-0.png"
+ },
+ "rann-of-kutch": {
+  "label": "Rann of Kutch",
+  "region": "India",
+  "file": "assets/locations/rann-of-kutch-0.png"
+ },
+ "paris": {
+  "label": "Paris, France",
+  "region": "International",
+  "file": "assets/locations/paris-0.png"
+ },
+ "santorini": {
+  "label": "Santorini, Greece",
+  "region": "International",
+  "file": "assets/locations/santorini-0.png"
+ },
+ "dubai-desert": {
+  "label": "Dubai Desert",
+  "region": "International",
+  "file": "assets/locations/dubai-desert-0.png"
+ },
+ "lake-como": {
+  "label": "Lake Como, Italy",
+  "region": "International",
+  "file": "assets/locations/lake-como-0.png"
+ },
+ "kyoto": {
+  "label": "Kyoto, Japan",
+  "region": "International",
+  "file": "assets/locations/kyoto-0.png"
+ }
+}

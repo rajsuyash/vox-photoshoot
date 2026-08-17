@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vox Photo-Shoot</title>
+<style>
+  :root {
+    --ink: #14100c;
+    --muted: #7d736a;
+    --line: #e6e0d8;
+    --paper: #faf8f5;
+    --gold: #b08b4f;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 16px/1.55 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 26px 32px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 14px;
+    position: sticky; top: 0; background: rgba(250,248,245,.92);
+    backdrop-filter: blur(8px); z-index: 10;
+  }
+  header h1 { margin: 0; font-size: 21px; letter-spacing: .16em; text-transform: uppercase; font-weight: 600; }
+  header span { color: var(--muted); font-size: 13px; letter-spacing: .04em; }
+  main { max-width: 1180px; margin: 0 auto; padding: 40px 32px 160px; }
+
+  section { margin-bottom: 56px; }
+  .step { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .num {
+    width: 27px; height: 27px; border-radius: 50%; flex: none;
+    display: grid; place-items: center; font-size: 13px; font-weight: 600;
+    background: var(--ink); color: var(--paper);
+  }
+  section[data-done="true"] .num { background: var(--gold); }
+  .step h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  .step em { color: var(--muted); font-style: normal; font-size: 14px; }
+
+  .drop {
+    border: 1.5px dashed var(--line); border-radius: var(--radius); background: #fff;
+    padding: 40px; text-align: center; cursor: pointer; transition: border-color .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--gold); }
+  .drop p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+  .drop strong { font-size: 15px; }
+  .preview { display: flex; align-items: center; gap: 18px; }
+  .preview img {
+    width: 108px; height: 108px; object-fit: contain;
+    background: #fff; border: 1px solid var(--line); border-radius: 10px;
+  }
+
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .card {
+    border: 1.5px solid var(--line); border-radius: var(--radius); overflow: hidden;
+    background: #fff; cursor: pointer; padding: 0; text-align: left;
+    font: inherit; color: inherit; transition: border-color .15s, transform .15s;
+  }
+  .card:hover { transform: translateY(-2px); }
+  .card[aria-pressed="true"] { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(176,139,79,.16); }
+  .card img { display: block; width: 100%; aspect-ratio: 3/4; object-fit: cover; background: #eee; }
+  .card b { display: block; padding: 10px 12px 12px; font-size: 13.5px; font-weight: 600; }
+  .card b small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; margin-top: 2px; }
+
+  .group-label {
+    font-size: 12px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--muted); margin: 26px 0 12px;
+  }
+
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0; padding: 16px 32px;
+    background: rgba(250,248,245,.95); backdrop-filter: blur(8px);
+    border-top: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  }
+  .bar .summary { font-size: 14px; color: var(--muted); }
+  .bar .summary b { color: var(--ink); font-weight: 600; }
+  button.go {
+    border: 0; border-radius: 999px; padding: 14px 34px; font-size: 15px; font-weight: 600;
+    background: var(--ink); color: var(--paper); cursor: pointer;
+  }
+  button.go:disabled { background: #d9d2c9; color: #fff; cursor: not-allowed; }
+
+  .results { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .results figure { margin: 0; }
+  .results img { width: 100%; border-radius: var(--radius); display: block; background: #eee; }
+  .results figcaption {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 13px; color: var(--muted); padding-top: 8px;
+  }
+  .results a { color: var(--gold); text-decoration: none; font-weight: 600; }
+  .results button.link {
+    background: none; border: 0; padding: 0; cursor: pointer;
+    color: var(--muted); font: inherit; font-weight: 600; text-decoration: underline;
+  }
+  .results button.link:hover { color: var(--ink); }
+
+  .shimmer { border-radius: var(--radius); aspect-ratio: 3/4;
+    background: linear-gradient(100deg, #ece7e0 30%, #f7f4ef 50%, #ece7e0 70%);
+    background-size: 220% 100%; animation: sweep 1.3s infinite linear; }
+  @keyframes sweep { to { background-position: -220% 0; } }
+  .error { background: #fdf1f1; border: 1px solid #f0c9c9; color: #8c2c2c;
+    padding: 14px 16px; border-radius: 10px; font-size: 14px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Vox Photo-Shoot</h1>
+  <span>product photo to campaign imagery</span>
+</header>
+
+<main>
+  <section id="s1">
+    <div class="step"><span class="num">1</span><h2>Upload the piece</h2><em>one clean front-facing photo works best</em></div>
+    <div class="drop" id="drop">
+      <div id="dropIdle"><strong>Drop your product photo here</strong><p>or click to choose &middot; JPG, PNG or WEBP</p></div>
+      <div class="preview hidden" id="dropPreview">
+        <img id="previewImg" alt="Your product">
+        <div><strong id="previewName"></strong><p>Click to replace</p></div>
+      </div>
+    </div>
+    <input type="file" id="file" accept="image/*" hidden>
+  </section>
+
+  <section id="s2">
+    <div class="step"><span class="num">2</span><h2>Choose your model</h2></div>
+    <div class="grid" id="models"></div>
+  </section>
+
+  <section id="s3">
+    <div class="step"><span class="num">3</span><h2>Choose the location</h2></div>
+    <div id="locations"></div>
+  </section>
+
+  <section id="out" class="hidden">
+    <div class="step"><span class="num">&#10003;</span><h2>Your shoot</h2><em id="outNote"></em></div>
+    <div id="error" class="error hidden"></div>
+    <div class="results" id="results"></div>
+  </section>
+</main>
+
+<div class="bar">
+  <div class="summary" id="summary">Upload a product to begin</div>
+  <button class="go" id="go" disabled>Generate shoot</button>
+</div>
+
+<script>
+const state = { file: null, model: null, location: null, expected: 3 };
+
+const $ = (id) => document.getElementById(id);
+const drop = $('drop'), fileInput = $('file');
+
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', (e) => {
+  e.preventDefault(); drop.classList.remove('over');
+  if (e.dataTransfer.files[0]) acceptFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => fileInput.files[0] && acceptFile(fileInput.files[0]));
+
+function acceptFile(file) {
+  if (!file.type.startsWith('image/')) return;
+  state.file = file;
+  $('previewImg').src = URL.createObjectURL(file);
+  $('previewName').textContent = file.name;
+  $('dropIdle').classList.add('hidden');
+  $('dropPreview').classList.remove('hidden');
+  $('s1').dataset.done = 'true';
+  refresh();
+}
+
+function cardButton({ key, image, title, subtitle, onPick, group }) {
+  const button = document.createElement('button');
+  button.className = 'card';
+  button.type = 'button';
+  button.setAttribute('aria-pressed', 'false');
+  button.dataset.group = group;
+  button.innerHTML =
+    `<img src="${image || ''}" alt="" loading="lazy">` +
+    `<b>${title}${subtitle ? `<small>${subtitle}</small>` : ''}</b>`;
+  button.addEventListener('click', () => {
+    document.querySelectorAll(`.card[data-group="${group}"]`)
+      .forEach((other) => other.setAttribute('aria-pressed', 'false'));
+    button.setAttribute('aria-pressed', 'true');
+    onPick(key);
+  });
+  return button;
+}
+
+function titleCase(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+async function load() {
+  const [models, places] = await Promise.all([
+    fetch('/api/models').then((r) => r.json()),
+    fetch('/api/locations').then((r) => r.json()),
+  ]);
+
+  const modelGrid = $('models');
+  models.forEach((model) => modelGrid.appendChild(cardButton({
+    key: model.key, image: model.image, group: 'model',
+    title: titleCase(model.key),
+    subtitle: model.description.split(',')[0],
+    onPick: (key) => { state.model = key; $('s2').dataset.done = 'true'; refresh(); },
+  })));
+
+  const wrap = $('locations');
+  for (const region of ['India', 'International']) {
+    const label = document.createElement('div');
+    label.className = 'group-label';
+    label.textContent = region;
+    wrap.appendChild(label);
+
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    places.filter((place) => place.region === region).forEach((place) => {
+      grid.appendChild(cardButton({
+        key: place.key, image: place.image, group: 'location',
+        title: place.label,
+        onPick: (key) => { state.location = key; $('s3').dataset.done = 'true'; refresh(); },
+      }));
+    });
+    wrap.appendChild(grid);
+  }
+}
+
+function refresh() {
+  const ready = state.file && state.model && state.location;
+  $('go').disabled = !ready;
+  const bits = [];
+  if (state.file) bits.push('product ready');
+  if (state.model) bits.push(`model <b>${titleCase(state.model)}</b>`);
+  if (state.location) bits.push('location set');
+  $('summary').innerHTML = ready
+    ? `${bits.join(' &middot; ')} &middot; <b>${state.expected} images</b>`
+    : (bits.join(' &middot; ') || 'Upload a product to begin');
+}
+
+$('go').addEventListener('click', async () => {
+  $('go').disabled = true;
+  $('out').classList.remove('hidden');
+  $('error').classList.add('hidden');
+  $('outNote').textContent = 'usually about a minute';
+  const results = $('results');
+  results.innerHTML = '';
+  for (let i = 0; i < state.expected; i++) {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'shimmer';
+    results.appendChild(placeholder);
+  }
+  $('out').scrollIntoView({ behavior: 'smooth' });
+
+  const body = new FormData();
+  body.append('product', state.file);
+  body.append('model_key', state.model);
+  body.append('location_key', state.location);
+
+  try {
+    const started = await fetch('/api/shoots', { method: 'POST', body }).then((r) => r.json());
+    state.expected = started.expected || state.expected;
+    poll(started.job_id);
+  } catch (error) {
+    fail(String(error));
+  }
+});
+
+function fail(message) {
+  $('error').textContent = message;
+  $('error').classList.remove('hidden');
+  $('results').innerHTML = '';
+  $('outNote').textContent = '';
+  $('go').disabled = false;
+}
+
+async function poll(jobId) {
+  const job = await fetch(`/api/shoots/${jobId}`).then((r) => r.json());
+  if (job.status === 'running') return setTimeout(() => poll(jobId), 3000);
+  if (job.status === 'failed') return fail(job.error || 'generation failed');
+
+  const warnings = job.warnings || [];
+  if (warnings.length) {
+    $('error').textContent = `${warnings.join('; ')} — use Reshoot to try again.`;
+    $('error').classList.remove('hidden');
+  } else {
+    $('error').classList.add('hidden');
+  }
+  $('outNote').textContent = `${job.images.length} images · ready to download`;
+  $('results').innerHTML = job.images.map((src) => {
+    const framing = src.split('/').pop().split('-').slice(-2)[0];
+    return `<figure><img src="${src}?t=${Date.now()}" alt="${framing}">
+      <figcaption><span>${titleCase(framing)}</span><span>
+      <button class="link" data-framing="${framing}">Reshoot</button>
+      &nbsp;<a href="${src}" download>Download</a></span></figcaption></figure>`;
+  }).join('');
+  document.querySelectorAll('#results button.link').forEach((button) => {
+    button.addEventListener('click', () => reshoot(jobId, button.dataset.framing));
+  });
+  $('go').disabled = false;
+}
+
+// The model sometimes drifts the face or invents a necklace on one frame. Rerunning a
+// single framing costs ~1.5 credits instead of throwing away the whole shoot.
+async function reshoot(jobId, framing) {
+  $('outNote').textContent = `regenerating the ${framing} shot…`;
+  $('go').disabled = true;
+  await fetch(`/api/shoots/${jobId}/reshoot?framing=${framing}`, { method: 'POST' });
+  poll(jobId);
+}
+
+load();
+</script>
+</body>
+</html>

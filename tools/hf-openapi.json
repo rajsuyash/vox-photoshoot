@@ -1,0 +1,3650 @@
+{
+    "info": {
+        "title": "Higgsfield API",
+        "version": "2.0.0",
+        "description": "Submit generation requests and retrieve their status and outputs."
+    },
+    "servers": [
+        {
+            "url": "https://platform.higgsfield.ai"
+        }
+    ],
+    "x-mcp": {
+        "enabled": true
+    },
+    "paths": {
+        "/requests/{request_id}/status": {
+            "get": {
+                "summary": "Get request status",
+                "operationId": "get_request_status",
+                "parameters": [
+                    {
+                        "name": "request_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Request Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Current request state and output, when available.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid API credentials.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "The request does not exist or belongs to another account.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                },
+                "tags": [
+                    "Requests"
+                ],
+                "description": "Retrieve the current state and output of a generation request."
+            }
+        },
+        "/requests/{request_id}/cancel": {
+            "post": {
+                "summary": "Cancel a queued request",
+                "operationId": "cancel_request",
+                "parameters": [
+                    {
+                        "name": "request_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Request Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "The request was canceled."
+                    },
+                    "400": {
+                        "description": "The request has already started and can no longer be canceled.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid API credentials.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "The request does not exist or belongs to another account.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                },
+                "tags": [
+                    "Requests"
+                ],
+                "description": "Cancel a request that has not started processing. A successful response has no body."
+            }
+        },
+        "/higgsfield-ai/dop/turbo": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "seed": {
+                                        "type": "integer",
+                                        "title": "Seed",
+                                        "default": null,
+                                        "maximum": 1000000,
+                                        "minimum": 1
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "motions": {
+                                        "type": "array",
+                                        "items": {
+                                            "$ref": "#/components/schemas/MotionSchema"
+                                        },
+                                        "title": "Motions",
+                                        "default": null,
+                                        "maxItems": 2,
+                                        "minItems": 0
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "First frame image",
+                                        "format": "uri"
+                                    },
+                                    "end_image_url": {
+                                        "type": "string",
+                                        "title": "Last frame image",
+                                        "format": "uri"
+                                    },
+                                    "enhance_prompt": {
+                                        "type": "boolean",
+                                        "title": "Enhance Prompt",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_higgsfield_ai_dop_turbo",
+                "summary": "Create higgsfield-ai dop turbo",
+                "tags": [
+                    "Dop"
+                ]
+            }
+        },
+        "/higgsfield-ai/dop/lite": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "seed": {
+                                        "type": "integer",
+                                        "title": "Seed",
+                                        "default": null,
+                                        "maximum": 1000000,
+                                        "minimum": 1
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "motions": {
+                                        "type": "array",
+                                        "items": {
+                                            "$ref": "#/components/schemas/MotionSchema"
+                                        },
+                                        "title": "Motions",
+                                        "default": null,
+                                        "maxItems": 2,
+                                        "minItems": 0
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "First frame image",
+                                        "format": "uri"
+                                    },
+                                    "end_image_url": {
+                                        "type": "string",
+                                        "title": "Last frame image",
+                                        "format": "uri"
+                                    },
+                                    "enhance_prompt": {
+                                        "type": "boolean",
+                                        "title": "Enhance Prompt",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_higgsfield_ai_dop_lite",
+                "summary": "Create higgsfield-ai dop lite",
+                "tags": [
+                    "Dop"
+                ]
+            }
+        },
+        "/higgsfield-ai/dop/standard": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "seed": {
+                                        "type": "integer",
+                                        "title": "Seed",
+                                        "default": null,
+                                        "maximum": 1000000,
+                                        "minimum": 1
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "motions": {
+                                        "type": "array",
+                                        "items": {
+                                            "$ref": "#/components/schemas/MotionSchema"
+                                        },
+                                        "title": "Motions",
+                                        "default": null,
+                                        "maxItems": 2,
+                                        "minItems": 0
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "First frame image",
+                                        "format": "uri"
+                                    },
+                                    "end_image_url": {
+                                        "type": "string",
+                                        "title": "Last frame image",
+                                        "format": "uri"
+                                    },
+                                    "enhance_prompt": {
+                                        "type": "boolean",
+                                        "title": "Enhance Prompt",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_higgsfield_ai_dop_standard",
+                "summary": "Create higgsfield-ai dop standard",
+                "tags": [
+                    "Dop"
+                ]
+            }
+        },
+        "/higgsfield-ai/popcorn/auto": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "seed": {
+                                        "type": "integer",
+                                        "title": "Seed",
+                                        "default": null,
+                                        "maximum": 1000000,
+                                        "minimum": 1
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "image_urls": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string",
+                                            "title": "Reference image",
+                                            "format": "uri"
+                                        },
+                                        "title": "Image references",
+                                        "maxItems": 8,
+                                        "minItems": 0
+                                    },
+                                    "num_images": {
+                                        "type": "integer",
+                                        "title": "Output images count",
+                                        "default": 1,
+                                        "maximum": 8,
+                                        "minimum": 1
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720p",
+                                            "1600p"
+                                        ],
+                                        "type": "string",
+                                        "title": "Quality",
+                                        "default": "720p"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "1:1",
+                                            "4:3",
+                                            "3:4",
+                                            "3:2",
+                                            "2:3",
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "4:3"
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_higgsfield_ai_popcorn_auto",
+                "summary": "Create higgsfield-ai popcorn auto",
+                "tags": [
+                    "Popcorn"
+                ]
+            }
+        },
+        "/higgsfield-ai/soul/character": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "seed": {
+                                        "type": "integer",
+                                        "title": "Seed",
+                                        "default": null,
+                                        "maximum": 1000000,
+                                        "minimum": 1
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "style_id": {
+                                        "type": "string",
+                                        "title": "Soul Style",
+                                        "format": "uuid",
+                                        "default": null
+                                    },
+                                    "batch_size": {
+                                        "enum": [
+                                            1,
+                                            4
+                                        ],
+                                        "type": "integer",
+                                        "title": "Result images",
+                                        "default": 1
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720p",
+                                            "1080p"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720p"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "9:16",
+                                            "16:9",
+                                            "4:3",
+                                            "3:4",
+                                            "1:1",
+                                            "2:3",
+                                            "3:2"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "4:3"
+                                    },
+                                    "enhance_prompt": {
+                                        "type": "boolean",
+                                        "title": "Enhance Prompt",
+                                        "default": true
+                                    },
+                                    "style_strength": {
+                                        "type": "number",
+                                        "title": "Style strength",
+                                        "format": "float",
+                                        "default": 1,
+                                        "maximum": 1,
+                                        "minimum": 0
+                                    },
+                                    "custom_reference_id": {
+                                        "type": "string",
+                                        "title": "Character ID",
+                                        "format": "uuid"
+                                    },
+                                    "image_reference_url": {
+                                        "type": "string",
+                                        "title": "Image reference url",
+                                        "format": "uri"
+                                    },
+                                    "custom_reference_strength": {
+                                        "type": "number",
+                                        "title": "Character strength",
+                                        "format": "float",
+                                        "default": 1,
+                                        "maximum": 1,
+                                        "minimum": 0
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "custom_reference_id",
+                                    "custom_reference_strength"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_higgsfield_ai_soul_character",
+                "summary": "Create higgsfield-ai soul character",
+                "tags": [
+                    "Soul"
+                ]
+            }
+        },
+        "/higgsfield-ai/soul/reference": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "seed": {
+                                        "type": "integer",
+                                        "title": "Seed",
+                                        "default": null,
+                                        "maximum": 1000000,
+                                        "minimum": 1
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "style_id": {
+                                        "type": "string",
+                                        "title": "Soul Style",
+                                        "format": "uuid",
+                                        "default": null
+                                    },
+                                    "batch_size": {
+                                        "enum": [
+                                            1,
+                                            4
+                                        ],
+                                        "type": "integer",
+                                        "title": "Result images",
+                                        "default": 1
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720p",
+                                            "1080p"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720p"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "9:16",
+                                            "16:9",
+                                            "4:3",
+                                            "3:4",
+                                            "1:1",
+                                            "2:3",
+                                            "3:2"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "4:3"
+                                    },
+                                    "enhance_prompt": {
+                                        "type": "boolean",
+                                        "title": "Enhance Prompt",
+                                        "default": true
+                                    },
+                                    "style_strength": {
+                                        "type": "number",
+                                        "title": "Style strength",
+                                        "format": "float",
+                                        "default": 1,
+                                        "maximum": 1,
+                                        "minimum": 0
+                                    },
+                                    "image_reference_url": {
+                                        "type": "string",
+                                        "title": "Image reference url",
+                                        "format": "uri"
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_reference_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_higgsfield_ai_soul_reference",
+                "summary": "Create higgsfield-ai soul reference",
+                "tags": [
+                    "Soul"
+                ]
+            }
+        },
+        "/higgsfield-ai/soul/standard": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "num_images": {
+                                        "type": "integer",
+                                        "default": 1,
+                                        "maximum": 4,
+                                        "minimum": 1
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "2K",
+                                            "4K"
+                                        ],
+                                        "default": "2K"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "1:1",
+                                            "4:3",
+                                            "3:4",
+                                            "3:2",
+                                            "2:3",
+                                            "5:4",
+                                            "4:5",
+                                            "16:9",
+                                            "9:16",
+                                            "21:9"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "4:3"
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_higgsfield_ai_soul_standard",
+                "summary": "Create higgsfield-ai soul standard",
+                "tags": [
+                    "Soul"
+                ]
+            }
+        },
+        "/veo3.1": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            "4",
+                                            "6",
+                                            "8"
+                                        ],
+                                        "type": "string",
+                                        "title": "Duration",
+                                        "default": "6"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "16:9"
+                                    },
+                                    "generate_audio": {
+                                        "type": "boolean",
+                                        "title": "Generate audio",
+                                        "default": false
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "aspect_ratio",
+                                    "resolution",
+                                    "generate_audio"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_veo3_1",
+                "summary": "Create veo3.1",
+                "tags": [
+                    "Veo3.1"
+                ]
+            }
+        },
+        "/veo3.1/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            "4",
+                                            "6",
+                                            "8"
+                                        ],
+                                        "type": "string",
+                                        "title": "Duration",
+                                        "default": "6"
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image",
+                                        "format": "uri",
+                                        "minLength": 3
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "16:9"
+                                    },
+                                    "generate_audio": {
+                                        "type": "boolean",
+                                        "title": "Generate audio",
+                                        "default": false
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_veo3_1_image_to_video",
+                "summary": "Create veo3.1 image-to-video",
+                "tags": [
+                    "Veo3.1"
+                ]
+            }
+        },
+        "/veo3.1/first-last-frame-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            "4",
+                                            "6",
+                                            "8"
+                                        ],
+                                        "type": "string",
+                                        "title": "Duration",
+                                        "default": "6"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "16:9"
+                                    },
+                                    "generate_audio": {
+                                        "type": "boolean",
+                                        "title": "Generate audio",
+                                        "default": false
+                                    },
+                                    "last_frame_url": {
+                                        "type": "string",
+                                        "title": "Image",
+                                        "format": "uri",
+                                        "minLength": 3
+                                    },
+                                    "first_frame_url": {
+                                        "type": "string",
+                                        "title": "Image",
+                                        "format": "uri",
+                                        "minLength": 3
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "first_frame_url",
+                                    "last_frame_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_veo3_1_first_last_frame_to_video",
+                "summary": "Create veo3.1 first-last-frame-to-video",
+                "tags": [
+                    "Veo3.1"
+                ]
+            }
+        },
+        "/veo3.1/fast/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            "4",
+                                            "6",
+                                            "8"
+                                        ],
+                                        "type": "string",
+                                        "title": "Duration",
+                                        "default": "6"
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image",
+                                        "format": "uri",
+                                        "minLength": 3
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "16:9"
+                                    },
+                                    "generate_audio": {
+                                        "type": "boolean",
+                                        "title": "Generate audio",
+                                        "default": false
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_veo3_1_fast_image_to_video",
+                "summary": "Create veo3.1 fast image-to-video",
+                "tags": [
+                    "Veo3.1"
+                ]
+            }
+        },
+        "/veo3.1/fast": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            "4",
+                                            "6",
+                                            "8"
+                                        ],
+                                        "type": "string",
+                                        "title": "Duration",
+                                        "default": "6"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "16:9"
+                                    },
+                                    "generate_audio": {
+                                        "type": "boolean",
+                                        "title": "Generate audio",
+                                        "default": false
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "aspect_ratio",
+                                    "resolution",
+                                    "generate_audio"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_veo3_1_fast",
+                "summary": "Create veo3.1 fast",
+                "tags": [
+                    "Veo3.1"
+                ]
+            }
+        },
+        "/veo3.1/fast/first-last-frame-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            "4",
+                                            "6",
+                                            "8"
+                                        ],
+                                        "type": "string",
+                                        "title": "Duration",
+                                        "default": "6"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "16:9"
+                                    },
+                                    "generate_audio": {
+                                        "type": "boolean",
+                                        "title": "Generate audio",
+                                        "default": false
+                                    },
+                                    "last_frame_url": {
+                                        "type": "string",
+                                        "title": "Image",
+                                        "format": "uri",
+                                        "minLength": 3
+                                    },
+                                    "first_frame_url": {
+                                        "type": "string",
+                                        "title": "Image",
+                                        "format": "uri",
+                                        "minLength": 3
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "first_frame_url",
+                                    "last_frame_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_veo3_1_fast_first_last_frame_to_video",
+                "summary": "Create veo3.1 fast first-last-frame-to-video",
+                "tags": [
+                    "Veo3.1"
+                ]
+            }
+        },
+        "/veo3.1/reference-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            "4",
+                                            "6",
+                                            "8"
+                                        ],
+                                        "type": "string",
+                                        "title": "Duration",
+                                        "default": "6"
+                                    },
+                                    "image_urls": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string",
+                                            "title": "Image",
+                                            "format": "uri",
+                                            "minLength": 3
+                                        },
+                                        "maxItems": 3,
+                                        "minItems": 1
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "16:9"
+                                    },
+                                    "generate_audio": {
+                                        "type": "boolean",
+                                        "title": "Generate audio",
+                                        "default": false
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_urls"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_veo3_1_reference_to_video",
+                "summary": "Create veo3.1 reference-to-video",
+                "tags": [
+                    "Veo3.1"
+                ]
+            }
+        },
+        "/bytedance/seedance/v1/lite/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string"
+                                    },
+                                    "duration": {
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5,
+                                        "maximum": 12,
+                                        "minimum": 2
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image",
+                                        "format": "uri"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "480",
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "1080"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16",
+                                            "4:3",
+                                            "3:4",
+                                            "1:1",
+                                            "21:9"
+                                        ],
+                                        "type": "string",
+                                        "default": "16:9"
+                                    },
+                                    "camera_fixed": {
+                                        "type": "boolean",
+                                        "title": "Camera fixed",
+                                        "default": false
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_bytedance_seedance_v1_lite_image_to_video",
+                "summary": "Create bytedance seedance v1 lite image-to-video",
+                "tags": [
+                    "Bytedance"
+                ]
+            }
+        },
+        "/bytedance/seedance/v1/lite/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string"
+                                    },
+                                    "duration": {
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5,
+                                        "maximum": 12,
+                                        "minimum": 2
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "480",
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16",
+                                            "4:3",
+                                            "3:4",
+                                            "1:1",
+                                            "21:9"
+                                        ],
+                                        "type": "string",
+                                        "default": "16:9"
+                                    },
+                                    "camera_fixed": {
+                                        "type": "boolean",
+                                        "title": "Camera fixed",
+                                        "default": false
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_bytedance_seedance_v1_lite_text_to_video",
+                "summary": "Create bytedance seedance v1 lite text-to-video",
+                "tags": [
+                    "Bytedance"
+                ]
+            }
+        },
+        "/bytedance/seedance/v1/pro/fast/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string"
+                                    },
+                                    "duration": {
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5,
+                                        "maximum": 12,
+                                        "minimum": 2
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image",
+                                        "format": "uri"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "480",
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "1080"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16",
+                                            "4:3",
+                                            "3:4",
+                                            "1:1",
+                                            "21:9"
+                                        ],
+                                        "type": "string",
+                                        "default": "16:9"
+                                    },
+                                    "camera_fixed": {
+                                        "type": "boolean",
+                                        "title": "Camera fixed",
+                                        "default": false
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_bytedance_seedance_v1_pro_fast_image_to_video",
+                "summary": "Create bytedance seedance v1 pro fast image-to-video",
+                "tags": [
+                    "Bytedance"
+                ]
+            }
+        },
+        "/bytedance/seedance/v1/pro/fast/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string"
+                                    },
+                                    "duration": {
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5,
+                                        "maximum": 12,
+                                        "minimum": 2
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "480",
+                                            "720",
+                                            "1080"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "1080"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16",
+                                            "4:3",
+                                            "3:4",
+                                            "1:1",
+                                            "21:9"
+                                        ],
+                                        "type": "string",
+                                        "default": "16:9"
+                                    },
+                                    "camera_fixed": {
+                                        "type": "boolean",
+                                        "title": "Camera fixed",
+                                        "default": false
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_bytedance_seedance_v1_pro_fast_text_to_video",
+                "summary": "Create bytedance seedance v1 pro fast text-to-video",
+                "tags": [
+                    "Bytedance"
+                ]
+            }
+        },
+        "/flux-pro/kontext/max/text-to-image": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "seed": {
+                                        "type": "integer",
+                                        "maximum": 1000000,
+                                        "minimum": 1,
+                                        "description": "Random seed for reproducibility"
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "description": "Text prompt for image generation"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "4:3",
+                                            "1:1",
+                                            "3:4",
+                                            "9:16",
+                                            "2:3",
+                                            "1:2",
+                                            "2:1",
+                                            "4:5",
+                                            "3:2"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect ratio",
+                                        "default": "16:9"
+                                    },
+                                    "safety_tolerance": {
+                                        "type": "integer",
+                                        "default": 6,
+                                        "maximum": 6,
+                                        "minimum": 0,
+                                        "description": "Safety tolerance level (0-6)"
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_flux_pro_kontext_max_text_to_image",
+                "summary": "Create flux-pro kontext max text-to-image",
+                "tags": [
+                    "Flux Pro"
+                ]
+            }
+        },
+        "/kling-video/v2.1/master/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            5,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5
+                                    },
+                                    "cfg_scale": {
+                                        "type": "number",
+                                        "title": "CFG Scale",
+                                        "default": 0.5,
+                                        "maximum": 1,
+                                        "minimum": 0,
+                                        "multipleOf": 0.01
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "negative_prompt": {
+                                        "type": "string",
+                                        "title": "Negative Prompt",
+                                        "default": ""
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_kling_video_v2_1_master_image_to_video",
+                "summary": "Create kling-video v2.1 master image-to-video",
+                "tags": [
+                    "Kling Video"
+                ]
+            }
+        },
+        "/kling-video/v2.1/master/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt",
+                                        "maxLength": 2500
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            5,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5
+                                    },
+                                    "cfg_scale": {
+                                        "type": "number",
+                                        "title": "CFG Scale",
+                                        "default": 0.5,
+                                        "maximum": 1,
+                                        "minimum": 0,
+                                        "multipleOf": 0.01
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "1:1",
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "1:1"
+                                    },
+                                    "negative_prompt": {
+                                        "type": "string",
+                                        "title": "Negative Prompt",
+                                        "default": ""
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_kling_video_v2_1_master_text_to_video",
+                "summary": "Create kling-video v2.1 master text-to-video",
+                "tags": [
+                    "Kling Video"
+                ]
+            }
+        },
+        "/kling-video/v2.1/pro/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            5,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5
+                                    },
+                                    "cfg_scale": {
+                                        "type": "number",
+                                        "title": "CFG Scale",
+                                        "default": 0.5,
+                                        "maximum": 1,
+                                        "minimum": 0,
+                                        "multipleOf": 0.01
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "negative_prompt": {
+                                        "type": "string",
+                                        "title": "Negative Prompt",
+                                        "default": ""
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_kling_video_v2_1_pro_image_to_video",
+                "summary": "Create kling-video v2.1 pro image-to-video",
+                "tags": [
+                    "Kling Video"
+                ]
+            }
+        },
+        "/kling-video/v2.1/standard/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            5,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5
+                                    },
+                                    "cfg_scale": {
+                                        "type": "number",
+                                        "title": "CFG Scale",
+                                        "default": 0.5,
+                                        "maximum": 1,
+                                        "minimum": 0,
+                                        "multipleOf": 0.01
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "negative_prompt": {
+                                        "type": "string",
+                                        "title": "Negative Prompt",
+                                        "default": ""
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_kling_video_v2_1_standard_image_to_video",
+                "summary": "Create kling-video v2.1 standard image-to-video",
+                "tags": [
+                    "Kling Video"
+                ]
+            }
+        },
+        "/kling-video/v2.5-turbo/pro/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            5,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5
+                                    },
+                                    "cfg_scale": {
+                                        "type": "number",
+                                        "title": "CFG Scale",
+                                        "default": 0.5,
+                                        "maximum": 1,
+                                        "minimum": 0,
+                                        "multipleOf": 0.01
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "negative_prompt": {
+                                        "type": "string",
+                                        "title": "Negative Prompt",
+                                        "default": ""
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_kling_video_v2_5_turbo_pro_image_to_video",
+                "summary": "Create kling-video v2.5-turbo pro image-to-video",
+                "tags": [
+                    "Kling Video"
+                ]
+            }
+        },
+        "/kling-video/v2.5-turbo/pro/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            5,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5
+                                    },
+                                    "cfg_scale": {
+                                        "type": "number",
+                                        "title": "CFG Scale",
+                                        "default": 0.5,
+                                        "maximum": 1,
+                                        "minimum": 0,
+                                        "multipleOf": 0.01
+                                    },
+                                    "negative_prompt": {
+                                        "type": "string",
+                                        "title": "Negative Prompt",
+                                        "default": ""
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_kling_video_v2_5_turbo_pro_text_to_video",
+                "summary": "Create kling-video v2.5-turbo pro text-to-video",
+                "tags": [
+                    "Kling Video"
+                ]
+            }
+        },
+        "/kling-video/v2.5-turbo/standard/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            5,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5
+                                    },
+                                    "cfg_scale": {
+                                        "type": "number",
+                                        "title": "CFG Scale",
+                                        "default": 0.5,
+                                        "maximum": 1,
+                                        "minimum": 0,
+                                        "multipleOf": 0.01
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "negative_prompt": {
+                                        "type": "string",
+                                        "title": "Negative Prompt",
+                                        "default": ""
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_kling_video_v2_5_turbo_standard_image_to_video",
+                "summary": "Create kling-video v2.5-turbo standard image-to-video",
+                "tags": [
+                    "Kling Video"
+                ]
+            }
+        },
+        "/minimax/hailuo-02/pro/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "First frame image",
+                                        "format": "uri"
+                                    },
+                                    "end_image_url": {
+                                        "type": "string",
+                                        "title": "Last frame image",
+                                        "format": "uri"
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_02_pro_image_to_video",
+                "summary": "Create minimax hailuo-02 pro image-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/minimax/hailuo-02/pro/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_02_pro_text_to_video",
+                "summary": "Create minimax hailuo-02 pro text-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/minimax/hailuo-02/standard/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            6,
+                                            10
+                                        ],
+                                        "default": 6
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "First frame image",
+                                        "format": "uri"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "512P",
+                                            "768P"
+                                        ],
+                                        "type": "string",
+                                        "default": "768P"
+                                    },
+                                    "end_image_url": {
+                                        "type": "string",
+                                        "title": "Last frame image",
+                                        "format": "uri"
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_02_standard_image_to_video",
+                "summary": "Create minimax hailuo-02 standard image-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/minimax/hailuo-02/standard/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            6,
+                                            10
+                                        ],
+                                        "default": 6
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_02_standard_text_to_video",
+                "summary": "Create minimax hailuo-02 standard text-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/minimax/hailuo-2.3-fast/pro/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_2_3_fast_pro_image_to_video",
+                "summary": "Create minimax hailuo-2.3-fast pro image-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/minimax/hailuo-2.3-fast/standard/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            6,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 6
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_2_3_fast_standard_image_to_video",
+                "summary": "Create minimax hailuo-2.3-fast standard image-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/minimax/hailuo-2.3/pro/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_2_3_pro_image_to_video",
+                "summary": "Create minimax hailuo-2.3 pro image-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/minimax/hailuo-2.3/pro/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_2_3_pro_text_to_video",
+                "summary": "Create minimax hailuo-2.3 pro text-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/minimax/hailuo-2.3/standard/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            6,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 6
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_2_3_standard_image_to_video",
+                "summary": "Create minimax hailuo-2.3 standard image-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/minimax/hailuo-2.3/standard/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            6,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 6
+                                    },
+                                    "prompt_optimizer": {
+                                        "type": "boolean",
+                                        "title": "Prompt optimizer",
+                                        "default": true
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_minimax_hailuo_2_3_standard_text_to_video",
+                "summary": "Create minimax hailuo-2.3 standard text-to-video",
+                "tags": [
+                    "Minimax"
+                ]
+            }
+        },
+        "/nano-banana": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "num_images": {
+                                        "type": "integer",
+                                        "default": 1,
+                                        "maximum": 4,
+                                        "minimum": 1
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "auto",
+                                            "1:1",
+                                            "4:3",
+                                            "3:4",
+                                            "3:2",
+                                            "2:3",
+                                            "5:4",
+                                            "4:5",
+                                            "16:9",
+                                            "9:16",
+                                            "21:9"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "4:3"
+                                    },
+                                    "input_images": {
+                                        "type": "array",
+                                        "items": {
+                                            "$ref": "#/components/schemas/ImageUrlInputImageSchema"
+                                        },
+                                        "title": "Input Images",
+                                        "maxItems": 8,
+                                        "minItems": 0
+                                    },
+                                    "output_format": {
+                                        "enum": [
+                                            "jpeg",
+                                            "png"
+                                        ],
+                                        "type": "string",
+                                        "default": "jpeg"
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_nano_banana",
+                "summary": "Create nano-banana",
+                "tags": [
+                    "Nano Banana"
+                ]
+            }
+        },
+        "/reve/edit": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "num_images": {
+                                        "type": "integer",
+                                        "default": 1,
+                                        "maximum": 4,
+                                        "minimum": 1
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_reve_edit",
+                "summary": "Create reve edit",
+                "tags": [
+                    "Reve"
+                ]
+            }
+        },
+        "/reve/fast/edit": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "num_images": {
+                                        "type": "integer",
+                                        "default": 1,
+                                        "maximum": 4,
+                                        "minimum": 1
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_reve_fast_edit",
+                "summary": "Create reve fast edit",
+                "tags": [
+                    "Reve"
+                ]
+            }
+        },
+        "/reve/fast/remix": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "image_urls": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string",
+                                            "format": "uri"
+                                        },
+                                        "title": "Image URLs",
+                                        "maxItems": 4,
+                                        "minItems": 2
+                                    },
+                                    "num_images": {
+                                        "type": "integer",
+                                        "default": 1,
+                                        "maximum": 4,
+                                        "minimum": 1
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "1:1",
+                                            "4:3",
+                                            "3:4",
+                                            "3:2",
+                                            "2:3",
+                                            "5:4",
+                                            "4:5",
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "4:3"
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_urls"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_reve_fast_remix",
+                "summary": "Create reve fast remix",
+                "tags": [
+                    "Reve"
+                ]
+            }
+        },
+        "/reve/remix": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "image_urls": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string",
+                                            "format": "uri"
+                                        },
+                                        "title": "Image URLs",
+                                        "maxItems": 4,
+                                        "minItems": 2
+                                    },
+                                    "num_images": {
+                                        "type": "integer",
+                                        "default": 1,
+                                        "maximum": 4,
+                                        "minimum": 1
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "1:1",
+                                            "4:3",
+                                            "3:4",
+                                            "3:2",
+                                            "2:3",
+                                            "5:4",
+                                            "4:5",
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect Ratio",
+                                        "default": "4:3"
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_urls"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_reve_remix",
+                "summary": "Create reve remix",
+                "tags": [
+                    "Reve"
+                ]
+            }
+        },
+        "/reve/text-to-image": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "num_images": {
+                                        "type": "integer",
+                                        "default": 1,
+                                        "maximum": 4,
+                                        "minimum": 1
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_reve_text_to_image",
+                "summary": "Create reve text-to-image",
+                "tags": [
+                    "Reve"
+                ]
+            }
+        },
+        "/sora-2/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            4,
+                                            8,
+                                            12
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 4
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720p"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720p"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect ratio",
+                                        "default": "16:9"
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_sora_2_image_to_video",
+                "summary": "Create sora-2 image-to-video",
+                "tags": [
+                    "Sora 2"
+                ]
+            }
+        },
+        "/sora-2/image-to-video/pro": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            4,
+                                            8,
+                                            12
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 4
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720p",
+                                            "1080p"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720p"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect ratio",
+                                        "default": "16:9"
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_sora_2_image_to_video_pro",
+                "summary": "Create sora-2 image-to-video pro",
+                "tags": [
+                    "Sora 2"
+                ]
+            }
+        },
+        "/sora-2/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            4,
+                                            8,
+                                            12
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 4
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720p"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720p"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect ratio",
+                                        "default": "16:9"
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_sora_2_text_to_video",
+                "summary": "Create sora-2 text-to-video",
+                "tags": [
+                    "Sora 2"
+                ]
+            }
+        },
+        "/sora-2/text-to-video/pro": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            4,
+                                            8,
+                                            12
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 4
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "720p",
+                                            "1080p"
+                                        ],
+                                        "type": "string",
+                                        "title": "Resolution",
+                                        "default": "720p"
+                                    },
+                                    "aspect_ratio": {
+                                        "enum": [
+                                            "16:9",
+                                            "9:16"
+                                        ],
+                                        "type": "string",
+                                        "title": "Aspect ratio",
+                                        "default": "16:9"
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_sora_2_text_to_video_pro",
+                "summary": "Create sora-2 text-to-video pro",
+                "tags": [
+                    "Sora 2"
+                ]
+            }
+        },
+        "/wan-25-preview/image-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "seed": {
+                                        "type": "integer",
+                                        "title": "Seed",
+                                        "default": -1,
+                                        "maximum": 1000000,
+                                        "minimum": -1
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            5,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5
+                                    },
+                                    "audio_url": {
+                                        "type": "string",
+                                        "title": "Audio URL",
+                                        "format": "uri"
+                                    },
+                                    "image_url": {
+                                        "type": "string",
+                                        "title": "Image URL",
+                                        "format": "uri"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "480p",
+                                            "720p",
+                                            "1080p"
+                                        ],
+                                        "type": "string",
+                                        "default": "720p"
+                                    },
+                                    "negative_prompt": {
+                                        "type": "string",
+                                        "title": "Negative prompt",
+                                        "default": ""
+                                    }
+                                },
+                                "required": [
+                                    "prompt",
+                                    "image_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_wan_25_preview_image_to_video",
+                "summary": "Create wan-25-preview image-to-video",
+                "tags": [
+                    "Wan 25 Preview"
+                ]
+            }
+        },
+        "/wan-25-preview/text-to-video": {
+            "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "seed": {
+                                        "type": "integer",
+                                        "title": "Seed",
+                                        "default": -1,
+                                        "maximum": 1000000,
+                                        "minimum": -1
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "title": "Prompt"
+                                    },
+                                    "duration": {
+                                        "enum": [
+                                            5,
+                                            10
+                                        ],
+                                        "type": "integer",
+                                        "title": "Duration",
+                                        "default": 5
+                                    },
+                                    "audio_url": {
+                                        "type": "string",
+                                        "title": "Audio URL",
+                                        "format": "uri"
+                                    },
+                                    "resolution": {
+                                        "enum": [
+                                            "480p",
+                                            "720p",
+                                            "1080p"
+                                        ],
+                                        "type": "string",
+                                        "default": "720p"
+                                    },
+                                    "negative_prompt": {
+                                        "type": "string",
+                                        "title": "Negative prompt",
+                                        "default": ""
+                                    }
+                                },
+                                "required": [
+                                    "prompt"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "The request status",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RequestStatus"
+                                }
+                            }
+                        }
+                    }
+                },
+                "operationId": "post_wan_25_preview_text_to_video",
+                "summary": "Create wan-25-preview text-to-video",
+                "tags": [
+                    "Wan 25 Preview"
+                ]
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "RequestStatus": {
+                "title": "Request",
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "enum": [
+                            "queued",
+                            "in_progress",
+                            "nsfw",
+                            "failed",
+                            "completed",
+                            "canceled"
+                        ],
+                        "title": "Status",
+                        "type": "string"
+                    },
+                    "request_id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "status_url": {
+                        "type": "string",
+                        "format": "uri"
+                    },
+                    "cancel_url": {
+                        "type": "string",
+                        "format": "uri"
+                    },
+                    "error": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "images": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MediaOutput"
+                        }
+                    },
+                    "video": {
+                        "$ref": "#/components/schemas/MediaOutput"
+                    },
+                    "audio": {
+                        "$ref": "#/components/schemas/MediaOutput"
+                    },
+                    "audios": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MediaOutput"
+                        }
+                    }
+                },
+                "required": [
+                    "status",
+                    "request_id"
+                ]
+            },
+            "MotionSchema": {
+                "title": "Motion",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Motion preset ID."
+                    },
+                    "strength": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "multipleOf": 0.01,
+                        "description": "Strength of the selected motion preset."
+                    }
+                },
+                "required": [
+                    "id",
+                    "strength"
+                ]
+            },
+            "ImageUrlInputImageSchema": {
+                "title": "Image URL input",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "const": "image_url"
+                    },
+                    "image_url": {
+                        "type": "string",
+                        "format": "uri"
+                    }
+                },
+                "required": [
+                    "type",
+                    "image_url"
+                ]
+            },
+            "MediaOutput": {
+                "title": "Media output",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "format": "uri"
+                    }
+                },
+                "required": [
+                    "url"
+                ]
+            },
+            "ErrorResponse": {
+                "title": "Error response",
+                "type": "object",
+                "properties": {
+                    "detail": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "detail"
+                ]
+            }
+        },
+        "securitySchemes": {
+            "authKey": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "Authorization",
+                "description": "Use `Key {api_key_id}:{api_key_secret}`."
+            }
+        }
+    },
+    "security": [
+        {
+            "authKey": []
+        }
+    ],
+    "openapi": "3.1.0"
+}

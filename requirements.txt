@@ -1,0 +1,5 @@
+higgsfield-client
+pillow
+fastapi
+uvicorn
+python-multipart

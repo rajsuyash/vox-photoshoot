@@ -1,0 +1,338 @@
+[
+ {
+  "path": "/bytedance/seedance/v1/lite/image-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/bytedance/seedance/v1/lite/text-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/bytedance/seedance/v1/pro/fast/image-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/bytedance/seedance/v1/pro/fast/text-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/flux-pro/kontext/max/text-to-image",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/higgsfield-ai/dop/lite",
+  "http": 200,
+  "credits": "2.000",
+  "usd": "0.125",
+  "detail": null
+ },
+ {
+  "path": "/higgsfield-ai/dop/standard",
+  "http": 200,
+  "credits": "9.000",
+  "usd": "0.563",
+  "detail": null
+ },
+ {
+  "path": "/higgsfield-ai/dop/turbo",
+  "http": 200,
+  "credits": "6.500",
+  "usd": "0.407",
+  "detail": null
+ },
+ {
+  "path": "/higgsfield-ai/popcorn/auto",
+  "http": 200,
+  "credits": "1.472",
+  "usd": "0.092",
+  "detail": null
+ },
+ {
+  "path": "/higgsfield-ai/soul/character",
+  "http": 200,
+  "credits": "1.500",
+  "usd": "0.094",
+  "detail": null
+ },
+ {
+  "path": "/higgsfield-ai/soul/reference",
+  "http": 200,
+  "credits": "1.500",
+  "usd": "0.094",
+  "detail": null
+ },
+ {
+  "path": "/higgsfield-ai/soul/standard",
+  "http": 200,
+  "credits": "1.500",
+  "usd": "0.094",
+  "detail": null
+ },
+ {
+  "path": "/kling-video/v2.1/master/image-to-video",
+  "http": 200,
+  "credits": "22.400",
+  "usd": "1.400",
+  "detail": null
+ },
+ {
+  "path": "/kling-video/v2.1/master/text-to-video",
+  "http": 200,
+  "credits": "22.400",
+  "usd": "1.400",
+  "detail": null
+ },
+ {
+  "path": "/kling-video/v2.1/pro/image-to-video",
+  "http": 200,
+  "credits": "7.840",
+  "usd": "0.490",
+  "detail": null
+ },
+ {
+  "path": "/kling-video/v2.1/standard/image-to-video",
+  "http": 200,
+  "credits": "4.480",
+  "usd": "0.280",
+  "detail": null
+ },
+ {
+  "path": "/kling-video/v2.5-turbo/pro/image-to-video",
+  "http": 200,
+  "credits": "5.600",
+  "usd": "0.350",
+  "detail": null
+ },
+ {
+  "path": "/kling-video/v2.5-turbo/pro/text-to-video",
+  "http": 200,
+  "credits": "5.600",
+  "usd": "0.350",
+  "detail": null
+ },
+ {
+  "path": "/kling-video/v2.5-turbo/standard/image-to-video",
+  "http": 200,
+  "credits": "3.360",
+  "usd": "0.210",
+  "detail": null
+ },
+ {
+  "path": "/minimax/hailuo-02/pro/image-to-video",
+  "http": 200,
+  "credits": "7.800",
+  "usd": "0.488",
+  "detail": null
+ },
+ {
+  "path": "/minimax/hailuo-02/pro/text-to-video",
+  "http": 200,
+  "credits": "7.800",
+  "usd": "0.488",
+  "detail": null
+ },
+ {
+  "path": "/minimax/hailuo-02/standard/image-to-video",
+  "http": 200,
+  "credits": "4.476",
+  "usd": "0.280",
+  "detail": null
+ },
+ {
+  "path": "/minimax/hailuo-02/standard/text-to-video",
+  "http": 200,
+  "credits": "1.440",
+  "usd": "0.090",
+  "detail": null
+ },
+ {
+  "path": "/minimax/hailuo-2.3-fast/pro/image-to-video",
+  "http": 200,
+  "credits": "5.280",
+  "usd": "0.330",
+  "detail": null
+ },
+ {
+  "path": "/minimax/hailuo-2.3-fast/standard/image-to-video",
+  "http": 200,
+  "credits": "3.036",
+  "usd": "0.190",
+  "detail": null
+ },
+ {
+  "path": "/minimax/hailuo-2.3/pro/image-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/minimax/hailuo-2.3/pro/text-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/minimax/hailuo-2.3/standard/image-to-video",
+  "http": 200,
+  "credits": "4.476",
+  "usd": "0.280",
+  "detail": null
+ },
+ {
+  "path": "/minimax/hailuo-2.3/standard/text-to-video",
+  "http": 200,
+  "credits": "4.476",
+  "usd": "0.280",
+  "detail": null
+ },
+ {
+  "path": "/nano-banana",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/reve/edit",
+  "http": 423,
+  "credits": null,
+  "usd": null,
+  "detail": "model_blocked"
+ },
+ {
+  "path": "/reve/fast/edit",
+  "http": 423,
+  "credits": null,
+  "usd": null,
+  "detail": "model_blocked"
+ },
+ {
+  "path": "/reve/fast/remix",
+  "http": 423,
+  "credits": null,
+  "usd": null,
+  "detail": "model_blocked"
+ },
+ {
+  "path": "/reve/remix",
+  "http": 423,
+  "credits": null,
+  "usd": null,
+  "detail": "model_blocked"
+ },
+ {
+  "path": "/reve/text-to-image",
+  "http": 423,
+  "credits": null,
+  "usd": null,
+  "detail": "model_blocked"
+ },
+ {
+  "path": "/sora-2/image-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/sora-2/image-to-video/pro",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/sora-2/text-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/sora-2/text-to-video/pro",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/veo3.1",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/veo3.1/fast",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/veo3.1/fast/first-last-frame-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/veo3.1/fast/image-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/veo3.1/first-last-frame-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/veo3.1/image-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/veo3.1/reference-to-video",
+  "http": 404,
+  "credits": null,
+  "usd": null,
+  "detail": "model_not_found"
+ },
+ {
+  "path": "/wan-25-preview/image-to-video",
+  "http": 200,
+  "credits": "8.000",
+  "usd": "0.500",
+  "detail": null
+ },
+ {
+  "path": "/wan-25-preview/text-to-video",
+  "http": 200,
+  "credits": "8.000",
+  "usd": "0.500",
+  "detail": null
+ }
+]

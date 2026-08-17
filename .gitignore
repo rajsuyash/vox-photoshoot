@@ -1,0 +1,17 @@
+# secrets — HF_KEY lives here
+.env
+
+.venv/
+__pycache__/
+*.pyc
+
+# generated output: uploads, shoots, contact sheets, test runs
+out/
+
+# installed third-party agent skills, not part of this project
+.agents/
+.claude/
+
+# the client's own product photography — see README before committing these
+clientphoto/
+.DS_Store

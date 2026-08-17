@@ -1,0 +1,391 @@
+{
+ "/higgsfield-ai/popcorn/auto": {
+  "resolution": {
+   "spec": [
+    "720p",
+    "1600p"
+   ],
+   "live": [
+    "720p",
+    "1600p"
+   ],
+   "drift": false
+  },
+  "aspect_ratio": {
+   "spec": [
+    "1:1",
+    "4:3",
+    "3:4",
+    "3:2",
+    "2:3",
+    "16:9",
+    "9:16"
+   ],
+   "live": [
+    "1:1",
+    "4:3",
+    "3:4",
+    "3:2",
+    "2:3",
+    "16:9",
+    "9:16"
+   ],
+   "drift": false
+  }
+ },
+ "/higgsfield-ai/soul/character": {
+  "batch_size": {
+   "spec": [
+    "1",
+    "4"
+   ],
+   "live": [
+    "1",
+    "4"
+   ],
+   "drift": false
+  },
+  "resolution": {
+   "spec": [
+    "720p",
+    "1080p"
+   ],
+   "live": [
+    "720p",
+    "1080p"
+   ],
+   "drift": false
+  },
+  "aspect_ratio": {
+   "spec": [
+    "9:16",
+    "16:9",
+    "4:3",
+    "3:4",
+    "1:1",
+    "2:3",
+    "3:2"
+   ],
+   "live": [
+    "9:16",
+    "16:9",
+    "4:3",
+    "3:4",
+    "1:1",
+    "2:3",
+    "3:2"
+   ],
+   "drift": false
+  }
+ },
+ "/higgsfield-ai/soul/reference": {
+  "batch_size": {
+   "spec": [
+    "1",
+    "4"
+   ],
+   "live": [
+    "1",
+    "4"
+   ],
+   "drift": false
+  },
+  "resolution": {
+   "spec": [
+    "720p",
+    "1080p"
+   ],
+   "live": [
+    "720p",
+    "1080p"
+   ],
+   "drift": false
+  },
+  "aspect_ratio": {
+   "spec": [
+    "9:16",
+    "16:9",
+    "4:3",
+    "3:4",
+    "1:1",
+    "2:3",
+    "3:2"
+   ],
+   "live": [
+    "9:16",
+    "16:9",
+    "4:3",
+    "3:4",
+    "1:1",
+    "2:3",
+    "3:2"
+   ],
+   "drift": false
+  }
+ },
+ "/higgsfield-ai/soul/standard": {
+  "resolution": {
+   "spec": [
+    "2K",
+    "4K"
+   ],
+   "live": [
+    "720p",
+    "1080p"
+   ],
+   "drift": true
+  },
+  "aspect_ratio": {
+   "spec": [
+    "1:1",
+    "4:3",
+    "3:4",
+    "3:2",
+    "2:3",
+    "5:4",
+    "4:5",
+    "16:9",
+    "9:16",
+    "21:9"
+   ],
+   "live": [
+    "9:16",
+    "16:9",
+    "4:3",
+    "3:4",
+    "1:1",
+    "2:3",
+    "3:2"
+   ],
+   "drift": true
+  }
+ },
+ "/kling-video/v2.1/master/image-to-video": {
+  "duration": {
+   "spec": [
+    "5",
+    "10"
+   ],
+   "live": [
+    "5",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/kling-video/v2.1/master/text-to-video": {
+  "duration": {
+   "spec": [
+    "5",
+    "10"
+   ],
+   "live": [
+    "5",
+    "10"
+   ],
+   "drift": false
+  },
+  "aspect_ratio": {
+   "spec": [
+    "1:1",
+    "16:9",
+    "9:16"
+   ],
+   "live": null,
+   "raw": "None"
+  }
+ },
+ "/kling-video/v2.1/pro/image-to-video": {
+  "duration": {
+   "spec": [
+    "5",
+    "10"
+   ],
+   "live": [
+    "5",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/kling-video/v2.1/standard/image-to-video": {
+  "duration": {
+   "spec": [
+    "5",
+    "10"
+   ],
+   "live": [
+    "5",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/kling-video/v2.5-turbo/pro/image-to-video": {
+  "duration": {
+   "spec": [
+    "5",
+    "10"
+   ],
+   "live": [
+    "5",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/kling-video/v2.5-turbo/pro/text-to-video": {
+  "duration": {
+   "spec": [
+    "5",
+    "10"
+   ],
+   "live": [
+    "5",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/kling-video/v2.5-turbo/standard/image-to-video": {
+  "duration": {
+   "spec": [
+    "5",
+    "10"
+   ],
+   "live": [
+    "5",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/minimax/hailuo-02/standard/image-to-video": {
+  "duration": {
+   "spec": [
+    "6",
+    "10"
+   ],
+   "live": [
+    "6",
+    "10"
+   ],
+   "drift": false
+  },
+  "resolution": {
+   "spec": [
+    "512P",
+    "768P"
+   ],
+   "live": [
+    "512P",
+    "768P"
+   ],
+   "drift": false
+  }
+ },
+ "/minimax/hailuo-02/standard/text-to-video": {
+  "duration": {
+   "spec": [
+    "6",
+    "10"
+   ],
+   "live": [
+    "6",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/minimax/hailuo-2.3-fast/standard/image-to-video": {
+  "duration": {
+   "spec": [
+    "6",
+    "10"
+   ],
+   "live": [
+    "6",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/minimax/hailuo-2.3/standard/image-to-video": {
+  "duration": {
+   "spec": [
+    "6",
+    "10"
+   ],
+   "live": [
+    "6",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/minimax/hailuo-2.3/standard/text-to-video": {
+  "duration": {
+   "spec": [
+    "6",
+    "10"
+   ],
+   "live": [
+    "6",
+    "10"
+   ],
+   "drift": false
+  }
+ },
+ "/wan-25-preview/image-to-video": {
+  "duration": {
+   "spec": [
+    "5",
+    "10"
+   ],
+   "live": [
+    "5",
+    "10"
+   ],
+   "drift": false
+  },
+  "resolution": {
+   "spec": [
+    "480p",
+    "720p",
+    "1080p"
+   ],
+   "live": [
+    "480p",
+    "720p",
+    "1080p"
+   ],
+   "drift": false
+  }
+ },
+ "/wan-25-preview/text-to-video": {
+  "duration": {
+   "spec": [
+    "5",
+    "10"
+   ],
+   "live": [
+    "5",
+    "10"
+   ],
+   "drift": false
+  },
+  "resolution": {
+   "spec": [
+    "480p",
+    "720p",
+    "1080p"
+   ],
+   "live": [
+    "480p",
+    "720p",
+    "1080p"
+   ],
+   "drift": false
+  }
+ }
+}
