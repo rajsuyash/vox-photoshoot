@@ -15,3 +15,4 @@ out/
 # the client's own product photography — see README before committing these
 clientphoto/
 .DS_Store
+.gstack/

@@ -1,0 +1,34 @@
+{
+ "aditi": {
+  "description": "a 24 year old woman from North India. She is a professional adult fashion model with a striking editorial face, high cheekbones, symmetrical features, clear glowing skin, a defined jawline, a long neck, and a tall slender runway physique, with fair wheatish skin and long straight glossy black hair",
+  "file": "assets/cast/aditi-0.png"
+ },
+ "meera": {
+  "description": "a 25 year old woman from South India. She is a professional adult fashion model with a striking editorial face, high cheekbones, symmetrical features, clear glowing skin, a defined jawline, a long neck, and a tall slender runway physique, with deep brown skin and thick lustrous wavy black hair",
+  "file": "assets/cast/meera-0.png"
+ },
+ "kavya": {
+  "description": "a 23 year old woman from Gujarat. She is a professional adult fashion model with a striking editorial face, high cheekbones, symmetrical features, clear glowing skin, a defined jawline, a long neck, and a tall slender runway physique, with warm honey toned skin and long softly waved dark brown hair",
+  "file": "assets/cast/kavya-0.png"
+ },
+ "priya": {
+  "description": "a 26 year old woman from Bengal. She is a professional adult fashion model with a striking editorial face, high cheekbones, symmetrical features, clear glowing skin, a defined jawline, a long neck, and a tall slender runway physique, with medium wheatish skin, large expressive eyes and long straight dark hair",
+  "file": "assets/cast/priya-0.png"
+ },
+ "simran": {
+  "description": "a 25 year old Punjabi woman. She is a professional adult fashion model with a striking editorial face, high cheekbones, symmetrical features, clear glowing skin, a defined jawline, a long neck, and a tall slender runway physique, with fair luminous skin and very long thick dark hair",
+  "file": "assets/cast/simran-0.png"
+ },
+ "tara": {
+  "description": "a 24 year old woman from Maharashtra. She is a professional adult fashion model with a striking editorial face, high cheekbones, symmetrical features, clear glowing skin, a defined jawline, a long neck, and a tall slender runway physique, with golden brown skin and sleek shoulder length dark hair",
+  "file": "assets/cast/tara-0.png"
+ },
+ "ananya": {
+  "description": "a 27 year old woman from Tamil Nadu. She is a professional adult fashion model with a striking editorial face, high cheekbones, symmetrical features, clear glowing skin, a defined jawline, a long neck, and a tall slender runway physique, with rich dark brown skin and long glossy black hair",
+  "file": "assets/cast/ananya-0.png"
+ },
+ "nisha": {
+  "description": "a 23 year old woman from Northeast India. She is a professional adult fashion model with a striking editorial face, high cheekbones, symmetrical features, clear glowing skin, a defined jawline, a long neck, and a tall slender runway physique, with light clear skin and sleek straight black hair",
+  "file": "assets/cast/nisha-0.png"
+ }
+}
