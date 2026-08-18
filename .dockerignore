@@ -1,0 +1,12 @@
+.venv/
+out/
+clientphoto/
+.env
+.git/
+__pycache__/
+tools/
+assets/../out/
+*.pyc
+.DS_Store
+.agents/
+.claude/

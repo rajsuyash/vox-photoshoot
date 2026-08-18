@@ -3,3 +3,4 @@ pillow
 fastapi
 uvicorn
 python-multipart
+fal-client

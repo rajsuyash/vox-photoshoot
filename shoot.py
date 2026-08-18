@@ -9,21 +9,17 @@ import json
 import pathlib
 import sys
 
-import higgsfield_client
-
 import hf
 import locations
+import providers
 
-MODEL_PATH = 'higgsfield-ai/popcorn/auto'
 CAST_MANIFEST = pathlib.Path('assets/cast/cast.json')
 
 # popcorn/auto was the only endpoint on the account that preserved the client's actual
 # product; soul/reference redesigned it and soul/standard ignored it. See fidelity_test.py.
-DEFAULTS = {
-    'num_images': 1,
-    'resolution': '1600p',
-    'aspect_ratio': '3:4',   # 4:5 is not offered by any live image model; crop for social
-}
+# fal offers 4:5, the Instagram portrait ratio, which no Higgsfield image model has.
+# providers.Provider rejects an aspect its backend cannot do rather than substituting.
+DEFAULTS = {'quality': 'high', 'aspect_ratio': '3:4'}
 
 # Fixed per framing so a shoot is reproducible: same inputs re-run give the same set,
 # which matters when a client asks for "the one from yesterday, but bigger".
@@ -73,9 +69,10 @@ def shoot(product_paths, model_key: str, location_key: str, product: str,
 
     This is the single entry point the web app calls.
     """
+    provider = providers.get()
     framings = list(framings or locations.FRAMINGS)
-    product_urls = [hf.upload(path) for path in product_paths]
-    face_url = hf.upload(load_cast()[model_key]['file'])
+    product_urls = [provider.upload(path) for path in product_paths]
+    face_url = provider.upload(load_cast()[model_key]['file'])
 
     saved, failures = [], []
     for framing in framings:
@@ -83,29 +80,20 @@ def shoot(product_paths, model_key: str, location_key: str, product: str,
             product_urls, model_key, location_key, product, face_url, framing
         )
         try:
-            result = higgsfield_client.subscribe(MODEL_PATH, arguments=arguments)
+            urls = provider.generate(**arguments)
         except Exception as error:
+            # Content moderation rejects a frame now and then. Reported rather than
+            # dropped: a shoot silently returning 2 of 3 looks like a bug.
             failures.append((framing, str(error)))
             continue
 
-        urls = hf.output_urls(result)
         if not urls:
-            # Usually 'nsfw' — content moderation rejects a frame now and then. Reported
-            # rather than dropped: a shoot silently returning 2 of 3 looks like a bug.
-            failures.append((framing, result.get('status') or 'no images returned'))
+            failures.append((framing, 'no images returned'))
             continue
         saved += hf.download(
             urls, out_dir, prefix=f'{model_key}-{location_key}-{framing}'
         )
     return saved, failures
-
-
-def cost(product_urls, model_key: str, location_key: str, product: str,
-         framing: str = 'hero') -> dict:
-    _prompt, arguments = build(
-        product_urls, model_key, location_key, product, framing=framing
-    )
-    return hf.estimate(f'/{MODEL_PATH}', arguments)
 
 
 def demo() -> None:

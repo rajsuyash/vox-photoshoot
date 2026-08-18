@@ -11,23 +11,26 @@ import pathlib
 import higgsfield_client
 
 import hf
+import locations
 import shoot
 
-PRODUCTS = sorted(pathlib.Path('clientphoto').glob('*.jpg'))
+PRODUCTS = sorted(pathlib.Path('clientphoto').glob('*.jpg'))  # empty outside dev
 
-CONTROL = 'yellow gold kite-shaped diamond drop earrings with a fine chain'
+CONTROL = locations.DEFAULT_PRODUCT
 CANDIDATE = (
     'yellow gold kite-shaped drop earrings, each kite frame pavé set with a cluster of '
     'many tiny round brilliant diamonds rather than one large stone, suspended from a '
     'fine gold cable chain ending in a small pavé set kite pendant'
 )
 
-VARIANTS = {
-    # control: one reference, no pavé wording — reproduces the known result
-    'control': ([PRODUCTS[0]], CONTROL),
-    # candidate: both references (front and back views) plus explicit pavé wording
-    'pave-fix': (PRODUCTS, CANDIDATE),
-}
+def variants():
+    """Built lazily: PRODUCTS is empty outside the dev machine."""
+    return {
+        # control: one reference, no pavé wording — reproduces the known result
+        'control': ([PRODUCTS[0]], CONTROL),
+        # candidate: both references (front and back views) plus explicit pavé wording
+        'pave-fix': (PRODUCTS, CANDIDATE),
+    }
 
 MODEL_KEY, LOCATION_KEY = 'aditi', 'amber-fort'
 
@@ -36,7 +39,7 @@ def main() -> None:
     uploaded = {path: hf.upload(path) for path in PRODUCTS}
     print(f'uploaded {len(uploaded)} product photos\n')
 
-    for name, (paths, product) in VARIANTS.items():
+    for name, (paths, product) in variants().items():
         urls = [uploaded[path] for path in paths]
         estimate = shoot.cost(urls, MODEL_KEY, LOCATION_KEY, product)
         print(f'{name}: {len(urls)} ref(s), {estimate["credits"]} credits')

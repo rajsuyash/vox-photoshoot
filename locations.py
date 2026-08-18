@@ -130,6 +130,14 @@ FOREIGN = [
 ALL = {location.key: location for location in INDIAN + FOREIGN}
 
 
+# Default description of the client's piece. Short on purpose: a longer description that
+# named a "pendant" hallucinated a matching necklace and flattened the pavé. Lives here
+# rather than in pave_test.py, which the app used to import — that script reads
+# clientphoto/ at import time and the client's photos are not shipped in the container.
+DEFAULT_PRODUCT = (
+    'yellow gold kite-shaped diamond drop earrings with a fine chain'
+)
+
 # Held constant across every shoot: this is the part that protects product fidelity
 # and framing, and it is not exposed in the UI.
 CRAFT = (

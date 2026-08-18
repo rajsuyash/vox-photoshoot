@@ -17,8 +17,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import locations
+import providers
 import shoot
-from pave_test import CONTROL as DEFAULT_PRODUCT
+from locations import DEFAULT_PRODUCT
 
 UPLOADS = pathlib.Path('out/uploads')
 SHOOTS = pathlib.Path('out/shoots')
@@ -35,6 +36,16 @@ JOBS_LOCK = threading.Lock()
 def set_job(job_id: str, **fields) -> None:
     with JOBS_LOCK:
         JOBS.setdefault(job_id, {}).update(fields)
+
+
+@app.get('/healthz')
+def healthz():
+    """App Runner polls this. It checks the cast is present, because a container that
+    boots without assets serves an empty picker and looks broken rather than dead.
+    """
+    cast = shoot.load_cast()
+    return {'ok': True, 'provider': providers.get().name,
+            'models': len(cast), 'locations': len(locations.ALL)}
 
 
 @app.get('/api/models')

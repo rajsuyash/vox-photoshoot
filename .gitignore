@@ -16,3 +16,4 @@ out/
 clientphoto/
 .DS_Store
 .gstack/
+out/dns-backup/
