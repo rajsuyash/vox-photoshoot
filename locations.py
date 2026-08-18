@@ -87,7 +87,7 @@ FOREIGN = [
         scene='whitewashed cycladic walls and a blue dome, deep blue Aegean far below, '
               'thrown out of focus',
         light='bright Mediterranean late afternoon sun, strong warm key with white wall bounce',
-        wardrobe='flowing white linen dress',
+        wardrobe='flowing white linen dress with long sleeves covering her shoulders',
     ),
     Location(
         key='dubai-desert',
@@ -104,7 +104,7 @@ FOREIGN = [
         scene='a stone villa terrace with cypress trees and the lake and mountains '
               'softly blurred behind',
         light='clear late morning Italian light, bright with soft shade on her face',
-        wardrobe='navy silk slip dress',
+        wardrobe='navy silk dress with elbow length sleeves covering her shoulders',
     ),
     Location(
         key='kyoto',
@@ -168,7 +168,11 @@ def compose(product: str, model_description: str, location_key: str,
     if framing not in FRAMINGS:
         raise KeyError(f'unknown framing {framing!r}; have {sorted(FRAMINGS)}')
     return (
-        f'{model_description}, wearing {product} shown in the reference image. '
+        # Expression sits near the front deliberately: at the end of the prompt it was
+        # ignored and every shot came back neutral. The brand's own campaigns are warm
+        # and smiling, so this is not a detail we can leave to chance.
+        f'{model_description}, smiling warmly with a genuine open smile, '
+        f'wearing {product} shown in the reference image. '
         f'She wears a {location.wardrobe}. '
         f'Behind her: {location.scene}. '
         f'Lighting: {location.light}. '

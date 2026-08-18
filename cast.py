@@ -24,14 +24,25 @@ MANIFEST = CAST_DIR / 'cast.json'
 # "no jewellery" was ignored twice; the positive phrasing below is what actually holds,
 # the same lesson as the phantom necklace in locations.py.
 BASE_BRIEF = (
-    'Photorealistic studio headshot and upper body portrait of {description}. '
-    'Neutral light grey seamless studio background, soft even beauty lighting, '
-    'plain black sleeveless top, hair styled simply and tucked behind both ears. '
-    'Polished agency test shot of a working fashion model, poised and confident. '
+    'Photorealistic beauty portrait of a smiling {description}. '
+    'She is laughing warmly with a wide genuine open smile showing her teeth, eyes '
+    'crinkling, radiating happiness and confidence. '
+    'Bright soft evenly diffused studio lighting from a large softbox, clean and airy, '
+    'pale cream background. Her skin is fair and luminous with a natural matte finish. '
+    'She wears an elegant pale blush silk blouse with a high round neckline and '
+    'elbow length sleeves that fully cover both shoulders and upper arms. '
     'Her earlobes are completely bare and empty, her neck is bare, and she wears '
     'absolutely nothing on her ears, neck, nose or hair. '
-    'Sharp focus, natural skin texture with visible pores, shot on 85mm lens, '
-    'professional model casting photograph, neutral relaxed expression, looking at camera.'
+    'Sharp focus, healthy skin with natural texture, shot on an 85mm lens at f/2, '
+    'head and shoulders, high end Indian jewellery brand advertising campaign.'
+)
+
+# Lighting and expression were both ignored when they sat at the end of the prompt.
+# Moving them to the front fixed it — this model weights early tokens heavily, which is
+# the same reason the product description has to stay short.
+NEGATIVE_LOOK = (
+    ' No harsh orange or amber rim lighting, no heavy bronzer, no oily sheen, '
+    'no bare shoulders, no strapless top, no serious or neutral expression.'
 )
 
 # Deliberately spread across region, age and skin tone — a jewellery brand casts for
@@ -41,29 +52,41 @@ BASE_BRIEF = (
 # though they are written at 22-27 — do not lower these numbers to chase a younger look.
 # Regional range and skin tone range are kept: an Indian jewellery brand sells across
 # the country, and gold reads very differently on different complexions.
+# Matched to the client's own campaign imagery: fair to light wheatish skin with warm
+# golden undertones, full soft-glam makeup, warm smiling expressions, styled volume hair.
+# The earlier brief asked for a neutral agency test shot, which is why those faces read
+# as casting polaroids rather than the finished campaign look the brand actually runs.
 MODEL_LOOK = (
-    'She is a professional adult fashion model with a striking editorial face, high '
-    'cheekbones, symmetrical features, clear glowing skin, a defined jawline, a long '
-    'neck, and a tall slender runway physique'
+    'She is a beautiful young adult Indian fashion model with fair to light wheatish '
+    'skin with warm golden undertones, luminous and radiant, high cheekbones, a defined '
+    'jawline, large expressive dark eyes, full soft-glam commercial makeup with groomed '
+    'defined brows, warm neutral eyeshadow, subtle kohl, highlighted cheekbones and '
+    'glossy nude-pink lips, and a slim elegant figure'
+)
+
+# Hair is the main thing that tells one thumbnail from another, so it varies per model
+# rather than defaulting to the same centre-parted sleek look on all eight.
+EXPRESSION = (
+    'Warm genuine smile, joyful and confident, looking straight at the camera'
 )
 
 CAST = [
-    ('aditi', f'a 24 year old woman from North India. {MODEL_LOOK}, with fair wheatish '
-              'skin and long straight glossy black hair'),
-    ('meera', f'a 25 year old woman from South India. {MODEL_LOOK}, with deep brown skin '
-              'and thick lustrous wavy black hair'),
-    ('kavya', f'a 23 year old woman from Gujarat. {MODEL_LOOK}, with warm honey toned '
-              'skin and long softly waved dark brown hair'),
-    ('priya', f'a 26 year old woman from Bengal. {MODEL_LOOK}, with medium wheatish skin, '
-              'large expressive eyes and long straight dark hair'),
-    ('simran', f'a 25 year old Punjabi woman. {MODEL_LOOK}, with fair luminous skin and '
-               'very long thick dark hair'),
-    ('tara', f'a 24 year old woman from Maharashtra. {MODEL_LOOK}, with golden brown skin '
-             'and sleek shoulder length dark hair'),
-    ('ananya', f'a 27 year old woman from Tamil Nadu. {MODEL_LOOK}, with rich dark brown '
-               'skin and long glossy black hair'),
-    ('nisha', f'a 23 year old woman from Northeast India. {MODEL_LOOK}, with light clear '
-              'skin and sleek straight black hair'),
+    ('aditi', f'a 24 year old Indian woman. {MODEL_LOOK}, her long dark brown hair worn '
+              'in soft loose glossy waves falling over one shoulder. {EXPRESSION}'),
+    ('meera', f'a 25 year old Indian woman. {MODEL_LOOK}, her hair in a soft elegant '
+              'high bun with a few loose face-framing strands. {EXPRESSION}'),
+    ('kavya', f'a 23 year old Indian woman. {MODEL_LOOK}, her long hair in a sleek high '
+              'ponytail with volume at the crown. {EXPRESSION}'),
+    ('priya', f'a 26 year old Indian woman. {MODEL_LOOK}, her hair in a glossy blow-dried '
+              'shoulder length bob with a deep side parting. {EXPRESSION}'),
+    ('simran', f'a 25 year old Indian woman. {MODEL_LOOK}, her very long thick hair worn '
+               'loose and straight with a centre parting and soft shine. {EXPRESSION}'),
+    ('tara', f'a 24 year old Indian woman. {MODEL_LOOK}, her hair in a romantic low '
+             'chignon with soft curled tendrils at the temples. {EXPRESSION}'),
+    ('ananya', f'a 27 year old Indian woman. {MODEL_LOOK}, her long hair in loose '
+               'bouncy curls with plenty of volume. {EXPRESSION}'),
+    ('nisha', f'a 23 year old Indian woman. {MODEL_LOOK}, her hair in a half-up style '
+              'with soft waves and a light fringe. {EXPRESSION}'),
 ]
 
 ARGUMENTS = {
@@ -84,7 +107,10 @@ def generate(entries) -> list[dict]:
         print(f'{name}: generating ...')
         result = higgsfield_client.subscribe(
             'higgsfield-ai/soul/standard',
-            arguments={'prompt': BASE_BRIEF.format(description=description), **ARGUMENTS},
+            arguments={
+                'prompt': BASE_BRIEF.format(description=description) + NEGATIVE_LOOK,
+                **ARGUMENTS,
+            },
         )
         urls = hf.output_urls(result)
         if not urls:
