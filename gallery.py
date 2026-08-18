@@ -1,8 +1,8 @@
-"""Generate one sample image per location.
+"""Generate one empty location plate per location.
 
-Serves two purposes at once: proves every preset actually renders, and produces the
-thumbnail each location card needs in the picker UI. The model is held constant so the
-only thing varying between cards is the location itself.
+These are NOT shoots. They are photographs of the place with nobody in them: the image
+on each location card in the picker, and the backplate a model gets composited onto in
+the next step. No model, no product, no wardrobe, nothing blurred.
 
     .venv/bin/python gallery.py            # any locations not yet generated
     .venv/bin/python gallery.py --redo     # regenerate everything
@@ -16,57 +16,52 @@ import higgsfield_client
 
 import hf
 import locations
-import shoot
-from pave_test import CONTROL
+import trim
 
+MODEL_PATH = 'higgsfield-ai/popcorn/auto'
 GALLERY_DIR = pathlib.Path('assets/locations')
 MANIFEST = GALLERY_DIR / 'gallery.json'
-# One model across every card: the card sells the PLACE, so everything else holds still.
-MODEL_KEY = 'aditi'
-# 'hero' shows the location; 'detail' would crop it out entirely.
-FRAMING = 'hero'
 
-# The A/B went the other way. The SHORT description with ONE reference rendered the pavé
-# correctly; the long 'pavé set ... kite pendant' wording with two references flattened it
-# to a single cluster and hallucinated a matching necklace — most likely triggered by the
-# word 'pendant'. Keep product text short, and never name a jewellery type the client is
-# not selling.
-PRODUCT = CONTROL
+# Landscape, and higher resolution than a thumbnail needs: these plates are also the
+# compositing backplate, so they want the detail.
+ARGUMENTS = {
+    'num_images': 1,
+    'resolution': '1600p',
+    'aspect_ratio': '4:3',
+}
 
 
 def main() -> None:
-    # One clean front view only. The second client photo is a back view and the pavé A/B
-    # showed extra product references muddy the geometry.
-    product = sorted(pathlib.Path('clientphoto').glob('*.jpg'))[0]
-    urls = [hf.upload(product)]
-    face_url = hf.upload(shoot.load_cast()[MODEL_KEY]['file'])
-
     GALLERY_DIR.mkdir(parents=True, exist_ok=True)
     manifest = {} if '--redo' in sys.argv else (
         json.loads(MANIFEST.read_text()) if MANIFEST.exists() else {}
     )
-
     pending = [key for key in locations.ALL if key not in manifest]
     if not pending:
         print('gallery already complete')
         return
 
-    estimate = shoot.cost(urls, MODEL_KEY, pending[0], PRODUCT, framing=FRAMING)
-    print(f'{len(pending)} locations, ~{estimate["credits"]} credits each '
-          f'(~{len(pending) * float(estimate["credits"]):.1f} total)\n')
+    sample = {'prompt': locations.compose_plate(pending[0]), **ARGUMENTS}
+    estimate = hf.estimate(f'/{MODEL_PATH}', sample)
+    print(f'{len(pending)} plates x {estimate["credits"]} credits = '
+          f'{len(pending) * float(estimate["credits"]):.1f} total\n')
 
     for key in pending:
         location = locations.ALL[key]
         print(f'{key} ({location.label}) ...')
-        _prompt, arguments = shoot.build(
-            urls, MODEL_KEY, key, PRODUCT, face_url=face_url, framing=FRAMING
+        result = higgsfield_client.subscribe(
+            MODEL_PATH,
+            arguments={'prompt': locations.compose_plate(key), **ARGUMENTS},
         )
-        result = higgsfield_client.subscribe(shoot.MODEL_PATH, arguments=arguments)
-        output = hf.output_urls(result)
-        if not output:
+        urls = hf.output_urls(result)
+        if not urls:
             print(f'  FAILED status={result.get("status")}')
             continue
-        [saved] = hf.download(output, GALLERY_DIR, prefix=key)
+        [saved] = hf.download(urls, GALLERY_DIR, prefix=key)
+        # The model draws a white mount now and then and ignores every instruction not
+        # to; cropping it is deterministic where the prompt is not.
+        if trim.trim(saved):
+            print('  trimmed white border')
         manifest[key] = {
             'label': location.label,
             'region': location.region,
@@ -75,7 +70,7 @@ def main() -> None:
         MANIFEST.write_text(json.dumps(manifest, indent=1))
         print(f'  {saved}')
 
-    print(f'\n{len(manifest)}/{len(locations.ALL)} locations have thumbnails')
+    print(f'\n{len(manifest)}/{len(locations.ALL)} locations have plates')
 
 
 if __name__ == '__main__':

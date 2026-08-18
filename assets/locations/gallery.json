@@ -24,11 +24,6 @@
   "region": "India",
   "file": "assets/locations/rann-of-kutch-0.png"
  },
- "paris": {
-  "label": "Paris, France",
-  "region": "International",
-  "file": "assets/locations/paris-0.png"
- },
  "santorini": {
   "label": "Santorini, Greece",
   "region": "International",
@@ -48,5 +43,10 @@
   "label": "Kyoto, Japan",
   "region": "International",
   "file": "assets/locations/kyoto-0.png"
+ },
+ "paris": {
+  "label": "Paris, France",
+  "region": "International",
+  "file": "assets/locations/paris-0.png"
  }
 }

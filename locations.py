@@ -17,9 +17,10 @@ class Location:
     key: str
     label: str
     region: str
-    scene: str      # what is behind the model
+    scene: str      # what is behind the model, deliberately blurred, for shoots
     light: str      # time of day and quality of light
     wardrobe: str   # what she wears, chosen to not fight the jewellery
+    plate: str      # the empty place itself, sharp and unpopulated, for the picker card
 
 
 INDIAN = [
@@ -31,6 +32,7 @@ INDIAN = [
               'courtyard, softly blurred behind her',
         light='warm golden hour sunlight raking across the stone, soft bounce onto her face',
         wardrobe='deep red and gold silk banarasi saree',
+        plate='the carved amber sandstone courtyard of Amber Fort in Jaipur, scalloped arches and jali lattice screens, warm stone underfoot, empty of people',
     ),
     Location(
         key='udaipur-palace',
@@ -40,6 +42,7 @@ INDIAN = [
               'Lake Pichola shimmering out of focus beyond',
         light='cool bright morning light with soft reflected glow from the water',
         wardrobe='pastel mint and silver chanderi saree',
+        plate='a white marble lakeside terrace of the City Palace in Udaipur, scalloped arches and carved columns, Lake Pichola and the far hills beyond, empty of people',
     ),
     Location(
         key='kerala-backwaters',
@@ -49,6 +52,7 @@ INDIAN = [
               'far out of focus',
         light='humid diffused afternoon light under overcast sky, gentle and even',
         wardrobe='cream and gold kasavu saree',
+        plate='a still green Kerala backwater channel lined with leaning coconut palms, a wooden houseboat moored along the bank, empty of people',
     ),
     Location(
         key='taj-mahal',
@@ -57,6 +61,7 @@ INDIAN = [
         scene='white marble domes and minarets rising softly blurred in the far background',
         light='pale pink dawn light, low sun, cool shadows',
         wardrobe='ivory and pale blue georgette saree',
+        plate='the white marble Taj Mahal in Agra seen across its reflecting pool and formal gardens, minarets on either side, empty of people',
     ),
     Location(
         key='rann-of-kutch',
@@ -67,6 +72,7 @@ INDIAN = [
         # Mirror-work and heavy embroidery render as jewellery and out-compete the
         # earring — every wardrobe here stays plain above the shoulders.
         wardrobe='plain black cotton kutchi outfit with no embroidery or mirror work',
+        plate='the white salt flats of the Rann of Kutch, cracked hexagonal salt crust stretching to a flat empty horizon, no structures and no people',
     ),
 ]
 
@@ -79,6 +85,7 @@ FOREIGN = [
               'heavily blurred, warm bokeh from a cafe behind',
         light='soft overcast European daylight, cool and flattering',
         wardrobe='tailored ivory wool coat over a simple black top',
+        plate='a Paris boulevard of Haussmann stone facades and wrought iron balconies, a corner cafe with awning and rattan chairs, empty pavement',
     ),
     Location(
         key='santorini',
@@ -88,6 +95,7 @@ FOREIGN = [
               'thrown out of focus',
         light='bright Mediterranean late afternoon sun, strong warm key with white wall bounce',
         wardrobe='flowing white linen dress with long sleeves covering her shoulders',
+        plate='a whitewashed Santorini terrace in Oia, blue domed church and cubic white houses stepping down the caldera, deep blue Aegean below, empty of people',
     ),
     Location(
         key='dubai-desert',
@@ -96,6 +104,7 @@ FOREIGN = [
         scene='rolling golden sand dunes with soft wind-carved ridges, no structures',
         light='low amber sunset light, long soft shadows, warm rim light on her jaw',
         wardrobe='bronze silk kaftan',
+        plate='rolling golden sand dunes in the desert outside Dubai, sharp wind carved ridges and long shadows, no structures and no people',
     ),
     Location(
         key='lake-como',
@@ -105,6 +114,7 @@ FOREIGN = [
               'softly blurred behind',
         light='clear late morning Italian light, bright with soft shade on her face',
         wardrobe='navy silk dress with elbow length sleeves covering her shoulders',
+        plate='a stone villa terrace on Lake Como with a balustrade, tall cypress trees, the lake and mountains beyond, empty of people',
     ),
     Location(
         key='kyoto',
@@ -113,6 +123,7 @@ FOREIGN = [
         scene='tall green bamboo grove, vertical stalks receding into soft blur',
         light='cool filtered green-tinted daylight through the canopy, very diffused',
         wardrobe='minimal charcoal grey wrap top',
+        plate='a tall green bamboo grove in Arashiyama Kyoto, dense vertical stalks lining a narrow path, empty of people',
     ),
 ]
 
@@ -159,6 +170,28 @@ NEGATIVE_HINT = (
     'Do not invent a different jewellery design, do not add extra earrings, necklaces '
     'or nose rings that are not in the reference.'
 )
+
+
+def compose_plate(location_key: str) -> str:
+    """Prompt for an EMPTY location plate — the picker card, and the backplate that a
+    model gets composited onto later. No model, no product, no wardrobe, nothing blurred.
+    """
+    location = ALL[location_key]
+    # The light strings are written for a shoot ("soft bounce onto her face"), so any
+    # clause that talks about the model is dropped before reusing them on an empty plate.
+    light = ', '.join(
+        clause for clause in location.light.split(', ')
+        if ' her' not in f' {clause}'
+    )
+    return (
+        f'Photorealistic travel and architectural photograph of {location.plate}. '
+        f'{light}. '
+        'Wide establishing shot of the empty location, deserted and unoccupied, '
+        'everything in sharp focus front to back, shot on a 24mm lens at f/8, '
+        'high end location scouting photograph for a fashion campaign. '
+        'Full bleed photograph filling the entire frame edge to edge, with no white '
+        'border, mount or frame around it.'
+    )
 
 
 def compose(product: str, model_description: str, location_key: str,
@@ -209,6 +242,15 @@ def demo() -> None:
         pass
     else:
         raise AssertionError('unknown framing should be rejected')
+
+    # Plates must describe a place and nothing else: no model, no product, no wardrobe.
+    for key, location in ALL.items():
+        card = compose_plate(key)
+        assert ' her' not in f' {card}', f'{key} plate mentions the model: {card}'
+        assert 'earring' not in card and 'jewellery' not in card, key
+        assert location.wardrobe.split()[0] not in card, f'{key} plate leaks wardrobe'
+        assert 'out of focus' not in card, f'{key} plate should be sharp throughout'
+    print('plates ok')
 
     print(prompt)
 
