@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 import locations
 import providers
 import shoot
+import storage
 from locations import DEFAULT_PRODUCT
 
 UPLOADS = pathlib.Path('out/uploads')
@@ -73,19 +74,25 @@ def list_locations():
     ]
 
 
-def framing_of(image: str) -> str:
-    """'/media/.../kavya-kerala-backwaters-hero-0.png' -> 'hero'."""
-    return image.rsplit('/', 1)[-1].rsplit('-', 2)[1]
+def framing_of(path) -> str:
+    """'.../kavya-kerala-backwaters-hero-0.png' -> 'hero'.
+
+    Takes the FILE, never the URL: presigned S3 links carry a query string, so parsing
+    a framing back out of a URL is a trap.
+    """
+    return pathlib.Path(path).stem.rsplit('-', 1)[0].rsplit('-', 1)[-1]
 
 
-def merge_images(existing: list[str], fresh: list[str]) -> list[str]:
+def merge_images(existing: list[dict], fresh: list[dict]) -> list[dict]:
     """A reshoot replaces only the framings it regenerated, keeping the rest."""
-    regenerated = {framing_of(image) for image in fresh}
-    kept = [image for image in existing if framing_of(image) not in regenerated]
+    regenerated = {image['framing'] for image in fresh}
+    kept = [image for image in existing if image['framing'] not in regenerated]
     order = list(locations.FRAMINGS)
-    return sorted(kept + fresh,
-                  key=lambda image: order.index(framing_of(image))
-                  if framing_of(image) in order else len(order))
+    return sorted(
+        kept + fresh,
+        key=lambda image: order.index(image['framing'])
+        if image['framing'] in order else len(order),
+    )
 
 
 def run_shoot(job_id: str, product_path: pathlib.Path, model_key: str,
@@ -100,7 +107,12 @@ def run_shoot(job_id: str, product_path: pathlib.Path, model_key: str,
             )
         with JOBS_LOCK:
             existing = list(JOBS.get(job_id, {}).get('images') or [])
-        fresh = [f'/media/{path}' for path in saved]
+        # Copied off the container before anyone can lose them to a restart.
+        fresh = [
+            {'framing': framing_of(path),
+             'url': storage.put(path, f'shoots/{job_id}/{path.name}')}
+            for path in saved
+        ]
         set_job(job_id, status='completed', images=merge_images(existing, fresh),
                 # A partial shoot must say so — the UI offers a reshoot per frame.
                 warnings=[f'{framing} could not be generated ({reason})'

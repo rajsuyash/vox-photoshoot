@@ -156,18 +156,26 @@ CRAFT = (
 # One shoot returns several genuinely different photographs, not one photograph several
 # times. num_images alone produces near-duplicates, so framing is varied explicitly and
 # each variant is given its own seed.
+# Nano Banana Pro weights the reference images heavily and the framing text lightly, so
+# all three came back as near-identical three-quarter views. Each entry now states the
+# crop in camera terms (what is in frame, what is cut off) rather than describing a mood.
 FRAMINGS = {
     'hero': (
-        'Three quarter view from the shoulders up, turned slightly away and looking back '
-        'toward the camera, the location clearly readable behind her.'
+        'WIDE SHOT. Full upper body from the waist up, she is turned slightly away and '
+        'looking back toward the camera, standing well back from the lens so the whole '
+        'location is visible around her and reads clearly.'
     ),
     'profile': (
-        'Clean side profile, her ear and the full earring drop centred in the frame, '
-        'the background compressed into soft colour.'
+        'STRICT SIDE PROFILE, camera exactly 90 degrees to her face. She faces fully to '
+        'the left edge of the frame and does not look at the camera. The silhouette of '
+        'her nose, lips and chin is drawn against the background, and the whole ear with '
+        'the earring is square on to the lens.'
     ),
     'detail': (
-        'Tight beauty crop from cheekbone to collarbone, the earring filling much of the '
-        'frame, skin texture and metal detail clearly visible.'
+        'EXTREME CLOSE UP of the ear and jaw only. The frame is filled by the ear and '
+        'the earring, cropped so the top of the head and the mouth are outside the '
+        'frame. Macro jewellery photography, the metal and stones fill much of the '
+        'picture and the face is only a supporting element.'
     ),
 }
 

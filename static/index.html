@@ -291,13 +291,14 @@ async function poll(jobId) {
     $('error').classList.add('hidden');
   }
   $('outNote').textContent = `${job.images.length} images · ready to download`;
-  $('results').innerHTML = job.images.map((src) => {
-    const framing = src.split('/').pop().split('-').slice(-2)[0];
-    return `<figure><img src="${src}?t=${Date.now()}" alt="${framing}">
+  // The API returns {framing, url}. Never parse a framing out of the URL: presigned S3
+  // links carry a query string.
+  $('results').innerHTML = job.images.map(({ framing, url }) =>
+    `<figure><img src="${url}" alt="${framing}">
       <figcaption><span>${titleCase(framing)}</span><span>
       <button class="link" data-framing="${framing}">Reshoot</button>
-      &nbsp;<a href="${src}" download>Download</a></span></figcaption></figure>`;
-  }).join('');
+      &nbsp;<a href="${url}" download>Download</a></span></figcaption></figure>`
+  ).join('');
   document.querySelectorAll('#results button.link').forEach((button) => {
     button.addEventListener('click', () => reshoot(jobId, button.dataset.framing));
   });
