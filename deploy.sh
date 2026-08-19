@@ -16,9 +16,11 @@ ACCESS_ROLE="arn:aws:iam::${ACCOUNT}:role/AppRunnerECRAccessRole"
 URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
 
 cd "$(dirname "$0")"
-[ -f .env ] || { echo "no .env — need FAL_KEY and HF_KEY" >&2; exit 1; }
+[ -f .env ] || { echo "no .env — need FAL_KEY, HF_KEY and ANTHROPIC_API_KEY" >&2; exit 1; }
 set -a; . ./.env; set +a
 : "${FAL_KEY:?FAL_KEY missing}"
+# Without it every upload is shot as the client's earrings — see product.identify.
+: "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY missing (reads the uploaded piece)}"
 
 # Docker Desktop's credential helper is often absent from a non-interactive PATH.
 export DOCKER_CONFIG=${DOCKER_CONFIG:-/tmp/vox-docker}
@@ -49,6 +51,7 @@ print(json.dumps({
           "PROVIDER": os.environ.get("PROVIDER", "fal"),
           "FAL_KEY": os.environ["FAL_KEY"],
           "HF_KEY": os.environ.get("HF_KEY", ""),
+          "ANTHROPIC_API_KEY": os.environ["ANTHROPIC_API_KEY"],
           "S3_BUCKET": os.environ["BUCKET"],
           "AWS_REGION": os.environ["REGION"],
         },

@@ -11,6 +11,8 @@ model standing in front of the Taj Mahal at full length shows no earring at all.
 
 from dataclasses import dataclass
 
+import product
+
 
 @dataclass(frozen=True)
 class Location:
@@ -130,62 +132,30 @@ FOREIGN = [
 ALL = {location.key: location for location in INDIAN + FOREIGN}
 
 
-# Default description of the client's piece. Short on purpose: a longer description that
-# named a "pendant" hallucinated a matching necklace and flattened the pavé. Lives here
-# rather than in pave_test.py, which the app used to import — that script reads
-# clientphoto/ at import time and the client's photos are not shipped in the container.
-DEFAULT_PRODUCT = (
-    'yellow gold kite-shaped diamond drop earrings with a fine chain'
-)
-
-# Held constant across every shoot: this is the part that protects product fidelity
-# and framing, and it is not exposed in the UI.
-CRAFT = (
+# Held constant across every shoot: the part that protects product fidelity, and not
+# exposed in the UI. Everything here is true of any piece — what is specific to where
+# the piece is worn (which body part stays bare, how it is framed, what must not be
+# invented alongside it) lives on product.Category instead.
+CRAFT_BASE = (
     'The jewellery must match the reference image exactly in shape, proportion, stone '
-    'layout and metal colour, with no redesign. Hair tucked back so the full earring '
-    'including any drop is visible and unobstructed. Shot on an 85mm lens at f/2, tack '
+    'layout and metal colour, with no redesign. Shot on an 85mm lens at f/2, tack '
     'sharp focus on the jewellery, background thrown well out of focus. Photorealistic, '
     'natural skin texture with visible pores, no beauty retouching, luxury jewellery '
-    'brand campaign photograph. She wears no necklace, chain, pendant or nose ring — the '
-    'earrings are the only jewellery anywhere in the photograph. She is dressed exactly '
-    'as described above, fully and modestly, with her shoulders covered. '
+    'brand campaign photograph. She is dressed exactly as described above, fully and '
+    'modestly, with her shoulders covered. '
     'Full bleed photograph filling the entire frame edge to edge, with no white border, '
     'mount or frame around it.'
 )
 
 # One shoot returns several genuinely different photographs, not one photograph several
-# times. num_images alone produces near-duplicates, so framing is varied explicitly and
+# times: num_images alone produces near-duplicates, so framing is varied explicitly and
 # each variant is given its own seed.
-# Nano Banana Pro weights the reference images heavily and the framing text lightly, so
-# all three came back as near-identical three-quarter views. Each entry now states the
-# crop in camera terms (what is in frame, what is cut off) rather than describing a mood.
-FRAMINGS = {
-    'hero': (
-        'WIDE SHOT. Full upper body from the waist up, she is turned slightly away and '
-        'looking back toward the camera, standing well back from the lens so the whole '
-        'location is visible around her and reads clearly.'
-    ),
-    'profile': (
-        'STRICT SIDE PROFILE, camera exactly 90 degrees to her face. She faces fully to '
-        'the left edge of the frame and does not look at the camera. The silhouette of '
-        'her nose, lips and chin is drawn against the background, and the whole ear with '
-        'the earring is square on to the lens.'
-    ),
-    'detail': (
-        'EXTREME CLOSE UP of the ear and jaw only. The frame is filled by the ear and '
-        'the earring, cropped so the top of the head and the mouth are outside the '
-        'frame. Macro jewellery photography, the metal and stones fill much of the '
-        'picture and the face is only a supporting element.'
-    ),
-}
-
-# Kept, but it is NOT the load-bearing instruction: a necklace appeared in four separate
-# runs that all carried this line. The positive "neck and collarbone are bare" statement
-# in CRAFT is the one expected to do the work; this is belt and braces.
-NEGATIVE_HINT = (
-    'Do not invent a different jewellery design, do not add extra earrings, necklaces '
-    'or nose rings that are not in the reference.'
-)
+#
+# The keys, not the prose, live here. Every category writes its own three framings —
+# a ring cannot be shot on the crop that works for an earring — but the key names are
+# fixed, because shoot.SEEDS, app.merge_images and the reshoot endpoint all address a
+# frame by name.
+FRAMINGS = ('hero', 'profile', 'detail')
 
 
 def compose_plate(location_key: str) -> str:
@@ -210,9 +180,13 @@ def compose_plate(location_key: str) -> str:
     )
 
 
-def compose(product: str, model_description: str, location_key: str,
+def compose(product: str, category, model_description: str, location_key: str,
             framing: str = 'hero') -> str:
-    """Build the popcorn/auto prompt from the three things the client actually picked."""
+    """Build the prompt from the three things the client picked, plus what they uploaded.
+
+    category is a product.Category — it decides where on the body the piece goes, how
+    the frame is cropped, and what must not be invented next to it.
+    """
     location = ALL[location_key]
     if framing not in FRAMINGS:
         raise KeyError(f'unknown framing {framing!r}; have {sorted(FRAMINGS)}')
@@ -221,12 +195,12 @@ def compose(product: str, model_description: str, location_key: str,
         # ignored and every shot came back neutral. The brand's own campaigns are warm
         # and smiling, so this is not a detail we can leave to chance.
         f'{model_description}, smiling warmly with a genuine open smile, '
-        f'wearing {product} shown in the reference image. '
+        f'wearing {product} {category.placement}, exactly as shown in the reference image. '
         f'She wears a {location.wardrobe}. '
         f'Behind her: {location.scene}. '
         f'Lighting: {location.light}. '
-        f'Framing: {FRAMINGS[framing]} '
-        f'{CRAFT} {NEGATIVE_HINT}'
+        f'Framing: {category.framings[framing]} '
+        f'{CRAFT_BASE} {category.craft} {category.negative}'
     )
 
 
@@ -235,8 +209,10 @@ def demo() -> None:
     assert len([l for l in ALL.values() if l.region == 'India']) == 5
     assert len({l.key for l in ALL.values()}) == 10, 'duplicate location key'
 
+    earrings = product.CATEGORIES['earrings']
     prompt = compose(
-        product='yellow gold kite-shaped diamond drop earrings with a fine chain',
+        product=product.DEFAULT_PRODUCT,
+        category=earrings,
         model_description='An Indian woman in her mid twenties with fair wheatish skin '
                           'and long straight dark hair',
         location_key='amber-fort',
@@ -246,14 +222,24 @@ def demo() -> None:
 
     # Each framing must actually change the prompt, or a "shoot" is one photo repeated.
     rendered = {
-        name: compose(product='p', model_description='m',
+        name: compose(product='p', category=earrings, model_description='m',
                       location_key='kyoto', framing=name)
         for name in FRAMINGS
     }
     assert len({*rendered.values()}) == len(FRAMINGS), 'framings collapsed to one prompt'
 
+    # And the category must reach the prompt: this is the bug that put a ring on an ear.
+    # Only the half before CRAFT_BASE is checked — the craft and negative clauses name
+    # the ear on purpose, to say it stays bare and empty.
+    ring = compose(product='a gold solitaire ring', category=product.CATEGORIES['ring'],
+                   model_description='m', location_key='kyoto', framing='detail')
+    aimed = ring.split(CRAFT_BASE)[0]
+    assert 'ring finger' in aimed, aimed
+    assert 'earring' not in aimed, 'ring prompt still poses the piece as an earring'
+
     try:
-        compose(product='p', model_description='m', location_key='kyoto', framing='wide')
+        compose(product='p', category=earrings, model_description='m',
+                location_key='kyoto', framing='wide')
     except KeyError:
         pass
     else:

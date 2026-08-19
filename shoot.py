@@ -11,6 +11,7 @@ import sys
 
 import hf
 import locations
+import product
 import providers
 
 CAST_MANIFEST = pathlib.Path('assets/cast/cast.json')
@@ -33,9 +34,14 @@ def load_cast() -> dict:
 
 
 def build(product_urls: list[str], model_key: str, location_key: str,
-          product: str, face_url: str | None = None,
+          description: str, category, face_url: str | None = None,
           framing: str = 'hero') -> tuple[str, dict]:
     """Return (prompt, arguments) without calling the API, so cost can be checked first.
+
+    description and category both come from the uploaded photo (product.identify): what
+    the piece looks like, and where on the body it is worn. The reference image alone
+    does not carry placement — the prompt has to say it, or a ring comes back as an
+    earring.
 
     face_url is the cast portrait. Passing the face as prompt text alone re-rolls a
     different woman every generation and drifts non-Indian at foreign locations — see
@@ -48,7 +54,8 @@ def build(product_urls: list[str], model_key: str, location_key: str,
         raise KeyError(f'unknown location {location_key!r}; have {sorted(locations.ALL)}')
 
     prompt = locations.compose(
-        product=product,
+        product=description,
+        category=category,
         model_description=f'An Indian woman, {cast[model_key]["description"]}',
         location_key=location_key,
         framing=framing,
@@ -63,8 +70,8 @@ def build(product_urls: list[str], model_key: str, location_key: str,
     }
 
 
-def shoot(product_paths, model_key: str, location_key: str, product: str,
-          framings=None, out_dir='out/shoots') -> list[pathlib.Path]:
+def shoot(product_paths, model_key: str, location_key: str, description: str,
+          category, framings=None, out_dir='out/shoots') -> list[pathlib.Path]:
     """Run one photoshoot: one generation per framing, saved locally.
 
     This is the single entry point the web app calls.
@@ -77,7 +84,8 @@ def shoot(product_paths, model_key: str, location_key: str, product: str,
     saved, failures = [], []
     for framing in framings:
         _prompt, arguments = build(
-            product_urls, model_key, location_key, product, face_url, framing
+            product_urls, model_key, location_key, description, category,
+            face_url, framing,
         )
         try:
             urls = provider.generate(**arguments)
@@ -98,9 +106,10 @@ def shoot(product_paths, model_key: str, location_key: str, product: str,
 
 def demo() -> None:
     """Self-check: prompt assembly and validation, without spending credits."""
+    earrings = product.CATEGORIES['earrings']
     prompt, arguments = build(
         ['https://example.com/a.jpg'], 'aditi', 'kyoto',
-        product='yellow gold kite-shaped diamond drop earrings',
+        description='yellow gold kite-shaped diamond drop earrings', category=earrings,
     )
     assert arguments['image_urls'] == ['https://example.com/a.jpg']
     assert 'bamboo' in prompt
@@ -109,21 +118,31 @@ def demo() -> None:
     # The face must be appended after the product, never before it.
     _prompt, with_face = build(
         ['https://example.com/a.jpg'], 'aditi', 'kyoto',
-        product='p', face_url='https://example.com/face.png',
+        description='p', category=earrings, face_url='https://example.com/face.png',
     )
     assert with_face['image_urls'] == [
         'https://example.com/a.jpg', 'https://example.com/face.png'
     ]
 
     # A shoot must be three distinct prompts on three distinct seeds, not one repeated.
-    built = [build(['u'], 'aditi', 'kyoto', product='p', framing=name)
+    built = [build(['u'], 'aditi', 'kyoto', description='p', category=earrings,
+                   framing=name)
              for name in locations.FRAMINGS]
     assert len({prompt for prompt, _args in built}) == len(locations.FRAMINGS)
     assert len({args['seed'] for _prompt, args in built}) == len(locations.FRAMINGS)
 
+    # Every framing this app can shoot must have a seed, or a reshoot silently reuses
+    # another frame's seed and returns the same photograph.
+    assert set(SEEDS) == set(locations.FRAMINGS), (sorted(SEEDS), locations.FRAMINGS)
+
+    # The category has to reach the provider arguments, not just the category presets.
+    ring, _args = build(['u'], 'aditi', 'kyoto', description='a gold solitaire ring',
+                        category=product.CATEGORIES['ring'], framing='detail')
+    assert 'ring finger' in ring and 'EXTREME CLOSE UP of the hand' in ring, ring
+
     for bad in (('nobody', 'kyoto'), ('aditi', 'atlantis')):
         try:
-            build(['x'], *bad, product='p')
+            build(['x'], *bad, description='p', category=earrings)
         except KeyError:
             pass
         else:
@@ -137,9 +156,12 @@ if __name__ == '__main__':
         demo()
     else:
         product_path, model_key, location_key = sys.argv[1:4]
+        # The CLI reads the piece off the photo exactly as the web app does, so a shoot
+        # run from the terminal is the same shoot the client gets.
+        category, description = product.identify(product_path)
+        print(f'detected {category.key}: {description}')
         paths, failures = shoot([product_path], model_key, location_key,
-                                product='yellow gold kite-shaped diamond drop earrings '
-                                        'with a fine chain')
+                                description, category)
         for path in paths:
             print(path)
         for framing, reason in failures:

@@ -21,6 +21,7 @@ Open http://localhost:8000.
 | `app.py` | FastAPI: 3 endpoints + static UI |
 | `static/index.html` | the whole front end, no build step |
 | `shoot.py` | **the only thing the app calls** — one shoot in, images out |
+| `product.py` | reads the uploaded piece: what it is, and where it is worn |
 | `locations.py` | 10 location presets + prompt assembly |
 | `hf.py` | Higgsfield client (upload, estimate, download) |
 | `cast.py` | one-time: generate the model cast |
@@ -51,6 +52,22 @@ These were all established by testing against the live API. Each cost credits to
 10. **Do not phrase it as bare skin.** "Her neck and collarbone are completely bare"
    removed the necklace but also removed the saree — the model read it as wardrobe.
    Target the jewellery, then restate the wardrobe explicitly.
+11. **The reference image does not carry placement — the prose does.** A ring uploaded
+   as reference #1 came back as an earring hanging from the ear, because every framing
+   and craft line said "earring". `product.identify` now reads the piece off its own
+   photo (Claude Haiku, ~$0.002 a shoot) and `product.CATEGORIES` supplies the placement,
+   the three crops and the negative hint for that body part. If the call fails for any
+   reason it falls back to the client's earrings, so a shoot never dies on detection.
+
+## Adding a category
+
+`product.CATEGORIES` is the only place to edit. Each entry needs a `placement`
+("on her right wrist"), a `craft` line saying what must stay bare, a `negative` naming
+the other categories, and three `framings` under the keys `hero` / `profile` / `detail`.
+Those three keys are fixed — `shoot.SEEDS`, `app.merge_images` and the reshoot endpoint
+all address a frame by name. Add the new key to the `category` enum the vision call
+returns (it is derived from `CATEGORIES`, so that part is automatic) and run
+`python product.py`.
 
 ## Known limitations — tell the client these
 
@@ -60,7 +77,12 @@ These were all established by testing against the live API. Each cost credits to
 - **Ages skew old, most strongly on deeper skin tones.** Briefs of 32 and 35 render
   around 45. Ask for about ten years younger than the target age.
 - **Pavé renders as a solitaire when the source photo is small.** The client's file is
-  640px; a larger product photo should improve stone detail.
+  640px; a larger product photo should improve stone detail. Detection reads the setting
+  off the same small file, so it can call a pavé cluster a solitaire and put that in the
+  prompt. The detected line above the results is there so this is visible.
+- **The cast portraits are head-and-shoulders, with no hands.** For a ring or a bracelet
+  the identity reference cannot anchor the `detail` crop, which is hand-only. Faces still
+  hold on `hero`; expect the macro frame to be a generic hand.
 
 ## Costs
 

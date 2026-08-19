@@ -104,6 +104,8 @@
   @keyframes sweep { to { background-position: -220% 0; } }
   .error { background: #fdf1f1; border: 1px solid #f0c9c9; color: #8c2c2c;
     padding: 14px 16px; border-radius: 10px; font-size: 14px; }
+  .detected { font-size: 14px; color: #6b6259; }
+  .detected b { color: #241f1a; text-transform: capitalize; }
   .hidden { display: none; }
 </style>
 </head>
@@ -138,6 +140,9 @@
 
   <section id="out" class="hidden">
     <div class="step"><span class="num">&#10003;</span><h2>Your shoot</h2><em id="outNote"></em></div>
+    <!-- What the piece was read as. The whole shoot is framed around this, so if it is
+         wrong the operator can see why before the images come back. -->
+    <div id="detected" class="detected hidden"></div>
     <div id="error" class="error hidden"></div>
     <div class="results" id="results"></div>
   </section>
@@ -246,6 +251,7 @@ $('go').addEventListener('click', async () => {
   $('go').disabled = true;
   $('out').classList.remove('hidden');
   $('error').classList.add('hidden');
+  $('detected').classList.add('hidden');
   $('outNote').textContent = 'usually about a minute';
   const results = $('results');
   results.innerHTML = '';
@@ -257,13 +263,23 @@ $('go').addEventListener('click', async () => {
   $('out').scrollIntoView({ behavior: 'smooth' });
 
   const body = new FormData();
-  body.append('product', state.file);
+  body.append('upload', state.file);
   body.append('model_key', state.model);
   body.append('location_key', state.location);
 
   try {
     const started = await fetch('/api/shoots', { method: 'POST', body }).then((r) => r.json());
     state.expected = started.expected || state.expected;
+    if (started.category) {
+      // textContent, not innerHTML: the description is written by a model reading an
+      // uploaded image, so it is never trusted markup.
+      $('detected').replaceChildren(
+        document.createTextNode('Read as a '),
+        Object.assign(document.createElement('b'), { textContent: started.category }),
+        document.createTextNode(` · ${started.description}`),
+      );
+      $('detected').classList.remove('hidden');
+    }
     poll(started.job_id);
   } catch (error) {
     fail(String(error));

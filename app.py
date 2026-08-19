@@ -17,10 +17,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import locations
+import product
 import providers
 import shoot
 import storage
-from locations import DEFAULT_PRODUCT
 
 UPLOADS = pathlib.Path('out/uploads')
 SHOOTS = pathlib.Path('out/shoots')
@@ -96,9 +96,10 @@ def merge_images(existing: list[dict], fresh: list[dict]) -> list[dict]:
 
 
 def run_shoot(job_id: str, product_path: pathlib.Path, model_key: str,
-              location_key: str, product: str, framings=None) -> None:
+              location_key: str, description: str, category, framings=None) -> None:
     try:
-        saved, failures = shoot.shoot([product_path], model_key, location_key, product,
+        saved, failures = shoot.shoot([product_path], model_key, location_key,
+                                      description, category,
                                       framings=framings, out_dir=SHOOTS / job_id)
         if not saved:
             raise RuntimeError(
@@ -126,10 +127,9 @@ def run_shoot(job_id: str, product_path: pathlib.Path, model_key: str,
 @app.post('/api/shoots')
 async def create_shoot(
     background: BackgroundTasks,
-    product: UploadFile,
+    upload: UploadFile,
     model_key: str = Form(...),
     location_key: str = Form(...),
-    description: str = Form(DEFAULT_PRODUCT),
 ):
     if model_key not in shoot.load_cast():
         raise HTTPException(400, f'unknown model {model_key}')
@@ -138,17 +138,24 @@ async def create_shoot(
 
     job_id = uuid.uuid4().hex[:12]
     UPLOADS.mkdir(parents=True, exist_ok=True)
-    suffix = pathlib.Path(product.filename or 'upload.jpg').suffix or '.jpg'
+    suffix = pathlib.Path(upload.filename or 'upload.jpg').suffix or '.jpg'
     product_path = UPLOADS / f'{job_id}{suffix}'
     with product_path.open('wb') as handle:
-        shutil.copyfileobj(product.file, handle)
+        shutil.copyfileobj(upload.file, handle)
+
+    # Read the piece off its own photograph. A second or two, in front of a generation
+    # that takes a minute — and without it every upload is shot as the client's
+    # earrings, which is how a ring came back hanging off an ear.
+    category, description = product.identify(product_path)
 
     set_job(job_id, status='running', images=[], error=None,
-            model=model_key, location=location_key)
+            model=model_key, location=location_key,
+            category=category.key, description=description)
     background.add_task(run_shoot, job_id, product_path, model_key,
-                        location_key, description)
+                        location_key, description, category)
     return {'job_id': job_id, 'status': 'running',
-            'expected': len(locations.FRAMINGS)}
+            'expected': len(locations.FRAMINGS),
+            'category': category.key, 'description': description}
 
 
 @app.post('/api/shoots/{job_id}/reshoot')
@@ -170,9 +177,14 @@ def reshoot(job_id: str, background: BackgroundTasks, framing: str):
     if not matches:
         raise HTTPException(410, 'original upload is no longer available')
 
+    # Reuse what the original upload was detected as, rather than re-reading the photo
+    # or falling back to a constant: a reshoot that changes the piece is not a reshoot.
+    category = product.CATEGORIES.get(job.get('category'), product.DEFAULT_CATEGORY)
+    description = job.get('description') or product.DEFAULT_PRODUCT
+
     set_job(job_id, status='running', error=None)
     background.add_task(run_shoot, job_id, matches[0], job['model'],
-                        job['location'], DEFAULT_PRODUCT, [framing])
+                        job['location'], description, category, [framing])
     return {'job_id': job_id, 'status': 'running', 'framing': framing}
 
 

@@ -11,12 +11,12 @@ import pathlib
 import higgsfield_client
 
 import hf
-import locations
+import product
 import shoot
 
 PRODUCTS = sorted(pathlib.Path('clientphoto').glob('*.jpg'))  # empty outside dev
 
-CONTROL = locations.DEFAULT_PRODUCT
+CONTROL = product.DEFAULT_PRODUCT
 CANDIDATE = (
     'yellow gold kite-shaped drop earrings, each kite frame pavé set with a cluster of '
     'many tiny round brilliant diamonds rather than one large stone, suspended from a '
