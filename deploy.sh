@@ -6,14 +6,16 @@
 # previous image — a deploy that silently ships nothing. The tag is <git-sha>-<time>.
 set -euo pipefail
 
-REGION=ap-south-1
-ACCOUNT=085193942944
-REPO=vox-photoshoot
-SERVICE_ARN="arn:aws:apprunner:${REGION}:${ACCOUNT}:service/vox-photoshoot/74c51f50e3014e2587ea8fa9caed99f0"
-BUCKET=vox-photoshoot-085193942944
-INSTANCE_ROLE="arn:aws:iam::${ACCOUNT}:role/VoxPhotoshootInstanceRole"
-ACCESS_ROLE="arn:aws:iam::${ACCOUNT}:role/AppRunnerECRAccessRole"
-URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
+# Exported, not plain assignments: the heredoc below builds the deploy JSON in python
+# and reads every one of these out of the environment.
+export REGION=ap-south-1
+export ACCOUNT=085193942944
+export REPO=vox-photoshoot
+export SERVICE_ARN="arn:aws:apprunner:${REGION}:${ACCOUNT}:service/vox-photoshoot/74c51f50e3014e2587ea8fa9caed99f0"
+export BUCKET=vox-photoshoot-085193942944
+export INSTANCE_ROLE="arn:aws:iam::${ACCOUNT}:role/VoxPhotoshootInstanceRole"
+export ACCESS_ROLE="arn:aws:iam::${ACCOUNT}:role/AppRunnerECRAccessRole"
+export URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
 
 cd "$(dirname "$0")"
 [ -f .env ] || { echo "no .env — need FAL_KEY, HF_KEY and ANTHROPIC_API_KEY" >&2; exit 1; }
@@ -62,9 +64,7 @@ print(json.dumps({
                             "InstanceRoleArn": os.environ["INSTANCE_ROLE"]},
 }))
 PY
-SERVICE_ARN="$SERVICE_ARN" ACCESS_ROLE="$ACCESS_ROLE" URI="$URI" BUCKET="$BUCKET" \
-  REGION="$REGION" INSTANCE_ROLE="$INSTANCE_ROLE" \
-  aws apprunner update-service --cli-input-json file:///tmp/vox-deploy.json \
+aws apprunner update-service --cli-input-json file:///tmp/vox-deploy.json \
   --region "$REGION" --query 'Service.Status' --output text
 rm -f /tmp/vox-deploy.json   # contained the API keys
 
