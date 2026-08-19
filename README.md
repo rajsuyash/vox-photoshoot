@@ -59,14 +59,46 @@ These were all established by testing against the live API. Each cost credits to
    the three crops and the negative hint for that body part. If the call fails for any
    reason it falls back to the client's earrings, so a shoot never dies on detection.
 
+## Detected vs asked
+
+Two kinds of fact go into a prompt, and they come from different places.
+
+**Detected** — category, sub-type, description. All visible in the photograph, so
+`product.identify` reads them and the client never types anything. Sub-type matters
+more than it sounds: a stud sits flat on the lobe, an ear cuff clips the outer rim with
+no piercing at all, and no amount of "earrings" gets you from one to the other.
+
+**Asked** — size, and for a ring the finger and hand. **A product shot on a table
+carries no scale reference**, so nothing can infer it. Without the size sentence the
+generator renders a plausible ring rather than *this* ring, which is why the size
+control is anchored to a body part ("about as wide as her fingernail") instead of
+millimetres — the model cannot use millimetres, and the client does not know them.
+
+Plus a free-text `instructions` box, which lands after the craft rules so it can beat
+them: "keep the brushed matte finish, do not polish it" works.
+
+| | asked for | anchored against |
+|---|---|---|
+| ring | size, finger, hand | fingernail |
+| earrings | type, size | earlobe |
+| necklace | size | collarbone |
+| bracelet | size | wrist |
+
+The API is two calls, because which controls to show depends on what the piece is:
+`POST /api/pieces` (photo in, category + type + description + control spec out), then
+`POST /api/shoots` with the client's answers. `GET /api/categories` lets the UI
+re-render its controls when the client corrects the category.
+
 ## Adding a category
 
 `product.CATEGORIES` is the only place to edit. Each entry needs a `placement`
 ("on her right wrist"), a `craft` line saying what must stay bare, a `negative` naming
-the other categories, and three `framings` under the keys `hero` / `profile` / `detail`.
-Those three keys are fixed — `shoot.SEEDS`, `app.merge_images` and the reshoot endpoint
-all address a frame by name. Add the new key to the `category` enum the vision call
-returns (it is derived from `CATEGORIES`, so that part is automatic) and run
+the other categories, a `scale` of five sentences from `xs` to `xl` anchored to a body
+part, a `types` map of sub-styles, and `asks` listing which controls the UI should
+show. Framings go in the block below the table, under the keys `hero` / `profile` /
+`detail` — those three keys are fixed, because `shoot.SEEDS`, `app.merge_images` and
+the reshoot endpoint all address a frame by name. The vision call's `category` and
+`type` enums are derived from `CATEGORIES`, so they update themselves. Run
 `python product.py`.
 
 ## Known limitations — tell the client these

@@ -35,7 +35,7 @@ def load_cast() -> dict:
 
 def build(product_urls: list[str], model_key: str, location_key: str,
           description: str, category, face_url: str | None = None,
-          framing: str = 'hero') -> tuple[str, dict]:
+          framing: str = 'hero', options=None) -> tuple[str, dict]:
     """Return (prompt, arguments) without calling the API, so cost can be checked first.
 
     description and category both come from the uploaded photo (product.identify): what
@@ -59,6 +59,7 @@ def build(product_urls: list[str], model_key: str, location_key: str,
         model_description=f'An Indian woman, {cast[model_key]["description"]}',
         location_key=location_key,
         framing=framing,
+        options=options,
     )
     # Product first: it is the reference that must not be compromised.
     image_urls = [*product_urls, face_url] if face_url else list(product_urls)
@@ -71,7 +72,8 @@ def build(product_urls: list[str], model_key: str, location_key: str,
 
 
 def shoot(product_paths, model_key: str, location_key: str, description: str,
-          category, framings=None, out_dir='out/shoots') -> list[pathlib.Path]:
+          category, framings=None, out_dir='out/shoots',
+          options=None) -> list[pathlib.Path]:
     """Run one photoshoot: one generation per framing, saved locally.
 
     This is the single entry point the web app calls.
@@ -85,7 +87,7 @@ def shoot(product_paths, model_key: str, location_key: str, description: str,
     for framing in framings:
         _prompt, arguments = build(
             product_urls, model_key, location_key, description, category,
-            face_url, framing,
+            face_url, framing, options,
         )
         try:
             urls = provider.generate(**arguments)
@@ -139,6 +141,14 @@ def demo() -> None:
     ring, _args = build(['u'], 'aditi', 'kyoto', description='a gold solitaire ring',
                         category=product.CATEGORIES['ring'], framing='detail')
     assert 'ring finger' in ring and 'EXTREME CLOSE UP of the hand' in ring, ring
+
+    # So do the client's own choices — build() is the last place they can be dropped.
+    chosen, _args = build(['u'], 'aditi', 'kyoto', description='a gold band',
+                          category=product.CATEGORIES['ring'], framing='detail',
+                          options=product.Options(size='xs', finger='little',
+                                                  hand='left'))
+    assert 'little finger of her left hand' in chosen, chosen
+    assert 'half the width of her fingernail' in chosen, chosen
 
     for bad in (('nobody', 'kyoto'), ('aditi', 'atlantis')):
         try:

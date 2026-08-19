@@ -181,26 +181,36 @@ def compose_plate(location_key: str) -> str:
 
 
 def compose(product: str, category, model_description: str, location_key: str,
-            framing: str = 'hero') -> str:
+            framing: str = 'hero', options=None) -> str:
     """Build the prompt from the three things the client picked, plus what they uploaded.
 
     category is a product.Category — it decides where on the body the piece goes, how
-    the frame is cropped, and what must not be invented next to it.
+    the frame is cropped, and what must not be invented next to it. options is a
+    product.Options carrying what the photograph cannot say: how big the piece is, and
+    which finger it goes on.
     """
     location = ALL[location_key]
     if framing not in FRAMINGS:
         raise KeyError(f'unknown framing {framing!r}; have {sorted(FRAMINGS)}')
+    # Free text from the client, placed after the craft rules so it can override them —
+    # "keep the engraving" has to beat a generic instruction about sharpness.
+    note = (options.instructions or '').strip() if options else ''
     return (
         # Expression sits near the front deliberately: at the end of the prompt it was
         # ignored and every shot came back neutral. The brand's own campaigns are warm
         # and smiling, so this is not a detail we can leave to chance.
         f'{model_description}, smiling warmly with a genuine open smile, '
-        f'wearing {product} {category.placement}, exactly as shown in the reference image. '
+        # "from the reference image" stays here at the front, next to the product, even
+        # though CRAFT_BASE restates fidelity later: the early anchor is what stopped
+        # the model redesigning the piece, and CRAFT_BASE alone did not.
+        f'wearing {product} from the reference image {category.worn(options)} '
         f'She wears a {location.wardrobe}. '
         f'Behind her: {location.scene}. '
         f'Lighting: {location.light}. '
         f'Framing: {category.framings[framing]} '
-        f'{CRAFT_BASE} {category.craft} {category.negative}'
+        f'{CRAFT_BASE} {category.craft} '
+        + (f'{note} ' if note else '')
+        + category.negative
     )
 
 
@@ -236,6 +246,28 @@ def demo() -> None:
     aimed = ring.split(CRAFT_BASE)[0]
     assert 'ring finger' in aimed, aimed
     assert 'earring' not in aimed, 'ring prompt still poses the piece as an earring'
+
+    # The client's own choices have to survive into the prompt, or the controls are
+    # decoration. Scale especially: a product shot carries no size reference, so this
+    # sentence is the only thing telling the model how big the piece is.
+    chosen = compose(
+        product='a gold signet ring', category=product.CATEGORIES['ring'],
+        model_description='m', location_key='kyoto', framing='hero',
+        options=product.Options(size='xl', type='signet', finger='index', hand='left',
+                                instructions='Keep the engraving crisp.'),
+    )
+    assert 'index finger of her left hand' in chosen, chosen
+    assert 'signet' in chosen and 'twice the width of her fingernail' in chosen
+    assert 'Keep the engraving crisp.' in chosen
+    # The note must land before the negative hint, which stays last.
+    assert chosen.index('Keep the engraving') < chosen.index('Do not invent')
+
+    # Every size must produce a different prompt for every category.
+    for key, category in product.CATEGORIES.items():
+        rendered = {compose(product='p', category=category, model_description='m',
+                            location_key='kyoto', options=product.Options(size=size))
+                    for size in product.SIZES}
+        assert len(rendered) == len(product.SIZES), f'{key} ignores the size control'
 
     try:
         compose(product='p', category=earrings, model_description='m',

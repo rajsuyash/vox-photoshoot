@@ -109,6 +109,28 @@
   .detected.warn { background: #fdf6ec; border: 1px solid #eddcbe; color: #7a5a1e;
     padding: 12px 16px; border-radius: 10px; }
   .detected.warn b { color: #7a5a1e; }
+
+  .piece { margin-top: 18px; }
+  .fields { display: grid; gap: 16px 20px; margin-top: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .fields .wide { grid-column: 1 / -1; }
+  .fields label, .fields > div { display: flex; flex-direction: column; gap: 6px;
+    font-size: 13px; color: #6b6259; }
+  .fields label em, .hint { font-style: normal; color: #9a9088; }
+  .fields .lbl { font-size: 13px; }
+  .fields input, .fields select { font: inherit; font-size: 15px; color: #241f1a;
+    padding: 10px 12px; border: 1px solid #ded7cd; border-radius: 9px;
+    background: #fff; width: 100%; }
+  .fields input:focus, .fields select:focus { outline: 2px solid #c9b393;
+    outline-offset: -1px; }
+  .hint { font-size: 12px; margin: 2px 0 0; line-height: 1.4; }
+  .seg { display: flex; border: 1px solid #ded7cd; border-radius: 9px;
+    overflow: hidden; background: #fff; }
+  .seg button { flex: 1; font: inherit; font-size: 14px; padding: 9px 0;
+    border: 0; border-left: 1px solid #ded7cd; background: none; cursor: pointer;
+    color: #6b6259; text-transform: uppercase; letter-spacing: .04em; }
+  .seg button:first-child { border-left: 0; }
+  .seg button[aria-pressed="true"] { background: #241f1a; color: #f7f4ef; }
   .hidden { display: none; }
 </style>
 </head>
@@ -129,6 +151,40 @@
       </div>
     </div>
     <input type="file" id="file" accept="image/*" hidden>
+
+    <!-- Appears once the photo has been read. Category and description are prefilled
+         and editable; size and placement cannot be read off a product shot at all, so
+         they are asked for. -->
+    <div id="piece" class="piece hidden">
+      <div id="pieceNote" class="detected"></div>
+      <div class="fields">
+        <label>What it is
+          <select id="pieceCategory"></select>
+        </label>
+        <label class="wide">Description used in the prompt
+          <input id="pieceDescription" type="text" autocomplete="off">
+        </label>
+        <label id="typeField">Style
+          <select id="pieceType"></select>
+        </label>
+        <div id="sizeField">
+          <span class="lbl" id="sizeLabel">Size</span>
+          <div class="seg" id="pieceSize"></div>
+          <p class="hint">A product photo carries no scale. This is the only thing telling
+            the model how big your piece really is.</p>
+        </div>
+        <label id="fingerField">Finger
+          <select id="pieceFinger"></select>
+        </label>
+        <label id="handField">Hand
+          <select id="pieceHand"></select>
+        </label>
+        <label class="wide">Anything else <em>optional</em>
+          <input id="pieceInstructions" type="text" autocomplete="off"
+                 placeholder="e.g. keep the engraving, brighten the metal">
+        </label>
+      </div>
+    </div>
   </section>
 
   <section id="s2">
@@ -157,7 +213,12 @@
 </div>
 
 <script>
-const state = { file: null, model: null, location: null, expected: 3 };
+const state = {
+  file: null, model: null, location: null, expected: 3,
+  piece: null,      // { piece_id, category, type, description, detected, spec }
+  specs: {},        // category key -> control spec, for when the client corrects it
+  size: 'm',
+};
 
 const $ = (id) => document.getElementById(id);
 const drop = $('drop'), fileInput = $('file');
@@ -171,16 +232,93 @@ drop.addEventListener('drop', (e) => {
 });
 fileInput.addEventListener('change', () => fileInput.files[0] && acceptFile(fileInput.files[0]));
 
-function acceptFile(file) {
+async function acceptFile(file) {
   if (!file.type.startsWith('image/')) return;
   state.file = file;
+  state.piece = null;
   $('previewImg').src = URL.createObjectURL(file);
   $('previewName').textContent = file.name;
   $('dropIdle').classList.add('hidden');
   $('dropPreview').classList.remove('hidden');
-  $('s1').dataset.done = 'true';
+  $('piece').classList.add('hidden');
+  refresh();
+
+  // Read the piece now rather than at Generate: which controls to show depends on the
+  // answer, and by the time a model and a location are picked this has long finished.
+  const body = new FormData();
+  body.append('upload', file);
+  try {
+    const piece = await fetch('/api/pieces', { method: 'POST', body })
+      .then((r) => { if (!r.ok) throw new Error(`upload failed (${r.status})`); return r.json(); });
+    state.piece = piece;
+    state.specs[piece.category] = piece.spec;
+    renderPiece();
+    $('s1').dataset.done = 'true';
+  } catch (error) {
+    fail(String(error));
+  }
   refresh();
 }
+
+const FINGERS = ['index', 'middle', 'ring', 'little', 'thumb'];
+const HANDS = ['left', 'right'];
+
+function fillSelect(select, values, chosen) {
+  select.replaceChildren(...values.map((value) => Object.assign(
+    document.createElement('option'), { value, textContent: titleCase(value),
+                                        selected: value === chosen })));
+}
+
+function renderPiece() {
+  const { category, type, description, detected } = state.piece;
+  const spec = state.specs[category];
+
+  $('pieceNote').replaceChildren(document.createTextNode(detected === false
+    ? 'Could not read your photo — assuming it is a piece of this kind. Correct it below.'
+    : 'Read from your photo. Correct anything that is wrong.'));
+  $('pieceNote').classList.toggle('warn', detected === false);
+
+  fillSelect($('pieceCategory'), Object.keys(state.specs).length > 1
+    ? Object.keys(state.specs) : [category], category);
+  $('pieceDescription').value = description;
+
+  // Only the controls this category actually needs. A necklace has no finger, and
+  // asking for one would put a wrong instruction into the prompt.
+  const asks = spec.asks;
+  $('typeField').classList.toggle('hidden', !asks.includes('type'));
+  $('fingerField').classList.toggle('hidden', !asks.includes('finger'));
+  $('handField').classList.toggle('hidden', !asks.includes('hand'));
+
+  fillSelect($('pieceType'), spec.types, type || spec.default_type);
+  fillSelect($('pieceFinger'), FINGERS, 'ring');
+  fillSelect($('pieceHand'), HANDS, 'right');
+
+  $('sizeLabel').textContent = spec.scale_label;
+  state.size = 'm';
+  $('pieceSize').replaceChildren(...spec.sizes.map((size) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = size;
+    button.setAttribute('aria-pressed', String(size === state.size));
+    button.addEventListener('click', () => {
+      state.size = size;
+      $('pieceSize').querySelectorAll('button').forEach((other) =>
+        other.setAttribute('aria-pressed', String(other === button)));
+    });
+    return button;
+  }));
+
+  $('piece').classList.remove('hidden');
+}
+
+// Correcting the category swaps the whole control set — a ring needs a finger, the
+// earrings it was misread as do not.
+$('pieceCategory').addEventListener('change', async (event) => {
+  const key = event.target.value;
+  if (!state.specs[key]) return;
+  state.piece = { ...state.piece, category: key, type: '' };
+  renderPiece();
+});
 
 function cardButton({ key, image, title, subtitle, onPick, group }) {
   const button = document.createElement('button');
@@ -205,10 +343,12 @@ function titleCase(text) {
 }
 
 async function load() {
-  const [models, places] = await Promise.all([
+  const [models, places, categories] = await Promise.all([
     fetch('/api/models').then((r) => r.json()),
     fetch('/api/locations').then((r) => r.json()),
+    fetch('/api/categories').then((r) => r.json()),
   ]);
+  categories.forEach((spec) => { state.specs[spec.key] = spec; });
 
   const modelGrid = $('models');
   models.forEach((model) => modelGrid.appendChild(cardButton({
@@ -239,10 +379,12 @@ async function load() {
 }
 
 function refresh() {
-  const ready = state.file && state.model && state.location;
+  // The piece has to have been read before a shoot can be built from it.
+  const ready = state.piece && state.model && state.location;
   $('go').disabled = !ready;
   const bits = [];
-  if (state.file) bits.push('product ready');
+  if (state.file && !state.piece) bits.push('reading your photo&hellip;');
+  if (state.piece) bits.push(`<b>${titleCase(state.piece.category)}</b>`);
   if (state.model) bits.push(`model <b>${titleCase(state.model)}</b>`);
   if (state.location) bits.push('location set');
   $('summary').innerHTML = ready
@@ -265,28 +407,42 @@ $('go').addEventListener('click', async () => {
   }
   $('out').scrollIntoView({ behavior: 'smooth' });
 
+  const category = $('pieceCategory').value;
   const body = new FormData();
-  body.append('upload', state.file);
+  body.append('piece_id', state.piece.piece_id);
   body.append('model_key', state.model);
   body.append('location_key', state.location);
+  body.append('category', category);
+  body.append('description', $('pieceDescription').value);
+  body.append('size', state.size);
+  body.append('type', $('pieceType').value);
+  body.append('finger', $('pieceFinger').value);
+  body.append('hand', $('pieceHand').value);
+  body.append('instructions', $('pieceInstructions').value);
+
+  // Echo back what this shoot was actually built from, so a wrong image is traceable
+  // to a wrong input rather than being a mystery.
+  const asks = state.specs[category].asks;
+  const summary = [$('pieceDescription').value, `size ${state.size.toUpperCase()}`];
+  if (asks.includes('type')) summary.push($('pieceType').value);
+  if (asks.includes('finger')) {
+    summary.push(`${$('pieceFinger').value} finger, ${$('pieceHand').value} hand`);
+  }
+  // textContent, not innerHTML: the description came from a model reading an uploaded
+  // image, so it is never trusted markup.
+  $('detected').replaceChildren(
+    Object.assign(document.createElement('b'), { textContent: category }),
+    document.createTextNode(` · ${summary.join(' · ')}`),
+  );
+  $('detected').classList.remove('hidden');
 
   try {
-    const started = await fetch('/api/shoots', { method: 'POST', body }).then((r) => r.json());
+    const started = await fetch('/api/shoots', { method: 'POST', body })
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.json()).detail || `failed (${r.status})`);
+        return r.json();
+      });
     state.expected = started.expected || state.expected;
-    if (started.category) {
-      // textContent, not innerHTML: the description is written by a model reading an
-      // uploaded image, so it is never trusted markup.
-      $('detected').replaceChildren(
-        document.createTextNode(started.detected === false
-          ? 'Could not read your photo — shooting it as a ' : 'Read as a '),
-        Object.assign(document.createElement('b'), { textContent: started.category }),
-        document.createTextNode(` · ${started.description}`),
-      );
-      // A shoot built on the fallback is a shoot of the wrong piece. Say so loudly
-      // rather than letting the client find out from the images.
-      $('detected').classList.toggle('warn', started.detected === false);
-      $('detected').classList.remove('hidden');
-    }
     poll(started.job_id);
   } catch (error) {
     fail(String(error));
