@@ -11,11 +11,11 @@ before the prompt is built.
 """
 
 import base64
+import io
 import json
-import mimetypes
-import os
 import pathlib
 import re
+import tempfile
 from dataclasses import dataclass
 
 # Single-image classification with a fixed schema. Haiku is the right tier for it and
@@ -191,19 +191,55 @@ SCHEMA = {
 }
 
 
-def identify(image_path) -> tuple[Category, str]:
-    """Read the piece off its photograph -> (category, description).
+@dataclass(frozen=True)
+class Piece:
+    """What the upload was read as, and whether it was read at all."""
+    category: Category
+    description: str
+    detected: bool
 
-    Never raises. A missing key, a network failure or a nonsense answer falls back to
-    the client's earrings, which is exactly the shoot this app produced before detection
-    existed — a degraded shoot beats a failed upload during a live client demo.
+
+# Anthropic accepts these four and rejects everything else with a 400. A client
+# photographing a ring on their desk sends an iPhone HEIC, which is not on the list —
+# that 400 is what silently shot a ring as the client's earrings in production.
+# Everything is re-encoded to JPEG rather than sniffed, so the format never matters.
+VISION_MEDIA_TYPE = 'image/jpeg'
+
+# Anthropic downscales anything larger than this before the model sees it, so sending
+# a 12MP phone photo only spends upload bandwidth and risks the request size limit.
+VISION_MAX_EDGE = 1568
+
+
+def encode(image_path) -> str:
+    """Any image the client can produce -> base64 JPEG the vision API will accept."""
+    from PIL import Image
+
+    try:  # iPhone photos. Optional: without it HEIC raises here and we fall back.
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+
+    with Image.open(image_path) as image:
+        # convert() first: HEIC and PNG can carry alpha or a palette, and JPEG has
+        # neither. thumbnail() is a no-op on anything already small enough.
+        image = image.convert('RGB')
+        image.thumbnail((VISION_MAX_EDGE, VISION_MAX_EDGE))
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG', quality=90)
+    return base64.standard_b64encode(buffer.getvalue()).decode()
+
+
+def identify(image_path) -> Piece:
+    """Read the piece off its photograph.
+
+    Never raises. A missing key, an unreadable file, a network failure or a nonsense
+    answer falls back to the client's earrings — the shoot this app produced before
+    detection existed. The caller is told, via Piece.detected, so a fallback can be
+    shown rather than quietly delivering the wrong piece.
     """
     try:
         import anthropic
-
-        path = pathlib.Path(image_path)
-        media_type = mimetypes.guess_type(path.name)[0] or 'image/jpeg'
-        data = base64.standard_b64encode(path.read_bytes()).decode()
 
         response = anthropic.Anthropic().messages.create(
             model=VISION_MODEL,
@@ -212,7 +248,8 @@ def identify(image_path) -> tuple[Category, str]:
                 'role': 'user',
                 'content': [
                     {'type': 'image',
-                     'source': {'type': 'base64', 'media_type': media_type, 'data': data}},
+                     'source': {'type': 'base64', 'media_type': VISION_MEDIA_TYPE,
+                                'data': encode(image_path)}},
                     {'type': 'text', 'text': BRIEF},
                 ],
             }],
@@ -225,11 +262,10 @@ def identify(image_path) -> tuple[Category, str]:
         if not description:
             raise ValueError('empty description')
     except Exception as error:
-        # Surfaced in the container log, not to the client: the shoot still runs.
         print(f'product.identify failed ({error!r}); falling back to '
               f'{DEFAULT_CATEGORY.key}', flush=True)
-        return DEFAULT_CATEGORY, DEFAULT_PRODUCT
-    return category, description
+        return Piece(DEFAULT_CATEGORY, DEFAULT_PRODUCT, detected=False)
+    return Piece(category, description, detected=True)
 
 
 def demo() -> None:
@@ -280,14 +316,24 @@ def demo() -> None:
 
     assert SCHEMA['properties']['category']['enum'] == sorted(CATEGORIES)
 
-    # No credentials, no crash: identify() degrades instead of failing the upload.
-    key = os.environ.pop('ANTHROPIC_API_KEY', None)
-    try:
-        category, description = identify('nonexistent.jpg')
-    finally:
-        if key is not None:
-            os.environ['ANTHROPIC_API_KEY'] = key
-    assert category is DEFAULT_CATEGORY and description == DEFAULT_PRODUCT
+    # An unreadable file degrades instead of failing the upload — and says so, because
+    # a silent fallback delivered a ring shot as earrings before anyone noticed.
+    piece = identify('nonexistent.jpg')
+    assert piece.category is DEFAULT_CATEGORY and piece.description == DEFAULT_PRODUCT
+    assert piece.detected is False
+
+    # Every format a client can hand us has to reach the API as JPEG. An iPhone HEIC
+    # sent as image/heic is a 400, which is exactly how the ring became an earring.
+    from PIL import Image
+    for mode, suffix, fmt in [('RGBA', '.png', 'PNG'), ('P', '.gif', 'GIF'),
+                              ('RGB', '.bmp', 'BMP'), ('RGB', '.tiff', 'TIFF'),
+                              ('RGB', '.heic', 'JPEG')]:  # .heic name, jpeg bytes
+        path = pathlib.Path(tempfile.gettempdir()) / f'vox-encode-test{suffix}'
+        Image.new(mode, (3000, 2000), 'red').save(path, format=fmt)
+        decoded = Image.open(io.BytesIO(base64.b64decode(encode(path))))
+        assert decoded.format == 'JPEG', (suffix, decoded.format)
+        assert max(decoded.size) == VISION_MAX_EDGE, (suffix, decoded.size)
+        path.unlink()
 
     print('product ok')
 

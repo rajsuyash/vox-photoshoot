@@ -158,10 +158,11 @@ if __name__ == '__main__':
         product_path, model_key, location_key = sys.argv[1:4]
         # The CLI reads the piece off the photo exactly as the web app does, so a shoot
         # run from the terminal is the same shoot the client gets.
-        category, description = product.identify(product_path)
-        print(f'detected {category.key}: {description}')
+        piece = product.identify(product_path)
+        label = 'detected' if piece.detected else 'COULD NOT READ, falling back to'
+        print(f'{label} {piece.category.key}: {piece.description}')
         paths, failures = shoot([product_path], model_key, location_key,
-                                description, category)
+                                piece.description, piece.category)
         for path in paths:
             print(path)
         for framing, reason in failures:

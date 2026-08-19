@@ -6,3 +6,4 @@ python-multipart
 fal-client
 boto3
 anthropic
+pillow-heif

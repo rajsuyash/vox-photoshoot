@@ -106,6 +106,9 @@
     padding: 14px 16px; border-radius: 10px; font-size: 14px; }
   .detected { font-size: 14px; color: #6b6259; }
   .detected b { color: #241f1a; text-transform: capitalize; }
+  .detected.warn { background: #fdf6ec; border: 1px solid #eddcbe; color: #7a5a1e;
+    padding: 12px 16px; border-radius: 10px; }
+  .detected.warn b { color: #7a5a1e; }
   .hidden { display: none; }
 </style>
 </head>
@@ -274,10 +277,14 @@ $('go').addEventListener('click', async () => {
       // textContent, not innerHTML: the description is written by a model reading an
       // uploaded image, so it is never trusted markup.
       $('detected').replaceChildren(
-        document.createTextNode('Read as a '),
+        document.createTextNode(started.detected === false
+          ? 'Could not read your photo — shooting it as a ' : 'Read as a '),
         Object.assign(document.createElement('b'), { textContent: started.category }),
         document.createTextNode(` · ${started.description}`),
       );
+      // A shoot built on the fallback is a shoot of the wrong piece. Say so loudly
+      // rather than letting the client find out from the images.
+      $('detected').classList.toggle('warn', started.detected === false);
       $('detected').classList.remove('hidden');
     }
     poll(started.job_id);

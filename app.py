@@ -146,16 +146,20 @@ async def create_shoot(
     # Read the piece off its own photograph. A second or two, in front of a generation
     # that takes a minute — and without it every upload is shot as the client's
     # earrings, which is how a ring came back hanging off an ear.
-    category, description = product.identify(product_path)
+    piece = product.identify(product_path)
 
     set_job(job_id, status='running', images=[], error=None,
             model=model_key, location=location_key,
-            category=category.key, description=description)
+            category=piece.category.key, description=piece.description,
+            detected=piece.detected)
     background.add_task(run_shoot, job_id, product_path, model_key,
-                        location_key, description, category)
+                        location_key, piece.description, piece.category)
+    # detected is returned, not just logged: a shoot built on the fallback is a shoot of
+    # the wrong piece, and the client should see that before the images do.
     return {'job_id': job_id, 'status': 'running',
             'expected': len(locations.FRAMINGS),
-            'category': category.key, 'description': description}
+            'category': piece.category.key, 'description': piece.description,
+            'detected': piece.detected}
 
 
 @app.post('/api/shoots/{job_id}/reshoot')
