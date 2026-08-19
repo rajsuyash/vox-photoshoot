@@ -1,4 +1,4 @@
-# Vox Photo-Shoot
+# Donna Photoshoot
 
 Upload a jewellery product photo, pick an Indian model and a shoot location, get
 campaign-ready images. Higgsfield under the hood.

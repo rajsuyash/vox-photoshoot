@@ -1,4 +1,4 @@
-"""Vox Photo-Shoot demo server.
+"""Donna Photoshoot demo server.
 
 Three steps for the client: upload the piece, pick a model and a location, generate.
 Everything a photographer would decide is preset in locations.py.
@@ -29,7 +29,7 @@ SHOOTS = pathlib.Path('out/shoots')
 RETOUCHES = pathlib.Path('out/retouches')
 STATIC = pathlib.Path('static')
 
-app = FastAPI(title='Vox Photo-Shoot')
+app = FastAPI(title='Donna Photoshoot')
 
 # In-memory job store. Fine for a demo; on AWS this becomes a DynamoDB item keyed by
 # job id, and the worker becomes a Lambda triggered by the Higgsfield webhook.

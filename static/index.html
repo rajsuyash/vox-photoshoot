@@ -3,148 +3,228 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vox Photo-Shoot</title>
+<title>Donna Photoshoot</title>
+<!-- static/ is mounted at the root, so these resolve without a /static prefix. -->
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* Voxdonna design system — see DESIGN.md in the website repo. Copper is the only
+     accent; everything else is neutral. Dark only: every surface alpha and the copper
+     saturation assume a dark canvas, so there is deliberately no light mode. */
   :root {
-    --ink: #14100c;
-    --muted: #7d736a;
-    --line: #e6e0d8;
-    --paper: #faf8f5;
-    --gold: #b08b4f;
-    --radius: 14px;
+    --bg: #0a0a0c;                              /* warm black, never #000 */
+    --surface: rgba(255, 255, 255, .02);
+    --raised: rgba(255, 255, 255, .04);
+    --line: rgba(255, 255, 255, .08);
+    --ink: #f5f5f7;                             /* off-white, never pure white */
+    --muted: rgba(245, 245, 247, .6);
+    --faint: rgba(245, 245, 247, .4);
+    --copper: #c17f59;
+    --copper-light: #d4a574;
+    --copper-soft: rgba(193, 127, 89, .12);
+    --copper-line: rgba(193, 127, 89, .25);
+    --error: #e57373;
+    --radius: 12px;
+    --radius-lg: 20px;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--paper); color: var(--ink);
-    font: 16px/1.55 "Helvetica Neue", Helvetica, Arial, sans-serif;
-    -webkit-font-smoothing: antialiased;
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 16px/1.55 Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   }
   header {
-    padding: 26px 32px; border-bottom: 1px solid var(--line);
-    display: flex; align-items: baseline; gap: 14px;
-    position: sticky; top: 0; background: rgba(250,248,245,.92);
-    backdrop-filter: blur(8px); z-index: 10;
+    padding: 0 48px; height: 64px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 14px;
+    position: sticky; top: 0; background: rgba(10,10,12,.8);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px); z-index: 10;
   }
-  header h1 { margin: 0; font-size: 21px; letter-spacing: .16em; text-transform: uppercase; font-weight: 600; }
-  header span { color: var(--muted); font-size: 13px; letter-spacing: .04em; }
-  main { max-width: 1180px; margin: 0 auto; padding: 40px 32px 160px; }
+  /* Matches .nav-logo on voxdonna.com: mark, then wordmark with the brand word
+     in copper. */
+  .logo { display: flex; align-items: center; gap: 8px; flex: none; white-space: nowrap;
+    font-size: 18px; font-weight: 700; letter-spacing: -.02em; }
+  .logo svg { flex: none; }
+  .logo b { font-weight: 700; color: var(--copper); }
+  .logo span { font-weight: 400; color: var(--muted); }
+  header .tag { color: var(--faint); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; font-weight: 600; }
+  main { max-width: 1200px; margin: 0 auto; padding: 48px 48px 160px; }
+  @media (max-width: 720px) {
+    header { padding: 0 20px; gap: 10px; } main { padding: 32px 20px 170px; }
+    header .tag { display: none; }
+    .logo { font-size: 16px; }
+    .logo span { display: none; }   /* "Donna" + the mark carry it on a phone */
+  }
 
   section { margin-bottom: 56px; }
   .step { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
   .num {
-    width: 27px; height: 27px; border-radius: 50%; flex: none;
+    width: 27px; height: 27px; border-radius: 999px; flex: none;
     display: grid; place-items: center; font-size: 13px; font-weight: 600;
-    background: var(--ink); color: var(--paper);
+    background: var(--raised); color: var(--muted);
+    border: 1px solid var(--line); transition: background .2s, color .2s;
   }
-  section[data-done="true"] .num { background: var(--gold); }
-  .step h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  section[data-done="true"] .num {
+    background: var(--copper); color: var(--bg); border-color: var(--copper);
+  }
+  .step h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
   .step em { color: var(--muted); font-style: normal; font-size: 14px; }
 
   .drop {
-    border: 1.5px dashed var(--line); border-radius: var(--radius); background: #fff;
-    padding: 40px; text-align: center; cursor: pointer; transition: border-color .15s;
+    border: 1px dashed var(--line); border-radius: var(--radius); background: var(--surface);
+    padding: 40px; text-align: center; cursor: pointer;
+    transition: border-color .2s, background .2s;
   }
-  .drop:hover, .drop.over { border-color: var(--gold); }
+  .drop:hover, .drop.over { border-color: var(--copper-line); background: var(--raised); }
   .drop p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
-  .drop strong { font-size: 15px; }
+  .drop strong { font-size: 15px; font-weight: 500; }
   .preview { display: flex; align-items: center; gap: 18px; }
   .preview img {
     width: 108px; height: 108px; object-fit: contain;
-    background: #fff; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--raised); border: 1px solid var(--line); border-radius: 10px;
+  }
+  /* Browsers cannot decode HEIC, so an iPhone upload renders as a broken-image icon
+     even though the server reads it fine. Show the file type instead of the glyph. */
+  .preview .noprev {
+    width: 108px; height: 108px; flex: none; display: grid; place-items: center;
+    background: var(--raised); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--faint); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    font-weight: 600;
   }
 
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .card {
-    border: 1.5px solid var(--line); border-radius: var(--radius); overflow: hidden;
-    background: #fff; cursor: pointer; padding: 0; text-align: left;
-    font: inherit; color: inherit; transition: border-color .15s, transform .15s;
+    border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+    background: var(--surface); cursor: pointer; padding: 0; text-align: left;
+    font: inherit; color: inherit;
+    transition: border-color .2s, transform .2s, background .2s;
   }
-  .card:hover { transform: translateY(-2px); }
-  .card[aria-pressed="true"] { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(176,139,79,.16); }
-  .card img { display: block; width: 100%; aspect-ratio: 3/4; object-fit: cover; background: #eee; }
-  .card b { display: block; padding: 10px 12px 12px; font-size: 13.5px; font-weight: 600; }
-  .card b small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; margin-top: 2px; }
+  .card:hover { transform: translateY(-2px); background: var(--raised); }
+  .card[aria-pressed="true"] {
+    border-color: var(--copper); box-shadow: 0 0 0 3px var(--copper-soft);
+  }
+  .card img { display: block; width: 100%; aspect-ratio: 3/4; object-fit: cover;
+    background: var(--raised); }
+  .card b { display: block; padding: 10px 12px 12px; font-size: 13.5px; font-weight: 500; }
+  /* The cast descriptions are prompt text, not copy — full sentences that run long.
+     Clamped to two lines so the grid stays even. */
+  .card b small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; color: var(--muted); font-weight: 400; font-size: 12px;
+    margin-top: 3px; line-height: 1.4; }
 
   .group-label {
-    font-size: 12px; letter-spacing: .13em; text-transform: uppercase;
-    color: var(--muted); margin: 26px 0 12px;
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600;
+    color: var(--faint); margin: 26px 0 12px;
   }
 
   .bar {
-    position: fixed; left: 0; right: 0; bottom: 0; padding: 16px 32px;
-    background: rgba(250,248,245,.95); backdrop-filter: blur(8px);
+    position: fixed; left: 0; right: 0; bottom: 0; padding: 16px 48px;
+    background: rgba(10,10,12,.8); backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
     border-top: 1px solid var(--line);
     display: flex; align-items: center; justify-content: space-between; gap: 20px;
   }
   .bar .summary { font-size: 14px; color: var(--muted); }
   .bar .summary b { color: var(--ink); font-weight: 600; }
+  /* The site's CTA: copper pill, black label. */
   button.go {
-    border: 0; border-radius: 999px; padding: 14px 34px; font-size: 15px; font-weight: 600;
-    background: var(--ink); color: var(--paper); cursor: pointer;
+    border: 0; border-radius: 999px; padding: 13px 30px; font-size: 14px; font-weight: 600;
+    background: var(--copper); color: var(--bg); cursor: pointer; transition: background .2s;
   }
-  button.go:disabled { background: #d9d2c9; color: #fff; cursor: not-allowed; }
+  button.go:hover:not(:disabled) { background: var(--copper-light); }
+  button.go:disabled { background: var(--raised); color: var(--faint); cursor: not-allowed; }
+  @media (max-width: 720px) { .bar { padding: 14px 20px; } }
 
   .results { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
   .results figure { margin: 0; }
-  .results img { width: 100%; border-radius: var(--radius); display: block; background: #eee; }
+  .results img { width: 100%; border-radius: var(--radius); display: block;
+    background: var(--raised); }
   .results figcaption {
     display: flex; justify-content: space-between; align-items: center;
     font-size: 13px; color: var(--muted); padding-top: 8px;
   }
-  .results a { color: var(--gold); text-decoration: none; font-weight: 600; }
+  .results a { color: var(--copper); text-decoration: none; font-weight: 600; }
+  .results a:hover { color: var(--copper-light); }
   .results button.link {
     background: none; border: 0; padding: 0; cursor: pointer;
     color: var(--muted); font: inherit; font-weight: 600; text-decoration: underline;
   }
-  .results button.link:hover { color: var(--ink); }
+  .results button.link:hover { color: var(--copper-light); }
 
   .shimmer { border-radius: var(--radius); aspect-ratio: 3/4;
-    background: linear-gradient(100deg, #ece7e0 30%, #f7f4ef 50%, #ece7e0 70%);
+    background: linear-gradient(100deg,
+      rgba(255,255,255,.02) 30%, rgba(193,127,89,.10) 50%, rgba(255,255,255,.02) 70%);
     background-size: 220% 100%; animation: sweep 1.3s infinite linear; }
   @keyframes sweep { to { background-position: -220% 0; } }
-  .error { background: #fdf1f1; border: 1px solid #f0c9c9; color: #8c2c2c;
-    padding: 14px 16px; border-radius: 10px; font-size: 14px; }
-  .detected { font-size: 14px; color: #6b6259; }
-  .detected b { color: #241f1a; text-transform: capitalize; }
-  .detected.warn { background: #fdf6ec; border: 1px solid #eddcbe; color: #7a5a1e;
-    padding: 12px 16px; border-radius: 10px; }
-  .detected.warn b { color: #7a5a1e; }
+  .error { background: rgba(229,115,115,.10); border: 1px solid rgba(229,115,115,.28);
+    color: var(--error); padding: 14px 16px; border-radius: var(--radius); font-size: 14px; }
+  .detected { font-size: 14px; color: var(--muted); }
+  .detected b { color: var(--copper-light); text-transform: capitalize; }
+  .detected.warn { background: var(--copper-soft); border: 1px solid var(--copper-line);
+    color: var(--copper-light); padding: 12px 16px; border-radius: var(--radius); }
+  .detected.warn b { color: var(--copper-light); }
 
   .tools { display: flex; gap: 4px; margin-left: auto; align-self: center;
-    background: #ece7e0; padding: 4px; border-radius: 10px; }
-  .tools button { font: inherit; font-size: 14px; padding: 7px 16px; border: 0;
-    border-radius: 7px; background: none; color: #6b6259; cursor: pointer; }
-  .tools button[aria-pressed="true"] { background: #fff; color: #241f1a;
-    box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+    background: var(--surface); border: 1px solid var(--line);
+    padding: 3px; border-radius: 999px; }
+  .tools button { font: inherit; font-size: 13px; padding: 6px 16px; border: 0;
+    border-radius: 999px; background: none; color: var(--muted); cursor: pointer;
+    transition: background .2s, color .2s; }
+  .tools button:hover { color: var(--ink); }
+  .tools button[aria-pressed="true"] { background: var(--copper); color: var(--bg); }
 
   .piece { margin-top: 18px; }
   .fields { display: grid; gap: 16px 20px; margin-top: 14px;
     grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
   .fields .wide { grid-column: 1 / -1; }
   .fields label, .fields > div { display: flex; flex-direction: column; gap: 6px;
-    font-size: 13px; color: #6b6259; }
-  .fields label em, .hint { font-style: normal; color: #9a9088; }
+    font-size: 13px; color: var(--muted); }
+  .fields label em, .hint { font-style: normal; color: var(--faint); }
   .fields .lbl { font-size: 13px; }
-  .fields input, .fields select { font: inherit; font-size: 15px; color: #241f1a;
-    padding: 10px 12px; border: 1px solid #ded7cd; border-radius: 9px;
-    background: #fff; width: 100%; }
-  .fields input:focus, .fields select:focus { outline: 2px solid #c9b393;
-    outline-offset: -1px; }
+  .fields input, .fields select { font: inherit; font-size: 15px; color: var(--ink);
+    padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--raised); width: 100%; }
+  .fields select { appearance: none; -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+    padding-right: 34px; }
+  .fields option { background: #17171a; color: var(--ink); }
+  .fields input::placeholder { color: var(--faint); }
+  .fields input:focus, .fields select:focus { outline: 1px solid var(--copper);
+    outline-offset: -1px; border-color: var(--copper); }
   .hint { font-size: 12px; margin: 2px 0 0; line-height: 1.4; }
-  .seg { display: flex; border: 1px solid #ded7cd; border-radius: 9px;
-    overflow: hidden; background: #fff; }
-  .seg button { flex: 1; font: inherit; font-size: 14px; padding: 9px 0;
-    border: 0; border-left: 1px solid #ded7cd; background: none; cursor: pointer;
-    color: #6b6259; text-transform: uppercase; letter-spacing: .04em; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 10px;
+    overflow: hidden; background: var(--raised); }
+  .seg button { flex: 1; font: inherit; font-size: 13px; padding: 9px 0;
+    border: 0; border-left: 1px solid var(--line); background: none; cursor: pointer;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
+    font-weight: 600; transition: background .2s, color .2s; }
   .seg button:first-child { border-left: 0; }
-  .seg button[aria-pressed="true"] { background: #241f1a; color: #f7f4ef; }
+  .seg button:hover { color: var(--ink); }
+  .seg button[aria-pressed="true"] { background: var(--copper); color: var(--bg); }
   .hidden { display: none; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Vox Photo-Shoot</h1>
-  <span>product photo to campaign imagery</span>
+  <!-- The voxdonna.com mark, inline and verbatim: three copper layers. Inline rather
+       than an <img> so it inherits the page and needs no extra request. -->
+  <a class="logo" href="https://voxdonna.com" style="text-decoration:none;color:inherit">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
+      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
+      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
+    </svg>
+    <b>Donna</b>&nbsp;<span>Photoshoot</span>
+  </a>
+  <span class="tag">product photo to campaign imagery</span>
   <nav class="tools" id="tools">
     <button type="button" data-tool="shoot" aria-pressed="true">Photoshoot</button>
     <button type="button" data-tool="retouch" aria-pressed="false">Retouch</button>
@@ -190,7 +270,7 @@
         <label id="handField">Hand
           <select id="pieceHand"></select>
         </label>
-        <label class="wide">Anything else <em>optional</em>
+        <label class="wide"><span class="lbl">Anything else <em>optional</em></span>
           <input id="pieceInstructions" type="text" autocomplete="off"
                  placeholder="e.g. keep the engraving, brighten the metal">
         </label>
@@ -238,7 +318,7 @@
           <p class="hint">Natural inclusions are what make a stone read as a real stone.
             Polishing them out is what makes catalogue images look synthetic.</p>
         </div>
-        <label class="wide">Anything else <em>optional</em>
+        <label class="wide"><span class="lbl">Anything else <em>optional</em></span>
           <input id="rInstructions" type="text" autocomplete="off"
                  placeholder="e.g. leave the patina alone, keep the hallmark readable">
         </label>
@@ -284,11 +364,27 @@ drop.addEventListener('drop', (e) => {
 });
 fileInput.addEventListener('change', () => fileInput.files[0] && acceptFile(fileInput.files[0]));
 
+// Browsers cannot decode HEIC, so an iPhone upload paints a broken-image glyph even
+// though the server reads it fine. Swap in a tile naming the format instead.
+function showPreview(img, file) {
+  img.src = URL.createObjectURL(file);
+  const existing = img.parentElement.querySelector('.noprev');
+  if (existing) existing.remove();
+  img.classList.remove('hidden');
+  img.onerror = () => {
+    img.classList.add('hidden');
+    const tile = document.createElement('div');
+    tile.className = 'noprev';
+    tile.textContent = (file.name.split('.').pop() || 'image').slice(0, 5);
+    img.parentElement.insertBefore(tile, img);
+  };
+}
+
 async function acceptFile(file) {
   if (!file.type.startsWith('image/')) return;
   state.file = file;
   state.piece = null;
-  $('previewImg').src = URL.createObjectURL(file);
+  showPreview($('previewImg'), file);
   $('previewName').textContent = file.name;
   $('dropIdle').classList.add('hidden');
   $('dropPreview').classList.remove('hidden');
@@ -327,7 +423,7 @@ rFileInput.addEventListener('change', () =>
 function acceptRetouchFile(file) {
   if (!file.type.startsWith('image/')) return;
   state.retouchFile = file;
-  $('rPreviewImg').src = URL.createObjectURL(file);
+  showPreview($('rPreviewImg'), file);
   $('rPreviewName').textContent = file.name;
   $('rDropIdle').classList.add('hidden');
   $('rDropPreview').classList.remove('hidden');
@@ -447,10 +543,11 @@ async function load() {
   ]);
   categories.forEach((spec) => { state.specs[spec.key] = spec; });
 
+  // Short enough to survive the select's width — the long version is in the README.
   const MODE_HINTS = {
-    faithful: 'Faithful — clean it, change nothing else',
-    studio: 'Studio — relight on a clean sweep',
-    vivid: 'Vivid — campaign punch',
+    faithful: 'Faithful · clean only',
+    studio: 'Studio · clean sweep',
+    vivid: 'Vivid · campaign punch',
   };
   fillSelect($('rMode'), retouchOptions.modes, retouchOptions.default_mode);
   [...$('rMode').options].forEach((option) => {
