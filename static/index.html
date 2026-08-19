@@ -110,6 +110,13 @@
     padding: 12px 16px; border-radius: 10px; }
   .detected.warn b { color: #7a5a1e; }
 
+  .tools { display: flex; gap: 4px; margin-left: auto; align-self: center;
+    background: #ece7e0; padding: 4px; border-radius: 10px; }
+  .tools button { font: inherit; font-size: 14px; padding: 7px 16px; border: 0;
+    border-radius: 7px; background: none; color: #6b6259; cursor: pointer; }
+  .tools button[aria-pressed="true"] { background: #fff; color: #241f1a;
+    box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+
   .piece { margin-top: 18px; }
   .fields { display: grid; gap: 16px 20px; margin-top: 14px;
     grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
@@ -138,6 +145,10 @@
 <header>
   <h1>Vox Photo-Shoot</h1>
   <span>product photo to campaign imagery</span>
+  <nav class="tools" id="tools">
+    <button type="button" data-tool="shoot" aria-pressed="true">Photoshoot</button>
+    <button type="button" data-tool="retouch" aria-pressed="false">Retouch</button>
+  </nav>
 </header>
 
 <main>
@@ -197,6 +208,44 @@
     <div id="locations"></div>
   </section>
 
+  <!-- Retouch: one photo in, the same piece back without the desk, the dust and the
+       colour cast. No model and no location, so none of the steps above apply. -->
+  <section id="r1" class="hidden">
+    <div class="step"><span class="num">1</span><h2>Upload the photo to clean</h2><em>the piece exactly as you shot it</em></div>
+    <div class="drop" id="rDrop">
+      <div id="rDropIdle"><strong>Drop the product photo here</strong><p>or click to choose &middot; any format your phone makes</p></div>
+      <div class="preview hidden" id="rDropPreview">
+        <img id="rPreviewImg" alt="Photo to retouch">
+        <div><strong id="rPreviewName"></strong><p>Click to replace</p></div>
+      </div>
+    </div>
+    <input type="file" id="rFile" accept="image/*" hidden>
+
+    <div class="piece">
+      <div class="fields">
+        <label>How far to go
+          <select id="rMode"></select>
+        </label>
+        <label>Background
+          <select id="rBackground"></select>
+        </label>
+        <div>
+          <span class="lbl">Gemstones</span>
+          <div class="seg" id="rStones">
+            <button type="button" data-stones="0" aria-pressed="true">Keep true</button>
+            <button type="button" data-stones="1" aria-pressed="false">Polish</button>
+          </div>
+          <p class="hint">Natural inclusions are what make a stone read as a real stone.
+            Polishing them out is what makes catalogue images look synthetic.</p>
+        </div>
+        <label class="wide">Anything else <em>optional</em>
+          <input id="rInstructions" type="text" autocomplete="off"
+                 placeholder="e.g. leave the patina alone, keep the hallmark readable">
+        </label>
+      </div>
+    </div>
+  </section>
+
   <section id="out" class="hidden">
     <div class="step"><span class="num">&#10003;</span><h2>Your shoot</h2><em id="outNote"></em></div>
     <!-- What the piece was read as. The whole shoot is framed around this, so if it is
@@ -214,10 +263,13 @@
 
 <script>
 const state = {
+  tool: 'shoot',    // 'shoot' or 'retouch' — two tools, one results pane
   file: null, model: null, location: null, expected: 3,
   piece: null,      // { piece_id, category, type, description, detected, spec }
   specs: {},        // category key -> control spec, for when the client corrects it
   size: 'm',
+  retouchFile: null,
+  stones: false,    // keep the stone's real inclusions unless asked otherwise
 };
 
 const $ = (id) => document.getElementById(id);
@@ -259,6 +311,50 @@ async function acceptFile(file) {
   }
   refresh();
 }
+
+// --- Retouch ------------------------------------------------------------------
+const rDrop = $('rDrop'), rFileInput = $('rFile');
+rDrop.addEventListener('click', () => rFileInput.click());
+rDrop.addEventListener('dragover', (e) => { e.preventDefault(); rDrop.classList.add('over'); });
+rDrop.addEventListener('dragleave', () => rDrop.classList.remove('over'));
+rDrop.addEventListener('drop', (e) => {
+  e.preventDefault(); rDrop.classList.remove('over');
+  if (e.dataTransfer.files[0]) acceptRetouchFile(e.dataTransfer.files[0]);
+});
+rFileInput.addEventListener('change', () =>
+  rFileInput.files[0] && acceptRetouchFile(rFileInput.files[0]));
+
+function acceptRetouchFile(file) {
+  if (!file.type.startsWith('image/')) return;
+  state.retouchFile = file;
+  $('rPreviewImg').src = URL.createObjectURL(file);
+  $('rPreviewName').textContent = file.name;
+  $('rDropIdle').classList.add('hidden');
+  $('rDropPreview').classList.remove('hidden');
+  $('r1').dataset.done = 'true';
+  refresh();
+}
+
+$('rStones').addEventListener('click', (event) => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  state.stones = button.dataset.stones === '1';
+  $('rStones').querySelectorAll('button').forEach((other) =>
+    other.setAttribute('aria-pressed', String(other === button)));
+});
+
+$('tools').addEventListener('click', (event) => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  state.tool = button.dataset.tool;
+  $('tools').querySelectorAll('button').forEach((other) =>
+    other.setAttribute('aria-pressed', String(other === button)));
+  const shooting = state.tool === 'shoot';
+  ['s1', 's2', 's3'].forEach((id) => $(id).classList.toggle('hidden', !shooting));
+  $('r1').classList.toggle('hidden', shooting);
+  $('out').classList.add('hidden');
+  refresh();
+});
 
 const FINGERS = ['index', 'middle', 'ring', 'little', 'thumb'];
 const HANDS = ['left', 'right'];
@@ -343,12 +439,26 @@ function titleCase(text) {
 }
 
 async function load() {
-  const [models, places, categories] = await Promise.all([
+  const [models, places, categories, retouchOptions] = await Promise.all([
     fetch('/api/models').then((r) => r.json()),
     fetch('/api/locations').then((r) => r.json()),
     fetch('/api/categories').then((r) => r.json()),
+    fetch('/api/retouch-options').then((r) => r.json()),
   ]);
   categories.forEach((spec) => { state.specs[spec.key] = spec; });
+
+  const MODE_HINTS = {
+    faithful: 'Faithful — clean it, change nothing else',
+    studio: 'Studio — relight on a clean sweep',
+    vivid: 'Vivid — campaign punch',
+  };
+  fillSelect($('rMode'), retouchOptions.modes, retouchOptions.default_mode);
+  [...$('rMode').options].forEach((option) => {
+    option.textContent = MODE_HINTS[option.value] || titleCase(option.value);
+  });
+  fillSelect($('rBackground'), retouchOptions.backgrounds,
+             retouchOptions.default_background);
+  $('rBackground').options[0].textContent = 'Keep the original';
 
   const modelGrid = $('models');
   models.forEach((model) => modelGrid.appendChild(cardButton({
@@ -379,9 +489,21 @@ async function load() {
 }
 
 function refresh() {
+  if (state.tool === 'retouch') {
+    const ready = Boolean(state.retouchFile);
+    state.expected = 1;
+    $('go').disabled = !ready;
+    $('go').textContent = 'Retouch photo';
+    $('summary').innerHTML = ready
+      ? 'photo ready &middot; <b>1 image</b>'
+      : 'Upload a photo to clean up';
+    return;
+  }
   // The piece has to have been read before a shoot can be built from it.
   const ready = state.piece && state.model && state.location;
+  state.expected = 3;
   $('go').disabled = !ready;
+  $('go').textContent = 'Generate shoot';
   const bits = [];
   if (state.file && !state.piece) bits.push('reading your photo&hellip;');
   if (state.piece) bits.push(`<b>${titleCase(state.piece.category)}</b>`);
@@ -406,6 +528,29 @@ $('go').addEventListener('click', async () => {
     results.appendChild(placeholder);
   }
   $('out').scrollIntoView({ behavior: 'smooth' });
+
+  if (state.tool === 'retouch') {
+    const body = new FormData();
+    body.append('upload', state.retouchFile);
+    body.append('mode', $('rMode').value);
+    body.append('background', $('rBackground').value);
+    body.append('retouch_stones', String(state.stones));
+    body.append('instructions', $('rInstructions').value);
+    $('detected').replaceChildren(document.createTextNode(
+      `${$('rMode').value} · stones ${state.stones ? 'polished' : 'kept true'}`));
+    $('detected').classList.remove('hidden');
+    try {
+      const started = await fetch('/api/retouches', { method: 'POST', body })
+        .then(async (r) => {
+          if (!r.ok) throw new Error((await r.json()).detail || `failed (${r.status})`);
+          return r.json();
+        });
+      poll(started.job_id);
+    } catch (error) {
+      fail(String(error));
+    }
+    return;
+  }
 
   const category = $('pieceCategory').value;
   const body = new FormData();
@@ -469,19 +614,48 @@ async function poll(jobId) {
   } else {
     $('error').classList.add('hidden');
   }
-  $('outNote').textContent = `${job.images.length} images · ready to download`;
+  $('outNote').textContent = `${job.images.length} image${job.images.length === 1 ? '' : 's'} · ready to download`;
   // The API returns {framing, url}. Never parse a framing out of the URL: presigned S3
   // links carry a query string.
+  //
+  // A retouch is one image and cannot be reshot — the reshoot endpoint only takes real
+  // framings. It gets the more useful button instead: a cleaned photo is a better shoot
+  // reference than the desk shot it came from.
   $('results').innerHTML = job.images.map(({ framing, url }) =>
     `<figure><img src="${url}" alt="${framing}">
       <figcaption><span>${titleCase(framing)}</span><span>
-      <button class="link" data-framing="${framing}">Reshoot</button>
+      <button class="link" data-${framing === 'retouch' ? 'shootable' : 'framing'}="${framing}">${
+        framing === 'retouch' ? 'Shoot this' : 'Reshoot'}</button>
       &nbsp;<a href="${url}" download>Download</a></span></figcaption></figure>`
   ).join('');
-  document.querySelectorAll('#results button.link').forEach((button) => {
+  document.querySelectorAll('#results button.link[data-framing]').forEach((button) => {
     button.addEventListener('click', () => reshoot(jobId, button.dataset.framing));
   });
+  document.querySelectorAll('#results button.link[data-shootable]').forEach((button) => {
+    button.addEventListener('click', () => shootRetouched(button));
+  });
   $('go').disabled = false;
+}
+
+// Hands the retouched image straight into the shoot as its product reference. The
+// oldest known limitation in this app is that a small, dirty source photo flattens a
+// pavé into one stone; cleaning it first is the cheapest fix there is.
+async function shootRetouched(button) {
+  button.disabled = true;
+  button.textContent = 'reading…';
+  try {
+    const url = button.closest('figure').querySelector('img').src;
+    const blob = await fetch(url).then((r) => r.blob());
+    const file = new File([blob], 'retouched.png', { type: blob.type || 'image/png' });
+    $('tools').querySelector('[data-tool="shoot"]').click();
+    await acceptFile(file);
+    $('s1').scrollIntoView({ behavior: 'smooth' });
+  } catch (error) {
+    fail(String(error));
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Shoot this';
+  }
 }
 
 // The model sometimes drifts the face or invents a necklace on one frame. Rerunning a

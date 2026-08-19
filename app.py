@@ -20,11 +20,13 @@ from fastapi.staticfiles import StaticFiles
 import locations
 import product
 import providers
+import retouch
 import shoot
 import storage
 
 UPLOADS = pathlib.Path('out/uploads')
 SHOOTS = pathlib.Path('out/shoots')
+RETOUCHES = pathlib.Path('out/retouches')
 STATIC = pathlib.Path('static')
 
 app = FastAPI(title='Vox Photo-Shoot')
@@ -222,6 +224,57 @@ def create_shoot(
                         description.strip(), chosen, None, options)
     return {'job_id': job_id, 'status': 'running',
             'expected': len(locations.FRAMINGS)}
+
+
+def run_retouch(job_id: str, path: pathlib.Path, **options) -> None:
+    try:
+        saved = retouch.run(path, out_dir=RETOUCHES / job_id, **options)
+        set_job(job_id, status='completed', warnings=[], images=[
+            # 'retouch' rather than a framing name: it is one image, and the reshoot
+            # endpoint only accepts real framings, so this cannot be re-rolled there.
+            {'framing': 'retouch',
+             'url': storage.put(image, f'retouches/{job_id}/{image.name}')}
+            for image in saved
+        ])
+    except Exception as error:
+        set_job(job_id, status='failed', error=str(error))
+
+
+@app.get('/api/retouch-options')
+def retouch_options():
+    return {'modes': list(retouch.MODES), 'default_mode': retouch.DEFAULT_MODE,
+            'backgrounds': list(retouch.BACKGROUNDS),
+            'default_background': retouch.DEFAULT_BACKGROUND}
+
+
+@app.post('/api/retouches')
+async def create_retouch(
+    background_tasks: BackgroundTasks,
+    upload: UploadFile,
+    mode: str = Form(retouch.DEFAULT_MODE),
+    # Off by default, unlike every competitor: inclusions are what make a stone read as
+    # a real stone, and this app exists to return the client's actual piece.
+    retouch_stones: bool = Form(False),
+    background: str = Form(retouch.DEFAULT_BACKGROUND),
+    instructions: str = Form(''),
+):
+    if mode not in retouch.MODES:
+        raise HTTPException(400, f'unknown mode {mode}')
+    if background not in retouch.BACKGROUNDS:
+        raise HTTPException(400, f'unknown background {background}')
+
+    job_id = uuid.uuid4().hex[:12]
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    suffix = pathlib.Path(upload.filename or 'upload.jpg').suffix or '.jpg'
+    path = UPLOADS / f'{job_id}{suffix}'
+    with path.open('wb') as handle:
+        shutil.copyfileobj(upload.file, handle)
+
+    set_job(job_id, status='running', images=[], error=None, kind='retouch', mode=mode)
+    background_tasks.add_task(run_retouch, job_id, path, mode=mode,
+                              retouch_stones=retouch_stones, background=background,
+                              instructions=instructions.strip())
+    return {'job_id': job_id, 'status': 'running', 'expected': 1}
 
 
 @app.post('/api/shoots/{job_id}/reshoot')

@@ -22,6 +22,7 @@ Open http://localhost:8000.
 | `static/index.html` | the whole front end, no build step |
 | `shoot.py` | **the only thing the app calls** — one shoot in, images out |
 | `product.py` | reads the uploaded piece: what it is, and where it is worn |
+| `retouch.py` | the other tool: clean up one product photo, no model, no location |
 | `locations.py` | 10 location presets + prompt assembly |
 | `hf.py` | Higgsfield client (upload, estimate, download) |
 | `cast.py` | one-time: generate the model cast |
@@ -88,6 +89,32 @@ The API is two calls, because which controls to show depends on what the piece i
 `POST /api/pieces` (photo in, category + type + description + control spec out), then
 `POST /api/shoots` with the client's answers. `GET /api/categories` lets the UI
 re-render its controls when the client corrects the category.
+
+## Retouch
+
+The second tool. One product photo in, the same piece back without the desk, the dust,
+the fingerprints and the colour cast. No model, no location, one image out.
+
+| control | why |
+|---|---|
+| mode — faithful / studio / vivid | how much licence the retoucher gets: clean only, relight on a sweep, or campaign punch |
+| gemstones — keep true / polish | **defaults to keep true**, unlike every competitor. Inclusions are what make a stone read as a real stone; polishing them out is what makes catalogue images look synthetic |
+| background — keep / white / grey / black | `keep` adds nothing to the prompt at all, so it cannot quietly restage the shot |
+| instructions | placed last so it beats the mode — "leave the patina alone" has to win against "relight with crisp highlights" |
+
+Output keeps the shape the client shot: `providers.Provider.nearest_aspect` maps the
+source dimensions onto the closest ratio the provider accepts, rather than forcing 3:4
+and cropping the piece.
+
+**A retouched photo is a better shoot reference.** The oldest known limitation here is
+that pavé collapses into a single stone when the source file is small and dirty, because
+the generator cannot resolve the individual stones. The results pane puts a *Shoot this*
+button on a retouch for exactly that reason — it feeds the cleaned image back in as the
+product reference.
+
+Same fidelity risk as the shoot, handled the same way: every mode leads with
+`retouch.FIDELITY`, which says in as many ways as possible that this is a retouch of one
+photograph and not a new design.
 
 ## Adding a category
 

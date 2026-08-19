@@ -19,6 +19,11 @@ import hf
 QUALITY = ('standard', 'high', 'max')
 
 
+def _ratio_value(ratio: str) -> float:
+    width, height = ratio.split(':')
+    return int(width) / int(height)
+
+
 @dataclass(frozen=True)
 class Provider:
     name: str
@@ -37,6 +42,21 @@ class Provider:
             raise ValueError(f'unknown quality {quality!r}; use one of {QUALITY}')
         return self._generate(prompt, list(image_urls or []), aspect_ratio,
                               quality, seed, num_images)
+
+    def nearest_aspect(self, width: int, height: int) -> str:
+        """Closest supported ratio to an image we did not choose the shape of.
+
+        Retouching returns the client's own photograph, so the output has to keep the
+        shape they shot — forcing 3:4 on a square product shot crops the piece or pads
+        it. Providers only accept a fixed vocabulary, so this picks the closest.
+        """
+        if width <= 0 or height <= 0:
+            raise ValueError(f'bad image size {width}x{height}')
+        target = width / height
+        return min(
+            self.aspect_ratios,
+            key=lambda ratio: abs(target - _ratio_value(ratio)),
+        )
 
 
 # --- Higgsfield -------------------------------------------------------------------
@@ -167,6 +187,22 @@ def demo() -> None:
         assert 'ultra' in str(error)
     else:
         raise AssertionError('unknown quality should be rejected')
+
+    # Retouching hands back the client's own photograph, so its shape has to survive.
+    fal = get('fal')
+    assert fal.nearest_aspect(1000, 1000) == '1:1'
+    assert fal.nearest_aspect(1200, 1600) == '3:4'
+    assert fal.nearest_aspect(1600, 1200) == '4:3'
+    assert fal.nearest_aspect(1080, 1920) == '9:16'
+    # A shape nobody supports still has to resolve to something, not blow up.
+    assert fal.nearest_aspect(1124, 1020) in fal.aspect_ratios
+    for bad in ((0, 100), (100, -1)):
+        try:
+            fal.nearest_aspect(*bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f'{bad} should have been rejected')
 
     print('providers ok')
 
