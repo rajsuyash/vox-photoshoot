@@ -1,34 +1,114 @@
 {
  "aditi": {
   "description": "a 24 year old Indian woman. She is a beautiful young adult Indian fashion model with fair to light wheatish skin with warm golden undertones, luminous and radiant, high cheekbones, a defined jawline, large expressive dark eyes, full soft-glam commercial makeup with groomed defined brows, warm neutral eyeshadow, subtle kohl, highlighted cheekbones and glossy nude-pink lips, and a slim elegant figure, her long dark brown hair worn in soft loose glossy waves falling over one shoulder. {EXPRESSION}",
-  "file": "assets/cast/aditi-0.png"
+  "file": "assets/cast/aditi-0.jpg"
  },
  "meera": {
   "description": "a 25 year old Indian woman. She is a beautiful young adult Indian fashion model with fair to light wheatish skin with warm golden undertones, luminous and radiant, high cheekbones, a defined jawline, large expressive dark eyes, full soft-glam commercial makeup with groomed defined brows, warm neutral eyeshadow, subtle kohl, highlighted cheekbones and glossy nude-pink lips, and a slim elegant figure, her hair in a soft elegant high bun with a few loose face-framing strands. {EXPRESSION}",
-  "file": "assets/cast/meera-0.png"
+  "file": "assets/cast/meera-0.jpg"
  },
  "kavya": {
   "description": "a 23 year old Indian woman. She is a beautiful young adult Indian fashion model with fair to light wheatish skin with warm golden undertones, luminous and radiant, high cheekbones, a defined jawline, large expressive dark eyes, full soft-glam commercial makeup with groomed defined brows, warm neutral eyeshadow, subtle kohl, highlighted cheekbones and glossy nude-pink lips, and a slim elegant figure, her long hair in a sleek high ponytail with volume at the crown. {EXPRESSION}",
-  "file": "assets/cast/kavya-0.png"
+  "file": "assets/cast/kavya-0.jpg"
  },
  "priya": {
   "description": "a 26 year old Indian woman. She is a beautiful young adult Indian fashion model with fair to light wheatish skin with warm golden undertones, luminous and radiant, high cheekbones, a defined jawline, large expressive dark eyes, full soft-glam commercial makeup with groomed defined brows, warm neutral eyeshadow, subtle kohl, highlighted cheekbones and glossy nude-pink lips, and a slim elegant figure, her hair in a glossy blow-dried shoulder length bob with a deep side parting. {EXPRESSION}",
-  "file": "assets/cast/priya-0.png"
+  "file": "assets/cast/priya-0.jpg"
  },
  "simran": {
   "description": "a 25 year old Indian woman. She is a beautiful young adult Indian fashion model with fair to light wheatish skin with warm golden undertones, luminous and radiant, high cheekbones, a defined jawline, large expressive dark eyes, full soft-glam commercial makeup with groomed defined brows, warm neutral eyeshadow, subtle kohl, highlighted cheekbones and glossy nude-pink lips, and a slim elegant figure, her very long thick hair worn loose and straight with a centre parting and soft shine. {EXPRESSION}",
-  "file": "assets/cast/simran-0.png"
+  "file": "assets/cast/simran-0.jpg"
  },
  "tara": {
   "description": "a 24 year old Indian woman. She is a beautiful young adult Indian fashion model with fair to light wheatish skin with warm golden undertones, luminous and radiant, high cheekbones, a defined jawline, large expressive dark eyes, full soft-glam commercial makeup with groomed defined brows, warm neutral eyeshadow, subtle kohl, highlighted cheekbones and glossy nude-pink lips, and a slim elegant figure, her hair in a romantic low chignon with soft curled tendrils at the temples. {EXPRESSION}",
-  "file": "assets/cast/tara-0.png"
+  "file": "assets/cast/tara-0.jpg"
  },
  "ananya": {
   "description": "a 27 year old Indian woman. She is a beautiful young adult Indian fashion model with fair to light wheatish skin with warm golden undertones, luminous and radiant, high cheekbones, a defined jawline, large expressive dark eyes, full soft-glam commercial makeup with groomed defined brows, warm neutral eyeshadow, subtle kohl, highlighted cheekbones and glossy nude-pink lips, and a slim elegant figure, her long hair in loose bouncy curls with plenty of volume. {EXPRESSION}",
-  "file": "assets/cast/ananya-0.png"
+  "file": "assets/cast/ananya-0.jpg"
  },
  "nisha": {
   "description": "a 23 year old Indian woman. She is a beautiful young adult Indian fashion model with fair to light wheatish skin with warm golden undertones, luminous and radiant, high cheekbones, a defined jawline, large expressive dark eyes, full soft-glam commercial makeup with groomed defined brows, warm neutral eyeshadow, subtle kohl, highlighted cheekbones and glossy nude-pink lips, and a slim elegant figure, her hair in a half-up style with soft waves and a light fringe. {EXPRESSION}",
-  "file": "assets/cast/nisha-0.png"
+  "file": "assets/cast/nisha-0.jpg"
+ },
+ "rukmini": {
+  "description": "a 24 year old Tamil woman, deep rich brown skin with warm red undertones, very large dark almond eyes, a broad softly rounded nose, full lips and a strong square jaw, thick black tightly curled hair worn in a high natural halo, glowing skin with bare lips and defined brows. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/rukmini-0.jpg"
+ },
+ "mercy": {
+  "description": "a 23 year old woman from Nagaland in northeast India, light golden skin with cool undertones, softly hooded monolid eyes set wide apart, high flat cheekbones, a small straight nose and a delicate jaw, glossy black hair in a blunt chin length bob, clean skin with a sheer wash of colour. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/mercy-0.jpg"
+ },
+ "kiran": {
+  "description": "a 33 year old Indian woman, deep brown skin with cool undertones, an angular striking face with very sharp cheekbones and a square jaw, close cropped natural black hair worn very short, long neck, strong straight brows and a wide full mouth, entirely bare face. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/kiran-0.jpg"
+ },
+ "anouk": {
+  "description": "a 28 year old woman of mixed Indian and French heritage, light golden skin, a fine boned face with a sharp narrow nose and hollow cheeks, pale grey-green eyes, thin arched brows, light brown hair with sun lightened ends worn in a low ponytail. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/anouk-0.jpg"
+ },
+ "ira": {
+  "description": "a 22 year old Marathi woman, medium wheatish skin, a heart shaped face with a wide forehead narrowing to a small chin, bright round dark eyes, a short upturned nose and a small gap between her front teeth, dark hair in a messy shoulder length shag with a full fringe. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/ira-0.jpg"
+ },
+ "zoya": {
+  "description": "a 29 year old Hyderabadi woman, olive skin with neutral undertones, heavy lidded dark eyes under strong straight brows, a long aquiline nose, sculpted cheekbones and a sharp chin, jet black hair pulled back tight and flat to the head, matte skin with a bare face. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/zoya-0.jpg"
+ },
+ "gurleen": {
+  "description": "a 25 year old Punjabi woman, fair skin with golden undertones, a strong square jaw and broad forehead, thick full brows over deep set brown eyes, a straight nose with a slightly rounded tip, dark brown hair worn in a long straight sleek fall, healthy skin with a clean brushed brow. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/gurleen-0.jpg"
+ },
+ "devika": {
+  "description": "a 31 year old Malayali woman, dusky brown skin with olive undertones, a long oval face and unusually long neck, calm heavy lidded eyes, a straight narrow nose and wide full mouth, black curly hair scraped back into a low tight knot, bare glowing skin. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/devika-0.jpg"
+ },
+ "sarayu": {
+  "description": "a 26 year old Telugu woman, rich medium brown skin with golden undertones, a broad open face with wide cheekbones, large expressive dark eyes with a natural upward tilt, a softly flared nose, black hair in a loose low bun with wisps at the temple. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/sarayu-0.jpg"
+ },
+ "laila": {
+  "description": "a 26 year old Kashmiri woman, very fair skin with cool pink undertones and a light scatter of freckles across her nose, pale green-hazel eyes, a fine straight nose, sharp high cheekbones and a narrow jaw, dark chestnut brown hair falling straight past her shoulders with a centre parting, bare clean skin with minimal makeup. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/laila-0.jpg"
+ },
+ "tenzin": {
+  "description": "a 24 year old Ladakhi woman, fair skin with cool rose undertones and wind flushed cheeks, warm dark brown eyes with a soft epicanthic fold, broad flat cheekbones, a small nose and a wide gentle mouth, straight black hair worn in two low plaits. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/tenzin-0.jpg"
+ },
+ "ayesha": {
+  "description": "a 30 year old Lucknawi woman, pale wheatish skin with cool undertones, an oval face with a high smooth forehead, long dark lashes over grey-brown eyes, a fine narrow nose and a small full mouth, dark hair in a sleek middle parted low chignon. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/ayesha-0.jpg"
+ },
+ "shreya": {
+  "description": "a 21 year old Indian woman, medium wheatish skin, a youthful round face with full cheeks, wide innocent dark eyes, a small button nose and a rosebud mouth, long glossy dark brown hair with a blunt cut and a centre parting. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/shreya-0.jpg"
+ },
+ "nandini": {
+  "description": "a 34 year old Indian woman, warm honey toned skin with visible fine lines at the eyes, a mature composed face with defined cheekbones and a firm jaw, calm dark eyes, a straight nose, silver strands threaded through dark hair worn in a low sleek twist, elegant and self possessed. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/nandini-0.jpg"
+ },
+ "meher": {
+  "description": "a 25 year old Parsi woman from Mumbai, light olive skin, a delicate narrow face with a prominent straight nose and a pointed chin, large light brown eyes set close, arched brows, dark wavy hair worn in a loose side parted style. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/meher-0.jpg"
+ },
+ "paromita": {
+  "description": "a 27 year old Bengali woman, warm wheatish skin, a soft round face with a small pointed chin, wide set dark doe eyes with a gentle downturn, a small rounded nose, very long wavy black hair worn loose, soft dewy skin and bare lips. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/paromita-0.jpg"
+ },
+ "amara": {
+  "description": "a 27 year old woman of mixed Indian and East African heritage, deep warm brown skin, a broad symmetrical face with very high cheekbones, long almond eyes, a full wide mouth and a softly broad nose, black hair in long fine braids gathered back. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/amara-0.jpg"
+ },
+ "yasmin": {
+  "description": "a 29 year old Indian woman, medium olive skin, a strong androgynous face with a wide square jaw, straight heavy brows, narrow watchful dark eyes and a long straight nose, black hair slicked back wet-look off the face, editorial and severe. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/yasmin-0.jpg"
+ },
+ "leela": {
+  "description": "a 23 year old Indian woman, fair wheatish skin, a soft oval face with a gentle jaw, unusually large round dark eyes, a small straight nose, dark brown hair in loose natural ringlet curls falling around her face. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/leela-0.jpg"
+ },
+ "naina": {
+  "description": "a 28 year old Rajasthani woman, warm sand toned skin, a long narrow face with prominent high cheekbones and a strong straight nose, deep set dark eyes, thin elegant lips, very long black hair in a single thick plait over one shoulder, bare skin and a strong natural brow. Her expression is calm and composed with a very faint soft closed-mouth smile, lips together, looking directly into the lens.",
+  "file": "assets/cast/naina-0.jpg"
  }
 }

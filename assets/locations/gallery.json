@@ -2,51 +2,251 @@
  "amber-fort": {
   "label": "Amber Fort, Jaipur",
   "region": "India",
-  "file": "assets/locations/amber-fort-0.png"
+  "file": "assets/locations/amber-fort-0.jpg"
  },
  "udaipur-palace": {
   "label": "City Palace, Udaipur",
   "region": "India",
-  "file": "assets/locations/udaipur-palace-0.png"
+  "file": "assets/locations/udaipur-palace-0.jpg"
  },
  "kerala-backwaters": {
   "label": "Kerala Backwaters",
   "region": "India",
-  "file": "assets/locations/kerala-backwaters-0.png"
+  "file": "assets/locations/kerala-backwaters-0.jpg"
  },
  "taj-mahal": {
   "label": "Taj Mahal, Agra",
   "region": "India",
-  "file": "assets/locations/taj-mahal-0.png"
+  "file": "assets/locations/taj-mahal-0.jpg"
  },
  "rann-of-kutch": {
   "label": "Rann of Kutch",
   "region": "India",
-  "file": "assets/locations/rann-of-kutch-0.png"
+  "file": "assets/locations/rann-of-kutch-0.jpg"
  },
  "santorini": {
   "label": "Santorini, Greece",
   "region": "International",
-  "file": "assets/locations/santorini-0.png"
+  "file": "assets/locations/santorini-0.jpg"
  },
  "dubai-desert": {
   "label": "Dubai Desert",
   "region": "International",
-  "file": "assets/locations/dubai-desert-0.png"
+  "file": "assets/locations/dubai-desert-0.jpg"
  },
  "lake-como": {
   "label": "Lake Como, Italy",
   "region": "International",
-  "file": "assets/locations/lake-como-0.png"
+  "file": "assets/locations/lake-como-0.jpg"
  },
  "kyoto": {
   "label": "Kyoto, Japan",
   "region": "International",
-  "file": "assets/locations/kyoto-0.png"
+  "file": "assets/locations/kyoto-0.jpg"
  },
  "paris": {
   "label": "Paris, France",
   "region": "International",
-  "file": "assets/locations/paris-0.png"
+  "file": "assets/locations/paris-0.jpg"
+ },
+ "marble-studio": {
+  "label": "White Marble Studio",
+  "region": "Studio",
+  "file": "assets/locations/marble-studio-0.jpg"
+ },
+ "charcoal-studio": {
+  "label": "Charcoal Studio",
+  "region": "Studio",
+  "file": "assets/locations/charcoal-studio-0.jpg"
+ },
+ "mumbai-artdeco": {
+  "label": "Art Deco Apartment, Mumbai",
+  "region": "India",
+  "file": "assets/locations/mumbai-artdeco-0.jpg"
+ },
+ "haveli-interior": {
+  "label": "Haveli Interior, Jaipur",
+  "region": "India",
+  "file": "assets/locations/haveli-interior-0.jpg"
+ },
+ "atelier": {
+  "label": "Jeweller's Atelier",
+  "region": "International",
+  "file": "assets/locations/atelier-0.jpg"
+ },
+ "mirror-palace": {
+  "label": "Sheesh Mahal",
+  "region": "India",
+  "file": "assets/locations/mirror-palace-0.jpg"
+ },
+ "library": {
+  "label": "Old Library",
+  "region": "International",
+  "file": "assets/locations/library-0.jpg"
+ },
+ "hotel-suite": {
+  "label": "Grand Hotel Suite",
+  "region": "International",
+  "file": "assets/locations/hotel-suite-0.jpg"
+ },
+ "varanasi-ghats": {
+  "label": "Varanasi Ghats",
+  "region": "India",
+  "file": "assets/locations/varanasi-ghats-0.jpg"
+ },
+ "hampi": {
+  "label": "Hampi Ruins",
+  "region": "India",
+  "file": "assets/locations/hampi-0.jpg"
+ },
+ "munnar-tea": {
+  "label": "Munnar Tea Estate",
+  "region": "India",
+  "file": "assets/locations/munnar-tea-0.jpg"
+ },
+ "goa-beach": {
+  "label": "Goa Beach at Dusk",
+  "region": "India",
+  "file": "assets/locations/goa-beach-0.jpg"
+ },
+ "jodhpur-blue": {
+  "label": "Blue City, Jodhpur",
+  "region": "India",
+  "file": "assets/locations/jodhpur-blue-0.jpg"
+ },
+ "himalayan-monastery": {
+  "label": "Himalayan Monastery",
+  "region": "India",
+  "file": "assets/locations/himalayan-monastery-0.jpg"
+ },
+ "mysore-palace": {
+  "label": "Mysore Palace Grounds",
+  "region": "India",
+  "file": "assets/locations/mysore-palace-0.jpg"
+ },
+ "pondicherry": {
+  "label": "French Quarter, Pondicherry",
+  "region": "India",
+  "file": "assets/locations/pondicherry-0.jpg"
+ },
+ "greenhouse": {
+  "label": "Victorian Greenhouse",
+  "region": "International",
+  "file": "assets/locations/greenhouse-0.jpg"
+ },
+ "kashmir-shikara": {
+  "label": "Dal Lake, Kashmir",
+  "region": "India",
+  "file": "assets/locations/kashmir-shikara-0.jpg"
+ },
+ "meghalaya-forest": {
+  "label": "Living Root Forest, Meghalaya",
+  "region": "India",
+  "file": "assets/locations/meghalaya-forest-0.jpg"
+ },
+ "amalfi": {
+  "label": "Amalfi Coast",
+  "region": "International",
+  "file": "assets/locations/amalfi-0.jpg"
+ },
+ "marrakech-riad": {
+  "label": "Marrakech Riad",
+  "region": "International",
+  "file": "assets/locations/marrakech-riad-0.jpg"
+ },
+ "kyoto-temple": {
+  "label": "Kyoto Temple Garden",
+  "region": "International",
+  "file": "assets/locations/kyoto-temple-0.jpg"
+ },
+ "chettinad-mansion": {
+  "label": "Chettinad Mansion",
+  "region": "India",
+  "file": "assets/locations/chettinad-mansion-0.jpg"
+ },
+ "london-townhouse": {
+  "label": "London Townhouse Steps",
+  "region": "International",
+  "file": "assets/locations/london-townhouse-0.jpg"
+ },
+ "iceland-black-sand": {
+  "label": "Black Sand Coast, Iceland",
+  "region": "International",
+  "file": "assets/locations/iceland-black-sand-0.jpg"
+ },
+ "newyork-loft": {
+  "label": "New York Loft",
+  "region": "International",
+  "file": "assets/locations/newyork-loft-0.jpg"
+ },
+ "swiss-alps": {
+  "label": "Swiss Alps in Winter",
+  "region": "International",
+  "file": "assets/locations/swiss-alps-0.jpg"
+ },
+ "seville-courtyard": {
+  "label": "Seville Courtyard",
+  "region": "International",
+  "file": "assets/locations/seville-courtyard-0.jpg"
+ },
+ "provence-lavender": {
+  "label": "Provence Lavender Field",
+  "region": "International",
+  "file": "assets/locations/provence-lavender-0.jpg"
+ },
+ "dubai-skyline": {
+  "label": "Dubai Skyline at Night",
+  "region": "International",
+  "file": "assets/locations/dubai-skyline-0.jpg"
+ },
+ "mandap": {
+  "label": "Wedding Mandap",
+  "region": "India",
+  "file": "assets/locations/mandap-0.jpg"
+ },
+ "temple-corridor": {
+  "label": "Temple Corridor",
+  "region": "India",
+  "file": "assets/locations/temple-corridor-0.jpg"
+ },
+ "boutique": {
+  "label": "Luxury Boutique",
+  "region": "India",
+  "file": "assets/locations/boutique-0.jpg"
+ },
+ "courtyard-monsoon": {
+  "label": "Monsoon Courtyard",
+  "region": "India",
+  "file": "assets/locations/courtyard-monsoon-0.jpg"
+ },
+ "terrace-sunset": {
+  "label": "City Terrace at Sunset",
+  "region": "India",
+  "file": "assets/locations/terrace-sunset-0.jpg"
+ },
+ "paris-apartment": {
+  "label": "Paris Apartment",
+  "region": "International",
+  "file": "assets/locations/paris-apartment-0.jpg"
+ },
+ "gallery-white": {
+  "label": "Art Gallery",
+  "region": "International",
+  "file": "assets/locations/gallery-white-0.jpg"
+ },
+ "opera-box": {
+  "label": "Opera House Box",
+  "region": "International",
+  "file": "assets/locations/opera-box-0.jpg"
+ },
+ "kyoto-machiya": {
+  "label": "Kyoto Machiya Interior",
+  "region": "International",
+  "file": "assets/locations/kyoto-machiya-0.jpg"
+ },
+ "bridal-room": {
+  "label": "Bridal Room",
+  "region": "India",
+  "file": "assets/locations/bridal-room-0.jpg"
  }
 }

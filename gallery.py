@@ -12,23 +12,24 @@ import json
 import pathlib
 import sys
 
-import higgsfield_client
+import concurrent.futures
 
 import hf
 import locations
+import providers
 import trim
 
-MODEL_PATH = 'higgsfield-ai/popcorn/auto'
 GALLERY_DIR = pathlib.Path('assets/locations')
 MANIFEST = GALLERY_DIR / 'gallery.json'
 
 # Landscape, and higher resolution than a thumbnail needs: these plates are also the
 # compositing backplate, so they want the detail.
-ARGUMENTS = {
-    'num_images': 1,
-    'resolution': '1600p',
-    'aspect_ratio': '4:3',
-}
+ASPECT = '4:3'
+
+# Plates are independent of one another and each takes about a minute at the provider,
+# so fifty of them serially is the better part of an hour of waiting. Six at a time is
+# the same ceiling the app puts on its own threadpool.
+WORKERS = 6
 
 
 def main() -> None:
@@ -41,34 +42,38 @@ def main() -> None:
         print('gallery already complete')
         return
 
-    sample = {'prompt': locations.compose_plate(pending[0]), **ARGUMENTS}
-    estimate = hf.estimate(f'/{MODEL_PATH}', sample)
-    print(f'{len(pending)} plates x {estimate["credits"]} credits = '
-          f'{len(pending) * float(estimate["credits"]):.1f} total\n')
+    print(f'{len(pending)} plates, about ${len(pending) * 0.15:.2f} at fal\n')
+    if '--yes' not in sys.argv and input('run? [y/N] ').strip().lower() != 'y':
+        sys.exit('aborted')
 
-    for key in pending:
+    def make(key: str):
         location = locations.ALL[key]
-        print(f'{key} ({location.label}) ...')
-        result = higgsfield_client.subscribe(
-            MODEL_PATH,
-            arguments={'prompt': locations.compose_plate(key), **ARGUMENTS},
-        )
-        urls = hf.output_urls(result)
+        urls = providers.get().generate(
+            locations.compose_plate(key), aspect_ratio=ASPECT,
+            quality='high', num_images=1)
         if not urls:
-            print(f'  FAILED status={result.get("status")}')
-            continue
+            raise RuntimeError('no images returned')
         [saved] = hf.download(urls, GALLERY_DIR, prefix=key)
         # The model draws a white mount now and then and ignores every instruction not
         # to; cropping it is deterministic where the prompt is not.
-        if trim.trim(saved):
-            print('  trimmed white border')
-        manifest[key] = {
-            'label': location.label,
-            'region': location.region,
-            'file': str(saved),
-        }
-        MANIFEST.write_text(json.dumps(manifest, indent=1))
-        print(f'  {saved}')
+        trimmed = trim.trim(saved)
+        return key, {'label': location.label, 'region': location.region,
+                     'file': str(saved)}, trimmed
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = {pool.submit(make, key): key for key in pending}
+        for future in concurrent.futures.as_completed(futures):
+            key = futures[future]
+            try:
+                key, entry, trimmed = future.result()
+            except Exception as error:      # noqa: BLE001 - one plate, not the run
+                print(f'{key}: FAILED {error}')
+                continue
+            manifest[key] = entry
+            # Written after every plate, not at the end: fifty generations is long
+            # enough that a crash at plate forty should not throw away thirty-nine.
+            MANIFEST.write_text(json.dumps(manifest, indent=1))
+            print(f'{key}: {entry["file"]}{" (trimmed)" if trimmed else ""}')
 
     print(f'\n{len(manifest)}/{len(locations.ALL)} locations have plates')
 

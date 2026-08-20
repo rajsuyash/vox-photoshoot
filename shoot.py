@@ -70,7 +70,10 @@ def build(product_urls: list[str], model_key: str, location_key: str,
     prompt = locations.compose(
         product=description,
         category=category,
-        model_description=f'An Indian woman, {cast[model_key]["description"]}',
+        # The description carries its own opening ("a 26 year old Kashmiri woman, ...").
+        # A hardcoded 'An Indian woman,' in front of it said it twice, and made a cast
+        # entry of any other heritage impossible to describe honestly.
+        model_description=cast[model_key]['description'],
         location_key=location_key,
         framing=framing,
         options=options,
