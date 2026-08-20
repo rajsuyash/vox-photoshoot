@@ -17,8 +17,14 @@ export INSTANCE_ROLE="arn:aws:iam::${ACCOUNT}:role/VoxPhotoshootInstanceRole"
 export ACCESS_ROLE="arn:aws:iam::${ACCOUNT}:role/AppRunnerECRAccessRole"
 export URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
 
+# Every key the container gets from Secrets Manager. ONE list, read by both the sync
+# below and the RuntimeEnvironmentSecrets map — they were two hardcoded tuples, and a
+# key added to only one of them syncs but is never wired in, which is how the Razorpay
+# webhook secret reached Secrets Manager as a value nothing ever read.
+export SECRET_KEYS="FAL_KEY HF_KEY ANTHROPIC_API_KEY DATABASE_URL RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET"
+
 cd "$(dirname "$0")"
-[ -f .env ] || { echo "no .env — need FAL_KEY, HF_KEY, ANTHROPIC_API_KEY, DATABASE_URL" >&2; exit 1; }
+[ -f .env ] || { echo "no .env — need at least FAL_KEY, ANTHROPIC_API_KEY, DATABASE_URL" >&2; exit 1; }
 set -a; . ./.env; set +a
 : "${FAL_KEY:?FAL_KEY missing}"
 # Without it every upload is shot as the client's earrings — see product.identify.
@@ -31,8 +37,8 @@ export SECRET_ARN="arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:vox-photos
 echo "==> syncing secrets"
 python3 - <<'PY' > /tmp/vox-secret.json
 import json, os
-print(json.dumps({k: os.environ.get(k, '') for k in
-                  ('FAL_KEY', 'HF_KEY', 'ANTHROPIC_API_KEY', 'DATABASE_URL')}))
+print(json.dumps({k: os.environ.get(k, '')
+                  for k in os.environ['SECRET_KEYS'].split()}))
 PY
 aws secretsmanager put-secret-value --secret-id vox-photoshoot/env --region "$REGION" \
   --secret-string file:///tmp/vox-secret.json --query VersionId --output text
@@ -74,7 +80,7 @@ print(json.dumps({
         # file. Rotating a key is `put-secret-value` plus a restart — no redeploy.
         "RuntimeEnvironmentSecrets": {
           name: f'{os.environ["SECRET_ARN"]}:{name}::'
-          for name in ("FAL_KEY", "HF_KEY", "ANTHROPIC_API_KEY", "DATABASE_URL")
+          for name in os.environ["SECRET_KEYS"].split()
         },
       },
     },
