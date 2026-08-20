@@ -793,13 +793,23 @@ def download_image(job_id: str, framing: str, branded: str = '',
         raise HTTPException(400, 'no branding set up for this workspace yet')
 
     scratch = SHOOTS / 'brand-cache' / f'{uuid.uuid4().hex[:12]}.png'
-    original = storage.fetch(image['s3_key'], scratch)
-    logo_bytes = None
-    if brand.get('brand_logo_key'):
-        logo_file = storage.fetch(
-            brand['brand_logo_key'],
-            SHOOTS / 'brand-cache' / pathlib.Path(brand['brand_logo_key']).name)
-        logo_bytes = logo_file.read_bytes()
+    try:
+        original = storage.fetch(image['s3_key'], scratch)
+        logo_bytes = None
+        if brand.get('brand_logo_key'):
+            logo_file = storage.fetch(
+                brand['brand_logo_key'],
+                SHOOTS / 'brand-cache' / pathlib.Path(brand['brand_logo_key']).name)
+            logo_bytes = logo_file.read_bytes()
+    except Exception as error:              # noqa: BLE001 - S3 is not the caller's fault
+        # A key that no longer resolves is a 502-shaped problem, not a stack trace at
+        # someone trying to download their own photograph. The clean download still
+        # works, so say which half is broken.
+        scratch.unlink(missing_ok=True)
+        log.error('branding fetch failed for job %s: %r', job_id, error)
+        raise HTTPException(
+            502, 'that image could not be branded just now — the plain download '
+                 'still works, and nothing has been charged')
 
     stamped = branding.apply(
         original.read_bytes(), logo_bytes, brand.get('brand_text') or '',

@@ -140,6 +140,18 @@
   button.go:disabled { background: var(--raised); color: var(--faint); cursor: not-allowed; }
   @media (max-width: 720px) { .bar { padding: 14px 20px; } }
 
+  .brand-bar { display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin: 0 0 18px; padding: 12px 16px;
+    border: 1px solid var(--copper-line); background: var(--copper-soft);
+    border-radius: var(--radius); font-size: 14px; }
+  .brand-bar label { display: flex; align-items: center; gap: 10px; cursor: pointer;
+    color: var(--ink); }
+  .brand-bar input { width: 16px; height: 16px; accent-color: var(--copper);
+    cursor: pointer; }
+  .brand-bar a { color: var(--copper); text-decoration: none; font-weight: 600;
+    font-size: 13px; }
+  .brand-bar a:hover { color: var(--copper-light); }
+
   .results { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
   .results figure { margin: 0; }
   .results img { width: 100%; border-radius: var(--radius); display: block;
@@ -368,6 +380,16 @@
          wrong the operator can see why before the images come back. -->
     <div id="detected" class="detected hidden"></div>
     <div id="error" class="error hidden"></div>
+    <!-- One visible control for every download, rather than a second link tucked beside
+         each image. Hidden entirely until branding is set up — an unusable toggle is
+         worse than no toggle. -->
+    <div id="brandBar" class="brand-bar hidden">
+      <label>
+        <input type="checkbox" id="brandOn">
+        <span>Add my logo and contact line to downloads</span>
+      </label>
+      <a href="/settings.html" id="brandEdit">Edit branding</a>
+    </div>
     <div class="results" id="results"></div>
   </section>
 </main>
@@ -573,6 +595,20 @@ async function load() {
   // Decides whether the results gallery offers a branded download at all. Failing soft:
   // a workspace with no branding is the normal case, not an error worth showing.
   state.brand = await api('/api/brand').catch(() => null);
+  $('brandOn').addEventListener('change', () => {
+    if (state.lastJob) poll(state.lastJob);
+  });
+
+  // History links here as /?job=<id> and nothing was reading it, so every "Open" in the
+  // history table landed on an empty generator. Re-opening a past shoot is the whole
+  // point of keeping images forever — and it costs nothing, since this only re-presigns
+  // what is already stored.
+  const deepLink = new URLSearchParams(location.search).get('job');
+  if (deepLink) {
+    $('out').classList.remove('hidden');
+    $('outNote').textContent = 'loading…';
+    poll(deepLink).catch(() => fail('that shoot could not be opened'));
+  }
   const [models, places, categories, retouchOptions] = await Promise.all([
     fetch('/api/models').then((r) => r.json()),
     fetch('/api/locations').then((r) => r.json()),
@@ -782,19 +818,26 @@ async function poll(jobId) {
   // A retouch is one image and cannot be reshot — the reshoot endpoint only takes real
   // framings. It gets the more useful button instead: a cleaned photo is a better shoot
   // reference than the desk shot it came from.
-  // Branded downloads go through /api/images, which composites the workspace's logo on
-  // the way out. The stored file is never touched, so both versions stay available
-  // forever — and the link only appears once branding is actually set up.
-  const branded = state.brand && state.brand.configured;
+  // The branding bar is the one control for every download. Shown only when there is
+  // branding to apply, because a toggle that does nothing is worse than no toggle.
+  const canBrand = !!(state.brand && state.brand.configured);
+  $('brandBar').classList.toggle('hidden', !canBrand);
+  // Remembered so toggling branding re-renders these same images rather than needing a
+  // fresh shoot. Nothing is regenerated and nothing is charged — only the link changes.
+  state.lastJob = jobId;
+
+  // Branded downloads go through /api/images, which composites the logo on the way out.
+  // The stored file is never touched, so both versions stay available forever.
+  const wantsBrand = canBrand && $('brandOn').checked;
   $('results').innerHTML = job.images.map(({ framing, url }) =>
     `<figure><img src="${url}" alt="${framing}">
       <figcaption><span>${titleCase(framing)}</span><span>
       <button class="link" data-${framing === 'retouch' ? 'shootable' : 'framing'}="${framing}">${
         framing === 'retouch' ? 'Shoot this' : 'Reshoot'}</button>
-      &nbsp;<a href="${url}" download>Download</a>${branded
-        ? `&nbsp;<a href="/api/images/${jobId}/${encodeURIComponent(framing)}?branded=1"
-             title="With your logo and contact line">+&nbsp;logo</a>`
-        : ''}</span></figcaption></figure>`
+      &nbsp;<a href="${wantsBrand
+        ? `/api/images/${jobId}/${encodeURIComponent(framing)}?branded=1`
+        : url}" download>Download${wantsBrand ? ' + logo' : ''}</a>
+      </span></figcaption></figure>`
   ).join('');
   document.querySelectorAll('#results button.link[data-framing]').forEach((button) => {
     button.addEventListener('click', () => reshoot(jobId, button.dataset.framing));
