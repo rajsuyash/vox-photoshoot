@@ -169,7 +169,26 @@
     color: var(--copper-light); padding: 12px 16px; border-radius: var(--radius); }
   .detected.warn b { color: var(--copper-light); }
 
-  .tools { display: flex; gap: 4px; margin-left: auto; align-self: center;
+  /* Header account area: workspace, credit balance, and the way out. */
+  .account { display: flex; align-items: center; gap: 14px; margin-left: auto;
+    font-size: 13px; }
+  .account .ws-name { color: var(--ink); font-weight: 500; }
+  .account select.ws { font: inherit; font-size: 13px; color: var(--ink);
+    background: var(--raised); border: 1px solid var(--line); border-radius: 8px;
+    padding: 5px 9px; }
+  .account .credits { color: var(--copper-light); font-weight: 600;
+    background: var(--copper-soft); border: 1px solid var(--copper-line);
+    padding: 4px 11px; border-radius: 999px; white-space: nowrap; }
+  .account .credits.empty { color: var(--error); background: rgba(229,115,115,.10);
+    border-color: rgba(229,115,115,.28); }
+  .account .acct { display: flex; align-items: center; gap: 12px; }
+  .account .acct a, .account .acct button { color: var(--muted); font: inherit;
+    font-size: 13px; text-decoration: none; background: none; border: 0;
+    padding: 0; cursor: pointer; }
+  .account .acct a:hover, .account .acct button:hover { color: var(--ink); }
+  @media (max-width: 900px) { .account .acct a { display: none; } }
+
+  .tools { display: flex; gap: 4px; align-self: center;
     background: var(--surface); border: 1px solid var(--line);
     padding: 3px; border-radius: 999px; }
   .tools button { font: inherit; font-size: 13px; padding: 6px 16px; border: 0;
@@ -225,6 +244,7 @@
     <b>Donna</b>&nbsp;<span>Photoshoot</span>
   </a>
   <span class="tag">product photo to campaign imagery</span>
+  <div class="account" id="account"></div>
   <nav class="tools" id="tools">
     <button type="button" data-tool="shoot" aria-pressed="true">Photoshoot</button>
     <button type="button" data-tool="retouch" aria-pressed="false">Retouch</button>
@@ -341,6 +361,7 @@
   <button class="go" id="go" disabled>Generate shoot</button>
 </div>
 
+<script src="/app.js"></script>
 <script>
 const state = {
   tool: 'shoot',    // 'shoot' or 'retouch' — two tools, one results pane
@@ -352,7 +373,6 @@ const state = {
   stones: false,    // keep the stone's real inclusions unless asked otherwise
 };
 
-const $ = (id) => document.getElementById(id);
 const drop = $('drop'), fileInput = $('file');
 
 drop.addEventListener('click', () => fileInput.click());
@@ -530,11 +550,9 @@ function cardButton({ key, image, title, subtitle, onPick, group }) {
   return button;
 }
 
-function titleCase(text) {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 async function load() {
+  await loadSession();
+  await loadBalance();
   const [models, places, categories, retouchOptions] = await Promise.all([
     fetch('/api/models').then((r) => r.json()),
     fetch('/api/locations').then((r) => r.json()),

@@ -12,10 +12,13 @@ import pathlib
 import threading
 import uuid
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import (BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request,
+                     Response, UploadFile)
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+import auth
+import db
 import locations
 import product
 import providers
@@ -40,8 +43,8 @@ app = FastAPI(title='Donna Photoshoot',
 
 
 @app.on_event('startup')
-def bound_concurrency() -> None:
-    """Cap how many generations can run at once inside one container.
+def boot() -> None:
+    """Cap concurrency and bring the schema up to date.
 
     Sync endpoints and BackgroundTasks land on anyio's threadpool, which defaults to 40.
     Forty concurrent shoots on 0.5 vCPU / 1GB is an OOM, not throughput — each holds
@@ -50,6 +53,26 @@ def bound_concurrency() -> None:
     import anyio.to_thread
 
     anyio.to_thread.current_default_thread_limiter().total_tokens = 6
+    db.migrate()
+    auth.sweep_sessions()
+
+
+# Pages anyone may fetch without a session. Everything else redirects to the login page,
+# and every /api route additionally carries the current_session dependency — the gate
+# below is for humans typing URLs, the dependency is what actually protects the money.
+PUBLIC_PATHS = {'/login.html', '/healthz', '/api/auth/login',
+                '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png'}
+
+
+@app.middleware('http')
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith('/api/'):
+        return await call_next(request)
+    if auth.lookup(request.cookies.get(auth.COOKIE)) is None:
+        # Carry the original path so a deep link survives the detour through login.
+        return RedirectResponse(f'/login.html?next={path}', status_code=303)
+    return await call_next(request)
 
 # In-memory job store. Fine for a demo; on AWS this becomes a DynamoDB item keyed by
 # job id, and the worker becomes a Lambda triggered by the Higgsfield webhook.
@@ -60,6 +83,61 @@ JOBS_LOCK = threading.Lock()
 def set_job(job_id: str, **fields) -> None:
     with JOBS_LOCK:
         JOBS.setdefault(job_id, {}).update(fields)
+
+
+@app.post('/api/auth/login')
+def login(response: Response, email: str = Form(...), password: str = Form(...)):
+    user = auth.authenticate(email, password)
+    if user is None:
+        # One message for both "no such account" and "wrong password", so the endpoint
+        # cannot be used to find out which addresses have accounts.
+        raise HTTPException(401, 'that email and password do not match')
+
+    spaces = auth.workspaces_for(user['id'])
+    token = auth.start_session(user['id'], spaces[0]['id'] if spaces else None)
+    response.set_cookie(
+        auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400,
+        httponly=True, samesite='lax',
+        # Secure only where TLS exists, or login breaks on http://localhost.
+        secure=bool(storage.bucket()))
+    return {'ok': True, 'workspaces': len(spaces)}
+
+
+@app.post('/api/auth/logout')
+def logout(response: Response, session: dict = Depends(auth.current_session)):
+    auth.end_session_by_hash(session['token_hash'])
+    response.delete_cookie(auth.COOKIE)
+    return {'ok': True}
+
+
+@app.get('/api/me')
+def me(session: dict = Depends(auth.current_session)):
+    """Who am I, which workspace am I looking at, and what else could I switch to."""
+    return {
+        'email': session['email'],
+        'name': session['name'],
+        'is_admin': session['is_admin'],
+        'workspace': ({'id': str(session['workspace_id']),
+                       'name': session['workspace_name']}
+                      if session['workspace_id'] else None),
+        'workspaces': [{'id': str(w['id']), 'name': w['name'], 'role': w['role']}
+                       for w in auth.workspaces_for(session['user_id'])],
+    }
+
+
+@app.post('/api/me/workspace')
+def switch_workspace(workspace_id: str = Form(...),
+                     session: dict = Depends(auth.current_session)):
+    """Switch which workspace this session is looking at.
+
+    Checked against membership, not taken on trust — otherwise any logged-in user could
+    point their session at any workspace and spend its credits.
+    """
+    allowed = {str(w['id']) for w in auth.workspaces_for(session['user_id'])}
+    if workspace_id not in allowed:
+        raise HTTPException(403, 'not a member of that workspace')
+    auth.set_session_workspace(session['token_hash'], workspace_id)
+    return {'ok': True}
 
 
 @app.get('/healthz')
@@ -73,7 +151,7 @@ def healthz():
 
 
 @app.get('/api/models')
-def list_models():
+def list_models(session: dict = Depends(auth.current_session)):
     cast = shoot.load_cast()
     return [
         {'key': key, 'description': entry['description'],
@@ -83,7 +161,7 @@ def list_models():
 
 
 @app.get('/api/locations')
-def list_locations():
+def list_locations(session: dict = Depends(auth.current_session)):
     manifest_path = pathlib.Path('assets/locations/gallery.json')
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     return [
@@ -170,7 +248,7 @@ def category_spec(category) -> dict:
 
 
 @app.get('/api/categories')
-def list_categories():
+def list_categories(session: dict = Depends(auth.current_session)):
     """Lets the UI re-render its controls when the client corrects the category."""
     return [category_spec(c) for c in product.CATEGORIES.values()]
 
@@ -202,7 +280,8 @@ def piece_path(piece_id: str) -> pathlib.Path:
 
 
 @app.post('/api/pieces')
-async def create_piece(upload: UploadFile):
+async def create_piece(upload: UploadFile,
+                       session: dict = Depends(auth.current_session)):
     """Step one: take the photo and read it.
 
     Split out from the shoot itself because the answer decides which controls the client
@@ -240,6 +319,7 @@ def create_shoot(
     finger: str = Form('ring'),
     hand: str = Form('right'),
     instructions: str = Form(''),
+    session: dict = Depends(auth.current_session),
 ):
     if model_key not in shoot.load_cast():
         raise HTTPException(400, f'unknown model {model_key}')
@@ -282,7 +362,7 @@ def run_retouch(job_id: str, path: pathlib.Path, **options) -> None:
 
 
 @app.get('/api/retouch-options')
-def retouch_options():
+def retouch_options(session: dict = Depends(auth.current_session)):
     return {'modes': list(retouch.MODES), 'default_mode': retouch.DEFAULT_MODE,
             'backgrounds': list(retouch.BACKGROUNDS),
             'default_background': retouch.DEFAULT_BACKGROUND}
@@ -298,6 +378,7 @@ async def create_retouch(
     retouch_stones: bool = Form(False),
     background: str = Form(retouch.DEFAULT_BACKGROUND),
     instructions: str = Form(''),
+    session: dict = Depends(auth.current_session),
 ):
     if mode not in retouch.MODES:
         raise HTTPException(400, f'unknown mode {mode}')
@@ -318,7 +399,8 @@ async def create_retouch(
 
 
 @app.post('/api/shoots/{job_id}/reshoot')
-def reshoot(job_id: str, background: BackgroundTasks, framing: str):
+def reshoot(job_id: str, background: BackgroundTasks, framing: str,
+            session: dict = Depends(auth.current_session)):
     """Regenerate a single frame.
 
     Identity does not hold perfectly across framings, and the model occasionally invents
@@ -346,7 +428,7 @@ def reshoot(job_id: str, background: BackgroundTasks, framing: str):
 
 
 @app.get('/api/shoots/{job_id}')
-def get_shoot(job_id: str):
+def get_shoot(job_id: str, session: dict = Depends(auth.current_session)):
     with JOBS_LOCK:
         job = JOBS.get(job_id)
     if job is None:
@@ -373,7 +455,7 @@ MEDIA_ROOTS = ('assets', 'out')
 
 
 @app.get('/media/{path:path}')
-def media(path: str):
+def media(path: str, session: dict = Depends(auth.current_session)):
     root = pathlib.Path.cwd().resolve()
     resolved = (root / path).resolve()
     if not resolved.is_relative_to(root) or not resolved.is_file():

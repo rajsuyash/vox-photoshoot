@@ -7,3 +7,5 @@ fal-client
 boto3
 anthropic
 pillow-heif
+psycopg[binary]
+psycopg-pool

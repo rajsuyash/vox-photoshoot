@@ -18,11 +18,25 @@ export ACCESS_ROLE="arn:aws:iam::${ACCOUNT}:role/AppRunnerECRAccessRole"
 export URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
 
 cd "$(dirname "$0")"
-[ -f .env ] || { echo "no .env — need FAL_KEY, HF_KEY and ANTHROPIC_API_KEY" >&2; exit 1; }
+[ -f .env ] || { echo "no .env — need FAL_KEY, HF_KEY, ANTHROPIC_API_KEY, DATABASE_URL" >&2; exit 1; }
 set -a; . ./.env; set +a
 : "${FAL_KEY:?FAL_KEY missing}"
 # Without it every upload is shot as the client's earrings — see product.identify.
 : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY missing (reads the uploaded piece)}"
+: "${DATABASE_URL:?DATABASE_URL missing (users, jobs and credits live there)}"
+
+# The container reads secrets from here, not from RuntimeEnvironmentVariables. Keep the
+# secret in step with .env before deploying, or the running app gets stale credentials.
+export SECRET_ARN="arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:vox-photoshoot/env"
+echo "==> syncing secrets"
+python3 - <<'PY' > /tmp/vox-secret.json
+import json, os
+print(json.dumps({k: os.environ.get(k, '') for k in
+                  ('FAL_KEY', 'HF_KEY', 'ANTHROPIC_API_KEY', 'DATABASE_URL')}))
+PY
+aws secretsmanager put-secret-value --secret-id vox-photoshoot/env --region "$REGION" \
+  --secret-string file:///tmp/vox-secret.json --query VersionId --output text
+rm -f /tmp/vox-secret.json
 
 # Docker Desktop's credential helper is often absent from a non-interactive PATH.
 export DOCKER_CONFIG=${DOCKER_CONFIG:-/tmp/vox-docker}
@@ -49,13 +63,18 @@ print(json.dumps({
       "ImageRepositoryType": "ECR",
       "ImageConfiguration": {
         "Port": "8080",
+        # Non-secret only. Anyone with apprunner:DescribeService can read these.
         "RuntimeEnvironmentVariables": {
           "PROVIDER": os.environ.get("PROVIDER", "fal"),
-          "FAL_KEY": os.environ["FAL_KEY"],
-          "HF_KEY": os.environ.get("HF_KEY", ""),
-          "ANTHROPIC_API_KEY": os.environ["ANTHROPIC_API_KEY"],
           "S3_BUCKET": os.environ["BUCKET"],
           "AWS_REGION": os.environ["REGION"],
+        },
+        # Pulled from Secrets Manager at container start, by the instance role. The
+        # values never appear in the service description, in CloudTrail, or in this
+        # file. Rotating a key is `put-secret-value` plus a restart — no redeploy.
+        "RuntimeEnvironmentSecrets": {
+          name: f'{os.environ["SECRET_ARN"]}:{name}::'
+          for name in ("FAL_KEY", "HF_KEY", "ANTHROPIC_API_KEY", "DATABASE_URL")
         },
       },
     },
