@@ -38,7 +38,7 @@ STALE_MINUTES = 10
 
 def create(workspace_id: str, user_id: str, kind: str, idempotency_key: str,
            params: dict, piece_id: str | None = None, reserved_credits: int = 0,
-           parent_job_id: str | None = None, conn=None) -> dict:
+           parent_job_id: str | None = None, sku: str = '', conn=None) -> dict:
     """Insert a job, or return the existing one for a repeated idempotency key.
 
     The repeat is not an error: it is a double-clicked Generate, a retried request, or a
@@ -48,13 +48,13 @@ def create(workspace_id: str, user_id: str, kind: str, idempotency_key: str,
     """
     sql = """
         INSERT INTO jobs (workspace_id, user_id, kind, parent_job_id, params,
-                          piece_id, reserved_credits, idempotency_key)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                          piece_id, reserved_credits, idempotency_key, sku)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
         RETURNING id, kind, status, reserved_credits
     """
     args = (workspace_id, user_id, kind, parent_job_id, json.dumps(params),
-            piece_id, reserved_credits, idempotency_key)
+            piece_id, reserved_credits, idempotency_key, sku.strip() or None)
 
     def run(cursor):
         cursor.execute(sql, args)
@@ -137,7 +137,7 @@ def get(job_id: str, workspace_id: str) -> dict | None:
     knowing a job id is enough to read, and to reshoot, someone else's paid work."""
     job = db.query(
         """SELECT id, kind, status, params, piece_id, parent_job_id, failures, error,
-                  reserved_credits, settled_credits, created_at, finished_at
+                  reserved_credits, settled_credits, sku, created_at, finished_at
              FROM jobs WHERE id = %s AND workspace_id = %s""",
         (job_id, workspace_id), one=True)
     if job is None:
@@ -158,16 +158,27 @@ def images_for(shoot_id: str) -> list[dict]:
          ORDER BY framing, attempt DESC""", (shoot_id,))
 
 
-def history(workspace_id: str, limit: int = 50) -> list[dict]:
+def history(workspace_id: str, limit: int = 50, search: str = '') -> list[dict]:
     """Shoots and retouches for the workspace, newest first. Reshoots are folded into
-    the shoot they belong to rather than listed as separate work."""
-    return db.query(
-        """SELECT j.id, j.kind, j.status, j.params, j.created_at, j.finished_at,
-                  (SELECT count(*) FROM job_images i WHERE i.shoot_id = j.id) AS images
-             FROM jobs j
-            WHERE j.workspace_id = %s AND j.parent_job_id IS NULL
-         ORDER BY j.created_at DESC LIMIT %s""",
-        (workspace_id, limit))
+    the shoot they belong to rather than listed as separate work.
+
+    `search` matches the SKU or the detected description, case-insensitively. A
+    manufacturer looking for RG-4471 among two thousand designs is the whole reason
+    the SKU column exists, and scrolling is not a search feature.
+    """
+    sql = """SELECT j.id, j.kind, j.status, j.params, j.sku, j.created_at, j.finished_at,
+                    (SELECT count(*) FROM job_images i WHERE i.shoot_id = j.id) AS images
+               FROM jobs j
+              WHERE j.workspace_id = %s AND j.parent_job_id IS NULL"""
+    args = [workspace_id]
+    if search.strip():
+        # ILIKE on params->>'description' cannot use an index, but it only ever runs
+        # against one workspace's rows, which is a scale nobody will notice.
+        sql += " AND (j.sku ILIKE %s OR j.params->>'description' ILIKE %s)"
+        args += [f'%{search.strip()}%'] * 2
+    sql += ' ORDER BY j.created_at DESC LIMIT %s'
+    args.append(limit)
+    return db.query(sql, tuple(args))
 
 
 def sweep() -> list[dict]:

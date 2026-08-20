@@ -334,6 +334,22 @@ def save_upload(upload: UploadFile, path: pathlib.Path) -> None:
             handle.write(chunk)
 
 
+def download_name(sku: str | None, framing: str, attempt: int, key: str) -> str:
+    """What the file is called once it lands in the client's Downloads folder.
+
+    'RG-4471-hero.png' filed against their own catalogue, rather than
+    'aditi-santorini-profile-0.png' which means nothing outside this app. Falls back to
+    the key's own name when there is no SKU, so nothing is worse than it was.
+    """
+    if not sku:
+        return pathlib.Path(key).name
+    suffix = pathlib.Path(key).suffix or '.png'
+    # Second and later attempts are alternates of the same frame, and a folder full of
+    # same-named files is worse than a slightly longer name.
+    tail = f'-v{attempt}' if attempt and int(attempt) > 1 else ''
+    return f'{sku}-{framing}{tail}{suffix}'
+
+
 def piece_path(piece_id: str) -> pathlib.Path:
     """The client's own photograph, on local disk, fetching it back if it is not.
 
@@ -401,6 +417,9 @@ def create_shoot(
     finger: str = Form('ring'),
     hand: str = Form('right'),
     instructions: str = Form(''),
+    # The client's own reference for the piece. Free text: every jewellery business
+    # already has a coding scheme and none of them want a second one.
+    sku: str = Form(''),
     detected: str = Form('true'),
     # Minted in the browser when the form is completed. Disabling the button is not a
     # control: it does not survive a slow network, a second tab, or refresh-and-resubmit.
@@ -441,7 +460,8 @@ def create_shoot(
         with db.tx() as conn:
             job = jobs.create(workspace_id, session['user_id'], 'shoot',
                               idempotency_key or f'shoot:{uuid.uuid4()}', params,
-                              piece_id=piece_id, reserved_credits=cost, conn=conn)
+                              piece_id=piece_id, reserved_credits=cost, sku=sku,
+                              conn=conn)
             if job['created']:
                 credits.reserve(conn, workspace_id, str(job['id']), cost)
     except credits.Insufficient as short:
@@ -492,6 +512,7 @@ async def create_retouch(
     retouch_stones: bool = Form(False),
     background: str = Form(retouch.DEFAULT_BACKGROUND),
     instructions: str = Form(''),
+    sku: str = Form(''),
     idempotency_key: str = Form(''),
     session: dict = Depends(auth.current_session),
 ):
@@ -516,7 +537,8 @@ async def create_retouch(
         with db.tx() as conn:
             job = jobs.create(workspace_id, session['user_id'], 'retouch',
                               idempotency_key or f'retouch:{uuid.uuid4()}', params,
-                              piece_id=piece, reserved_credits=cost, conn=conn)
+                              piece_id=piece, reserved_credits=cost, sku=sku,
+                              conn=conn)
             if job['created']:
                 credits.reserve(conn, workspace_id, str(job['id']), cost)
     except credits.Insufficient as short:
@@ -564,6 +586,10 @@ def reshoot(job_id: str, background: BackgroundTasks, framing: str,
                               idempotency_key or f'reshoot:{uuid.uuid4()}',
                               {**params, 'framing': framing},
                               piece_id=parent['piece_id'], reserved_credits=cost,
+                              # Inherited, never re-asked: a reshoot is another frame of
+                              # the same piece, and a frame whose filename disagreed with
+                              # its siblings would be worse than no SKU at all.
+                              sku=parent.get('sku') or '',
                               parent_job_id=job_id, conn=conn)
             if job['created']:
                 credits.reserve(conn, workspace_id, str(job['id']), cost)
@@ -603,13 +629,15 @@ def get_credits(session: dict = Depends(auth.current_session)):
 
 
 @app.get('/api/history')
-def get_history(session: dict = Depends(auth.current_session)):
+def get_history(q: str = '', session: dict = Depends(auth.current_session)):
+    """Past work, newest first, optionally filtered by SKU or description."""
     workspace_id = auth.current_workspace(session)
     return [
         {'job_id': str(row['id']), 'kind': row['kind'], 'status': row['status'],
          'images': int(row['images']), 'params': row['params'],
+         'sku': row['sku'] or '',
          'created_at': row['created_at'].isoformat()}
-        for row in jobs.history(workspace_id)
+        for row in jobs.history(workspace_id, search=q)
     ]
 
 
@@ -639,10 +667,15 @@ def get_shoot(job_id: str, session: dict = Depends(auth.current_session)):
         'warnings': [f'{name} could not be generated ({reason})'
                      for name, reason in (job['failures'] or [])],
         'options': (job['params'] or {}).get('options'),
+        'sku': job.get('sku') or '',
         # Minted here, on every read, from the stored key. The client never sees a key
-        # and never holds a URL long enough for it to go stale.
+        # and never holds a URL long enough for it to go stale. The download name is
+        # built from the client's own SKU so a saved file is already filed.
         'images': [{'framing': image['framing'], 'attempt': image['attempt'],
-                    'url': storage.presign(image['s3_key'])}
+                    'url': storage.presign(
+                        image['s3_key'],
+                        download_name(job.get('sku'), image['framing'],
+                                      image['attempt'], image['s3_key']))}
                    for image in job['images']],
         'balance': credits.balance(workspace_id),
     })

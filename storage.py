@@ -101,16 +101,32 @@ def fetch(key: str, destination) -> pathlib.Path:
     return destination
 
 
-def presign(key: str) -> str:
-    """A URL the browser can fetch right now. Call this at read time, not at write time."""
+def presign(key: str, filename: str = '') -> str:
+    """A URL the browser can fetch right now. Call this at read time, not at write time.
+
+    `filename` sets the name the browser saves under. Without it a client downloads
+    'aditi-santorini-profile-0.png' and has to rename it before it can go anywhere near
+    a catalogue; with it they get 'RG-4471-hero.png' and the file is already filed.
+    """
     target = bucket()
     if not target:
         return f'/media/{(LOCAL_ROOT / key).as_posix()}'
+    params = {'Bucket': target, 'Key': key}
+    if filename:
+        params['ResponseContentDisposition'] = f'attachment; filename="{safe_name(filename)}"'
     return _client().generate_presigned_url(
-        'get_object',
-        Params={'Bucket': target, 'Key': key},
-        ExpiresIn=URL_TTL_SECONDS,
-    )
+        'get_object', Params=params, ExpiresIn=URL_TTL_SECONDS)
+
+
+def safe_name(name: str) -> str:
+    """A filename that cannot break the header it is interpolated into.
+
+    Content-Disposition is a header, and a SKU is whatever the customer typed. A quote
+    or a newline in it would end the header early — header injection through a form
+    field nobody thinks of as dangerous.
+    """
+    cleaned = ''.join(c for c in name if c.isalnum() or c in '-_. ').strip()
+    return (cleaned or 'image')[:80]
 
 
 def demo() -> None:

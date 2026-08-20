@@ -272,6 +272,12 @@
         <label>What it is
           <select id="pieceCategory"></select>
         </label>
+        <label><span class="lbl">Your SKU or design code <em>optional</em></span>
+          <input id="pieceSku" type="text" autocomplete="off" maxlength="60"
+                 placeholder="e.g. RG-4471">
+          <span class="hint">Names the downloaded files and makes this shoot findable
+            later.</span>
+        </label>
         <label class="wide">Description used in the prompt
           <input id="pieceDescription" type="text" autocomplete="off">
         </label>
@@ -660,6 +666,7 @@ $('go').addEventListener('click', async () => {
     body.append('background', $('rBackground').value);
     body.append('retouch_stones', String(state.stones));
     body.append('instructions', $('rInstructions').value);
+    body.append('sku', $('pieceSku').value.trim());
     body.append('idempotency_key', state.idem);
     $('detected').replaceChildren(document.createTextNode(
       `${$('rMode').value} · stones ${state.stones ? 'polished' : 'kept true'}`));
@@ -695,6 +702,7 @@ $('go').addEventListener('click', async () => {
   body.append('finger', $('pieceFinger').value);
   body.append('hand', $('pieceHand').value);
   body.append('instructions', $('pieceInstructions').value);
+  body.append('sku', $('pieceSku').value.trim());
   body.append('detected', String(state.piece.detected !== false));
   body.append('idempotency_key', state.idem);
 
