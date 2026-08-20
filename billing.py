@@ -53,6 +53,23 @@ import db
 MARGINAL_COST_RUPEES = 14.94        # per credit, excludes fixed monthly costs
 RUPEES_PER_CREDIT = 35              # ex-GST. 18% GST is added on the invoice.
 
+# GST. Razorpay computes the tax itself and prints it as its own line, which is what
+# makes the document a tax invoice a B2B customer can claim input credit against — the
+# entire reason for using Razorpay Invoices rather than a payment link.
+#
+# Sending these is necessary but NOT sufficient: Razorpay only computes tax once GST is
+# configured on the account (Dashboard > Settings > Tax/GST, GSTIN-gated). Until then it
+# accepts and stores both fields and returns tax_amount = 0, i.e. it silently issues an
+# invoice with no tax line. price_paise() is therefore the ex-GST figure in both cases,
+# and the customer's total is that plus whatever Razorpay adds.
+GST_BASIS_POINTS = 1800             # 18%, as Razorpay wants it: hundredths of a percent
+
+# SAC 998386 is "photographic and videographic processing services". An AI image
+# generation service is arguably 998434 (on-line software) instead, and the answer
+# changes the rate a customer can reclaim. Confirm with the CA before the first live
+# invoice; it is one constant.
+SAC_CODE = '998386'
+
 # The only event that may add credits. See the module docstring.
 CREDITING_EVENT = 'invoice.paid'
 
@@ -104,6 +121,11 @@ def raise_invoice(workspace_id: str, credits_count: int) -> dict:
             'amount': price_paise(1),
             'currency': 'INR',
             'quantity': credits_count,
+            # The amount above is ex-GST, so the tax is added on top rather than
+            # carved out of it. Getting this backwards silently cuts the margin by 18%.
+            'tax_inclusive': False,
+            'tax_rate': GST_BASIS_POINTS,
+            'sac_code': SAC_CODE,
         }],
         # Carried back on the webhook, so the credits land in the right workspace
         # without trusting anything the payer could influence.
@@ -117,8 +139,15 @@ def raise_invoice(workspace_id: str, credits_count: int) -> dict:
                                  amount_paise, status, short_url)
            VALUES (%s, %s, %s, %s, 'issued', %s)""",
         (workspace_id, invoice['id'], credits_count, amount, invoice.get('short_url')))
+    # Surfaced rather than assumed. Razorpay returns tax_amount = 0 when GST is not
+    # configured on the account, and an invoice with no tax line looks entirely normal
+    # until a customer's CA rejects it — so the caller gets told, every time.
+    tax_paise = int(invoice.get('tax_amount') or 0)
     return {'invoice_id': invoice['id'], 'short_url': invoice.get('short_url'),
-            'credits': credits_count, 'amount_paise': amount}
+            'credits': credits_count, 'amount_paise': amount,
+            'tax_paise': tax_paise,
+            'gross_paise': int(invoice.get('gross_amount') or amount),
+            'gst_applied': tax_paise > 0}
 
 
 def verify(raw_body: bytes, signature: str) -> bool:
