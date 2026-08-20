@@ -17,6 +17,7 @@ from fastapi import (BackgroundTasks, Depends, FastAPI, Form, HTTPException, Req
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+import admin
 import auth
 import credits
 import db
@@ -550,6 +551,76 @@ def get_shoot(job_id: str, session: dict = Depends(auth.current_session)):
 # enough: the container also holds every .py file, so /media/locations.py handed out
 # the prompt system — the actual IP — to anyone who asked.
 MEDIA_ROOTS = ('assets', 'out')
+
+
+@app.get('/api/billing')
+def get_billing(session: dict = Depends(auth.current_session)):
+    workspace_id = auth.current_workspace(session)
+    return {
+        'balance': credits.balance(workspace_id),
+        'costs': credits.COST,
+        'ledger': [
+            {'kind': row['kind'], 'delta': row['delta'],
+             'balance_after': row['balance_after'], 'note': row['note'],
+             'created_at': row['created_at'].isoformat()}
+            for row in credits.ledger(workspace_id)
+        ],
+    }
+
+
+@app.get('/api/admin/workspaces')
+def admin_list(session: dict = Depends(auth.current_session)):
+    auth.require_admin(session)
+    return [
+        {'id': str(row['id']), 'name': row['name'], 'gstin': row['gstin'],
+         'members': int(row['members']), 'balance': credits.balance(str(row['id']))}
+        for row in admin.overview()
+    ]
+
+
+@app.post('/api/admin/workspaces')
+def admin_create(name: str = Form(...), gstin: str = Form(''),
+                 billing_email: str = Form(''), owner_email: str = Form(''),
+                 credits_grant: int = Form(0, alias='credits'),
+                 session: dict = Depends(auth.current_session)):
+    """Provision a customer: workspace, owner login, and any starting credits."""
+    auth.require_admin(session)
+    if not name.strip():
+        raise HTTPException(400, 'the workspace needs a name')
+
+    workspace = admin.create_workspace(name, gstin, billing_email)
+    workspace_id = str(workspace['id'])
+    result = {'id': workspace_id, 'name': workspace['name']}
+
+    if owner_email.strip():
+        try:
+            account = admin.create_account(owner_email, workspace_id, 'owner')
+        except Exception as error:
+            # The workspace exists; say why the login did not rather than 500 and leave
+            # the admin guessing which half succeeded.
+            raise HTTPException(400, f'workspace created, but the owner login failed: '
+                                     f'{error}')
+        # The only time this is ever visible. It is not recoverable afterwards.
+        result |= {'owner': account['email'], 'password': account['password']}
+
+    if credits_grant > 0:
+        credits.grant(workspace_id, credits_grant, 'opening balance')
+    return result
+
+
+@app.post('/api/admin/grant')
+def admin_grant(workspace_id: str = Form(...), credits_amount: int = Form(..., alias='credits'),
+                note: str = Form('granted from admin'),
+                session: dict = Depends(auth.current_session)):
+    """Add credits by hand.
+
+    Also the goodwill mechanism: "was that bad image the customer's fault" is a human
+    decision recorded in the ledger, not a discount rule somebody has to maintain.
+    """
+    auth.require_admin(session)
+    if credits_amount == 0:
+        raise HTTPException(400, 'nothing to grant')
+    return {'balance': credits.grant(workspace_id, credits_amount, note)}
 
 
 @app.get('/media/{path:path}')

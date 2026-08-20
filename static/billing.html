@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Billing · Donna Photoshoot</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+<header>
+  <a class="logo" href="/">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
+      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
+      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
+    </svg>
+    <b>Donna</b>&nbsp;<span>Photoshoot</span>
+  </a>
+  <div class="account" id="account"></div>
+</header>
+<main>
+<h1 class="page">Billing</h1>
+<p class="lede">One credit is one generated image. A shoot is 3, a reshoot is 1, a retouch is 1.</p>
+<div id="error" class="error hidden"></div>
+
+<div class="card-box" style="margin-bottom:32px">
+  <div style="font-size:13px;color:var(--faint);letter-spacing:.12em;text-transform:uppercase;font-weight:600">Balance</div>
+  <div id="balance" style="font-size:40px;font-weight:700;letter-spacing:-.03em;margin-top:6px">—</div>
+  <p class="hint" id="topup" style="margin-top:10px">Need more? Your account manager will raise an invoice.</p>
+</div>
+
+<h2 style="font-size:17px;font-weight:600;margin:0 0 14px">Statement</h2>
+<div id="ledger"></div>
+</main>
+<script src="/app.js"></script>
+<script>
+
+const KINDS = {
+  purchase: 'Credit purchase', grant: 'Granted', reserve: 'Reserved for a job',
+  settle: 'Returned (undelivered images)', refund: 'Refunded (job failed)',
+  chargeback: 'Chargeback',
+};
+
+(async () => {
+  await loadSession();
+  let data;
+  try {
+    data = await api('/api/billing');
+  } catch (error) {
+    $('error').textContent = String(error.message || error);
+    $('error').classList.remove('hidden');
+    return;
+  }
+  session.balance = data.balance;
+  renderAccount();
+  $('balance').textContent = `${data.balance} credit${data.balance === 1 ? '' : 's'}`;
+  if (data.balance <= 0) $('balance').style.color = 'var(--error)';
+
+  if (!data.ledger.length) {
+    $('ledger').innerHTML = '<p class="empty-state">No activity yet.</p>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.className = 'data';
+  table.innerHTML = '<thead><tr><th>When</th><th>What</th><th>Note</th>' +
+                    '<th class="num">Change</th><th class="num">Balance</th></tr></thead>';
+  const body = document.createElement('tbody');
+  data.ledger.forEach((row) => {
+    const tr = document.createElement('tr');
+    const when = new Date(row.created_at).toLocaleString(undefined,
+      { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    [[when, ''], [KINDS[row.kind] || row.kind, 'strong'], [row.note || '', '']]
+      .forEach(([text, cls]) => {
+        const td = document.createElement('td');
+        td.className = cls;
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+    const delta = document.createElement('td');
+    delta.className = `num ${row.delta > 0 ? 'plus' : 'minus'}`;
+    delta.textContent = `${row.delta > 0 ? '+' : ''}${row.delta}`;
+    tr.appendChild(delta);
+    const after = document.createElement('td');
+    after.className = 'num';
+    after.textContent = row.balance_after;
+    tr.appendChild(after);
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  $('ledger').replaceChildren(table);
+})();
+
+</script>
+</body>
+</html>

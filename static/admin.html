@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · Donna Photoshoot</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+<header>
+  <a class="logo" href="/">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
+      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
+      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
+    </svg>
+    <b>Donna</b>&nbsp;<span>Photoshoot</span>
+  </a>
+  <div class="account" id="account"></div>
+</header>
+<main>
+<h1 class="page">Admin</h1>
+<p class="lede">Provision workspaces, invite their owner, and grant credits.</p>
+<div id="error" class="error hidden"></div>
+<div id="done" class="notice hidden"></div>
+
+<div class="card-box" style="margin-bottom:32px">
+  <h2 style="font-size:16px;font-weight:600;margin:0 0 16px">New workspace</h2>
+  <div class="fields">
+    <label>Brand name<input id="wsName" placeholder="Tanishq"></label>
+    <label>GSTIN <em>needed for invoices</em><input id="wsGstin" placeholder="29ABCDE1234F1Z5"></label>
+    <label>Billing email<input id="wsEmail" type="email" placeholder="accounts@brand.com"></label>
+    <label>Owner login<input id="wsOwner" type="email" placeholder="owner@brand.com"></label>
+    <label>Starting credits<input id="wsCredits" type="number" value="0" min="0"></label>
+    <div style="justify-content:flex-end"><button class="go" id="createWs" type="button">Create</button></div>
+  </div>
+</div>
+
+<h2 style="font-size:17px;font-weight:600;margin:0 0 14px">Workspaces</h2>
+<div id="list"></div>
+</main>
+<script src="/app.js"></script>
+<script>
+
+function flash(node, text) {
+  node.textContent = text;
+  node.classList.remove('hidden');
+  setTimeout(() => node.classList.add('hidden'), 12000);
+}
+
+async function refreshList() {
+  const rows = await api('/api/admin/workspaces');
+  if (!rows.length) {
+    $('list').innerHTML = '<p class="empty-state">No workspaces yet.</p>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.className = 'data';
+  table.innerHTML = '<thead><tr><th>Brand</th><th>GSTIN</th><th class="num">Members</th>' +
+                    '<th class="num">Credits</th><th class="num">Grant</th></tr></thead>';
+  const body = document.createElement('tbody');
+  rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    [[row.name, 'strong'], [row.gstin || '—', ''],
+     [String(row.members), 'num'], [String(row.balance), 'num']]
+      .forEach(([text, cls]) => {
+        const td = document.createElement('td');
+        td.className = cls;
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+    const action = document.createElement('td');
+    action.className = 'num';
+    const input = Object.assign(document.createElement('input'),
+      { type: 'number', value: '100', min: '1' });
+    input.style.cssText = 'width:80px;padding:6px 8px;border-radius:8px;' +
+      'border:1px solid var(--line);background:var(--raised);color:var(--ink);font:inherit;font-size:13px';
+    const button = Object.assign(document.createElement('button'),
+      { type: 'button', textContent: 'Grant' });
+    button.style.cssText = 'margin-left:8px;border:0;border-radius:999px;padding:6px 14px;' +
+      'background:var(--copper);color:var(--bg);font:inherit;font-size:13px;font-weight:600;cursor:pointer';
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const form = new FormData();
+        form.append('workspace_id', row.id);
+        form.append('credits', input.value);
+        form.append('note', 'granted from admin');
+        const result = await api('/api/admin/grant', { method: 'POST', body: form });
+        flash($('done'), `${row.name}: balance now ${result.balance}`);
+        await refreshList();
+      } catch (error) {
+        flash($('error'), String(error.message || error));
+      } finally {
+        button.disabled = false;
+      }
+    });
+    action.append(input, button);
+    tr.appendChild(action);
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  $('list').replaceChildren(table);
+}
+
+$('createWs').addEventListener('click', async () => {
+  const button = $('createWs');
+  button.disabled = true;
+  try {
+    const form = new FormData();
+    form.append('name', $('wsName').value);
+    form.append('gstin', $('wsGstin').value);
+    form.append('billing_email', $('wsEmail').value);
+    form.append('owner_email', $('wsOwner').value);
+    form.append('credits', $('wsCredits').value || '0');
+    const result = await api('/api/admin/workspaces', { method: 'POST', body: form });
+    // Shown once and never recoverable, so it has to be copied now.
+    flash($('done'), result.password
+      ? `Created ${result.name}. Owner ${result.owner} — password ${result.password} (shown once)`
+      : `Created ${result.name}.`);
+    ['wsName', 'wsGstin', 'wsEmail', 'wsOwner'].forEach((id) => { $(id).value = ''; });
+    await refreshList();
+  } catch (error) {
+    flash($('error'), String(error.message || error));
+  } finally {
+    button.disabled = false;
+  }
+});
+
+(async () => {
+  await loadSession();
+  await loadBalance();
+  if (!session.me.is_admin) {
+    document.querySelector('main').innerHTML =
+      '<p class="empty-state">This page is for administrators.</p>';
+    return;
+  }
+  await refreshList();
+})();
+
+</script>
+</body>
+</html>

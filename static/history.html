@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>History · Donna Photoshoot</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+<header>
+  <a class="logo" href="/">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
+      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
+      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
+    </svg>
+    <b>Donna</b>&nbsp;<span>Photoshoot</span>
+  </a>
+  <div class="account" id="account"></div>
+</header>
+<main>
+<h1 class="page">History</h1>
+<p class="lede">Every shoot and retouch in this workspace. Images stay available for 30 days.</p>
+<div id="error" class="error hidden"></div>
+<div id="list"></div>
+</main>
+<script src="/app.js"></script>
+<script>
+
+const KIND = { shoot: 'Shoot', retouch: 'Retouch', reshoot: 'Reshoot' };
+
+function describe(row) {
+  const p = row.params || {};
+  if (row.kind === 'retouch') return `${p.mode || 'faithful'} · stones ${p.retouch_stones ? 'polished' : 'kept true'}`;
+  return [p.description, p.model, p.location].filter(Boolean).join(' · ');
+}
+
+(async () => {
+  await loadSession();
+  await loadBalance();
+  let rows;
+  try {
+    rows = await api('/api/history');
+  } catch (error) {
+    $('error').textContent = String(error.message || error);
+    $('error').classList.remove('hidden');
+    return;
+  }
+  if (!rows.length) {
+    $('list').innerHTML = '<p class="empty-state">Nothing shot yet.</p>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.className = 'data';
+  table.innerHTML = '<thead><tr><th>When</th><th>What</th><th>Details</th>' +
+                    '<th class="num">Images</th><th></th></tr></thead>';
+  const body = document.createElement('tbody');
+  rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    const when = new Date(row.created_at).toLocaleString(undefined,
+      { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    // textContent throughout: descriptions are model output about a client upload.
+    const cells = [
+      [when, ''], [KIND[row.kind] || row.kind, 'strong'],
+      [describe(row), ''], [String(row.images), 'num'],
+    ];
+    cells.forEach(([text, cls]) => {
+      const td = document.createElement('td');
+      td.className = cls;
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+    const last = document.createElement('td');
+    last.className = 'num';
+    if (row.images) {
+      last.appendChild(Object.assign(document.createElement('a'),
+        { href: `/?job=${row.job_id}`, textContent: 'Open' }));
+    } else {
+      last.textContent = row.status === 'failed' ? 'failed' : '—';
+    }
+    tr.appendChild(last);
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  $('list').replaceChildren(table);
+})();
+
+</script>
+</body>
+</html>

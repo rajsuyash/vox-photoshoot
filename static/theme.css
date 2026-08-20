@@ -1,0 +1,136 @@
+/* Voxdonna design system — see DESIGN.md in the website repo. Copper is the only
+   accent; everything else is neutral. Dark only: every surface alpha and the copper
+   saturation assume a dark canvas, so there is deliberately no light mode.
+
+   Shared by every page. Page-specific rules stay in the page. */
+
+:root {
+  --bg: #0a0a0c;                              /* warm black, never #000 */
+  --surface: rgba(255, 255, 255, .02);
+  --raised: rgba(255, 255, 255, .04);
+  --line: rgba(255, 255, 255, .08);
+  --ink: #f5f5f7;                             /* off-white, never pure white */
+  --muted: rgba(245, 245, 247, .6);
+  --faint: rgba(245, 245, 247, .4);
+  --copper: #c17f59;
+  --copper-light: #d4a574;
+  --copper-soft: rgba(193, 127, 89, .12);
+  --copper-line: rgba(193, 127, 89, .25);
+  --error: #e57373;
+  --ok: #5cb85c;
+  --radius: 12px;
+  --radius-lg: 20px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 16px/1.55 Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+
+header {
+  padding: 0 48px; height: 64px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 14px;
+  position: sticky; top: 0; background: rgba(10,10,12,.8);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px); z-index: 10;
+}
+
+/* Matches .nav-logo on voxdonna.com: mark, then wordmark with the brand word in copper. */
+.logo { display: flex; align-items: center; gap: 8px; flex: none; white-space: nowrap;
+  font-size: 18px; font-weight: 700; letter-spacing: -.02em;
+  text-decoration: none; color: inherit; }
+.logo svg { flex: none; }
+.logo b { font-weight: 700; color: var(--copper); }
+.logo span { font-weight: 400; color: var(--muted); }
+header .tag { color: var(--faint); font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase; font-weight: 600; }
+
+main { max-width: 1200px; margin: 0 auto; padding: 48px 48px 160px; }
+
+h1.page { margin: 0 0 6px; font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
+p.lede { margin: 0 0 32px; color: var(--muted); font-size: 14px; }
+
+/* Header account area: workspace, credit balance, and the way out. */
+.account { display: flex; align-items: center; gap: 14px; margin-left: auto;
+  font-size: 13px; }
+.account .ws-name { color: var(--ink); font-weight: 500; }
+.account select.ws { font: inherit; font-size: 13px; color: var(--ink);
+  background: var(--raised); border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 9px; }
+.account .credits { color: var(--copper-light); font-weight: 600;
+  background: var(--copper-soft); border: 1px solid var(--copper-line);
+  padding: 4px 11px; border-radius: 999px; white-space: nowrap; }
+.account .credits.empty { color: var(--error); background: rgba(229,115,115,.10);
+  border-color: rgba(229,115,115,.28); }
+.account .acct { display: flex; align-items: center; gap: 12px; }
+.account .acct a, .account .acct button { color: var(--muted); font: inherit;
+  font-size: 13px; text-decoration: none; background: none; border: 0;
+  padding: 0; cursor: pointer; }
+.account .acct a:hover, .account .acct button:hover { color: var(--ink); }
+
+button.go {
+  border: 0; border-radius: 999px; padding: 13px 30px; font-size: 14px; font-weight: 600;
+  background: var(--copper); color: var(--bg); cursor: pointer; transition: background .2s;
+}
+button.go:hover:not(:disabled) { background: var(--copper-light); }
+button.go:disabled { background: var(--raised); color: var(--faint); cursor: not-allowed; }
+
+/* Form fields, shared by the generator, billing and admin. */
+.fields { display: grid; gap: 16px 20px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.fields .wide { grid-column: 1 / -1; }
+.fields label, .fields > div { display: flex; flex-direction: column; gap: 6px;
+  font-size: 13px; color: var(--muted); }
+.fields label em, .hint { font-style: normal; color: var(--faint); }
+.fields .lbl { font-size: 13px; }
+.fields input, .fields select, .fields textarea {
+  font: inherit; font-size: 15px; color: var(--ink);
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--raised); width: 100%; }
+.fields select { appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+  padding-right: 34px; }
+.fields option { background: #17171a; color: var(--ink); }
+.fields input::placeholder, .fields textarea::placeholder { color: var(--faint); }
+.fields input:focus, .fields select:focus, .fields textarea:focus {
+  outline: 1px solid var(--copper); outline-offset: -1px; border-color: var(--copper); }
+.hint { font-size: 12px; margin: 2px 0 0; line-height: 1.4; }
+
+/* Tables: history, ledger, admin listings. */
+table.data { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.data th { text-align: left; font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase; font-weight: 600; color: var(--faint);
+  padding: 0 14px 10px; }
+table.data td { padding: 13px 14px; border-top: 1px solid var(--line);
+  color: var(--muted); vertical-align: middle; }
+table.data td.strong { color: var(--ink); font-weight: 500; }
+table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.data .plus { color: var(--ok); }
+table.data .minus { color: var(--muted); }
+table.data a { color: var(--copper); text-decoration: none; font-weight: 600; }
+table.data a:hover { color: var(--copper-light); }
+
+.card-box { border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); padding: 24px; }
+
+.error { background: rgba(229,115,115,.10); border: 1px solid rgba(229,115,115,.28);
+  color: var(--error); padding: 14px 16px; border-radius: var(--radius); font-size: 14px; }
+.notice { background: var(--copper-soft); border: 1px solid var(--copper-line);
+  color: var(--copper-light); padding: 14px 16px; border-radius: var(--radius);
+  font-size: 14px; }
+.empty-state { color: var(--faint); font-size: 14px; padding: 40px 0; text-align: center; }
+.hidden { display: none; }
+
+@media (max-width: 900px) { .account .acct a { display: none; } }
+@media (max-width: 720px) {
+  header { padding: 0 20px; gap: 10px; } main { padding: 32px 20px 120px; }
+  header .tag { display: none; }
+  .logo { font-size: 16px; }
+  .logo span { display: none; }   /* "Donna" + the mark carry it on a phone */
+}
