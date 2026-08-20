@@ -157,6 +157,11 @@ CRAFT_BASE = (
 # frame by name.
 FRAMINGS = ('hero', 'profile', 'detail')
 
+# What compose() will accept. Deliberately NOT part of FRAMINGS: a shoot costs
+# len(FRAMINGS) credits, so adding 'custom' there would silently reprice every shoot from
+# three credits to four. 'custom' is a single client-composed shot, priced separately.
+ALL_FRAMINGS = FRAMINGS + ('custom',)
+
 
 def compose_plate(location_key: str) -> str:
     """Prompt for an EMPTY location plate — the picker card, and the backplate that a
@@ -181,7 +186,7 @@ def compose_plate(location_key: str) -> str:
 
 
 def compose(product: str, category, model_description: str, location_key: str,
-            framing: str = 'hero', options=None) -> str:
+            framing: str = 'hero', options=None, comp=None) -> str:
     """Build the prompt from the three things the client picked, plus what they uploaded.
 
     category is a product.Category — it decides where on the body the piece goes, how
@@ -189,17 +194,32 @@ def compose(product: str, category, model_description: str, location_key: str,
     product.Options carrying what the photograph cannot say: how big the piece is, and
     which finger it goes on.
     """
+    import composition as composition_module
+
     location = ALL[location_key]
-    if framing not in FRAMINGS:
-        raise KeyError(f'unknown framing {framing!r}; have {sorted(FRAMINGS)}')
+    if framing not in ALL_FRAMINGS:
+        raise KeyError(f'unknown framing {framing!r}; have {sorted(ALL_FRAMINGS)}')
+    comp = comp or composition_module.Composition()
     # Free text from the client, placed after the craft rules so it can override them —
     # "keep the engraving" has to beat a generic instruction about sharpness.
     note = (options.instructions or '').strip() if options else ''
+
+    # In CUSTOM mode the framing line comes only from the client's frame and distance.
+    # Mixing it with category.framings would put two answers to the same question in one
+    # prompt — "extreme close up of the hand" and "her whole figure" — and the model
+    # resolves that contradiction arbitrarily.
+    if framing == 'custom':
+        frame_line = comp.custom_framing(category.key)
+    else:
+        frame_line = f'{category.framings[framing]} {comp.direction(category.key)}'.strip()
+
     return (
         # Expression sits near the front deliberately: at the end of the prompt it was
-        # ignored and every shot came back neutral. The brand's own campaigns are warm
-        # and smiling, so this is not a detail we can leave to chance.
-        f'{model_description}, smiling warmly with a genuine open smile, '
+        # ignored and every shot came back neutral. It used to be a hardcoded smile,
+        # which meant a brand wanting a composed, serious campaign could not have one at
+        # any price — the default is still a smile, but it is now the client's to change.
+        f'{model_description}, '
+        f'{composition_module.EXPRESSIONS[comp.expression]}, '
         # "from the reference image" stays here at the front, next to the product, even
         # though CRAFT_BASE restates fidelity later: the early anchor is what stopped
         # the model redesigning the piece, and CRAFT_BASE alone did not.
@@ -207,11 +227,62 @@ def compose(product: str, category, model_description: str, location_key: str,
         f'She wears a {location.wardrobe}. '
         f'Behind her: {location.scene}. '
         f'Lighting: {location.light}. '
-        f'Framing: {category.framings[framing]} '
+        f'Framing: {frame_line} '
         f'{CRAFT_BASE} {category.craft} '
         + (f'{note} ' if note else '')
         + category.negative
     )
+
+
+def _check_composition(category) -> None:
+    """The composition controls must actually reach the prompt.
+
+    Every one of these is a silent failure otherwise: the client picks 'serious', the
+    prompt still says 'smiling', and the only way anyone finds out is by looking at a
+    photograph they paid for.
+    """
+    import composition
+
+    base = compose(product='p', category=category, model_description='m',
+                   location_key='kyoto', framing='hero')
+
+    # The default must be exactly what the hardcoded line used to be, or every existing
+    # shoot silently changes character the day this ships.
+    assert 'smiling warmly with a genuine open smile' in base
+
+    serious = compose(product='p', category=category, model_description='m',
+                      location_key='kyoto', framing='hero',
+                      comp=composition.parse({'expression': 'serious'}, category.key))
+    assert 'not smiling' in serious and 'genuine open smile' not in serious
+
+    # View, angle and pose each have to change the prompt on their own.
+    for field, value, needle in (('view', 'side', 'full profile'),
+                                 ('angle', 'top-down', 'directly overhead'),
+                                 ('pose', 'tucking-hair', 'tucks her hair')):
+        got = compose(product='p', category=category, model_description='m',
+                      location_key='kyoto', framing='hero',
+                      comp=composition.parse({field: value}, category.key))
+        assert needle in got, f'{field}={value} never reached the prompt'
+        assert got != base
+
+    # Custom mode must build its framing from the client's frame and distance, and must
+    # NOT carry the shot-owned crop as well — two answers to one question.
+    custom = compose(product='p', category=category, model_description='m',
+                     location_key='kyoto', framing='custom',
+                     comp=composition.parse({'frame': 'ear', 'distance': 'close'},
+                                            category.key))
+    assert 'one ear fills the frame' in custom and 'Shot close' in custom
+    for fixed in FRAMINGS:
+        assert category.framings[fixed] not in custom, f'custom leaked the {fixed} crop'
+
+    # An unknown framing is still a loud failure, not an unframed prompt.
+    try:
+        compose(product='p', category=category, model_description='m',
+                location_key='kyoto', framing='nonsense')
+    except KeyError:
+        pass
+    else:
+        raise AssertionError('an unknown framing produced a prompt')
 
 
 def demo() -> None:
@@ -237,6 +308,8 @@ def demo() -> None:
         for name in FRAMINGS
     }
     assert len({*rendered.values()}) == len(FRAMINGS), 'framings collapsed to one prompt'
+
+    _check_composition(earrings)
 
     # And the category must reach the prompt: this is the bug that put a ring on an ear.
     # Only the half before CRAFT_BASE is checked — the craft and negative clauses name

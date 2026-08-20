@@ -29,6 +29,23 @@ COST = {
 }
 
 
+def cost(kind: str, images: int = 0, resolution: str = '') -> int:
+    """What an action costs, in credits.
+
+    A function rather than a lookup because price now depends on resolution: 4K is
+    roughly twice the work at the provider, so it is twice the credits.
+
+    `images` overrides the per-kind default — a Custom shot is one image, not three.
+    The result is pinned onto the job at reserve time and settled against THAT number,
+    so changing this table can never reprice work already in flight.
+    """
+    import composition
+
+    base = images or COST[kind]
+    return base * composition.RESOLUTION_MULTIPLIER.get(
+        resolution or composition.DEFAULT_RESOLUTION, 1)
+
+
 # What a new self-serve account gets: two full shoots, enough to photograph a real piece
 # twice rather than glimpse it once.
 FREE_CREDITS = 6

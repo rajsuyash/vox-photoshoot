@@ -24,7 +24,7 @@ DEFAULTS = {'quality': 'high', 'aspect_ratio': '3:4'}
 
 # Fixed per framing so a shoot is reproducible: same inputs re-run give the same set,
 # which matters when a client asks for "the one from yesterday, but bigger".
-SEEDS = {'hero': 101, 'profile': 202, 'detail': 303}
+SEEDS = {'hero': 101, 'profile': 202, 'detail': 303, 'custom': 404}
 
 
 def seed_for(framing: str, attempt: int = 1) -> int:
@@ -48,7 +48,8 @@ def load_cast() -> dict:
 
 def build(product_urls: list[str], model_key: str, location_key: str,
           description: str, category, face_url: str | None = None,
-          framing: str = 'hero', options=None, attempt: int = 1) -> tuple[str, dict]:
+          framing: str = 'hero', options=None, attempt: int = 1,
+          comp=None) -> tuple[str, dict]:
     """Return (prompt, arguments) without calling the API, so cost can be checked first.
 
     description and category both come from the uploaded photo (product.identify): what
@@ -73,20 +74,28 @@ def build(product_urls: list[str], model_key: str, location_key: str,
         location_key=location_key,
         framing=framing,
         options=options,
+        comp=comp,
     )
     # Product first: it is the reference that must not be compromised.
     image_urls = [*product_urls, face_url] if face_url else list(product_urls)
-    return prompt, {
+    arguments = {
         'prompt': prompt,
         'image_urls': image_urls,
         'seed': seed_for(framing, attempt),
         **DEFAULTS,
     }
+    if comp is not None:
+        # The client's aspect ratio and resolution, not the house defaults. Provider
+        # rejects an aspect its backend cannot do rather than substituting one, so a bad
+        # value fails loudly here instead of silently shipping the wrong crop.
+        arguments['aspect_ratio'] = comp.aspect
+        arguments['quality'] = comp.quality
+    return prompt, arguments
 
 
 def shoot(product_paths, model_key: str, location_key: str, description: str,
           category, framings=None, out_dir='out/shoots', options=None,
-          attempts=None, on_image=None) -> tuple[list[dict], list[tuple]]:
+          attempts=None, on_image=None, comp=None) -> tuple[list[dict], list[tuple]]:
     """Run one photoshoot: one generation per framing.
 
     This is the single entry point the web app calls.
@@ -110,7 +119,7 @@ def shoot(product_paths, model_key: str, location_key: str, description: str,
         attempt = attempts.get(framing, 1)
         _prompt, arguments = build(
             product_urls, model_key, location_key, description, category,
-            face_url, framing, options, attempt,
+            face_url, framing, options, attempt, comp,
         )
         try:
             urls = provider.generate(**arguments)
@@ -164,7 +173,8 @@ def demo() -> None:
 
     # Every framing this app can shoot must have a seed, or a reshoot silently reuses
     # another frame's seed and returns the same photograph.
-    assert set(SEEDS) == set(locations.FRAMINGS), (sorted(SEEDS), locations.FRAMINGS)
+    assert set(SEEDS) == set(locations.ALL_FRAMINGS), (sorted(SEEDS),
+                                                       locations.ALL_FRAMINGS)
 
     # A reshoot must be a different photograph. This is the one that used to be a bug:
     # same seed in, byte-identical image out, and the customer charged for it.
