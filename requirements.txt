@@ -9,3 +9,4 @@ anthropic
 pillow-heif
 psycopg[binary]
 psycopg-pool
+razorpay

@@ -100,7 +100,27 @@ async function refreshList() {
         button.disabled = false;
       }
     });
-    action.append(input, button);
+    const invoice = Object.assign(document.createElement('button'),
+      { type: 'button', textContent: 'Invoice' });
+    invoice.style.cssText = 'margin-left:6px;border:1px solid var(--copper-line);' +
+      'border-radius:999px;padding:6px 12px;background:none;color:var(--copper-light);' +
+      'font:inherit;font-size:13px;font-weight:600;cursor:pointer';
+    invoice.title = 'Raise a GST invoice for this many credits and email it';
+    invoice.addEventListener('click', async () => {
+      invoice.disabled = true;
+      try {
+        const form = new FormData();
+        form.append('workspace_id', row.id);
+        form.append('credits', input.value);
+        const result = await api('/api/admin/invoices', { method: 'POST', body: form });
+        flash($('done'), `Invoice for ${result.credits} credits sent — ${result.short_url || result.invoice_id}`);
+      } catch (error) {
+        flash($('error'), String(error.message || error));
+      } finally {
+        invoice.disabled = false;
+      }
+    });
+    action.append(input, button, invoice);
     tr.appendChild(action);
     body.appendChild(tr);
   });

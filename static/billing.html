@@ -34,6 +34,9 @@
   <p class="hint" id="topup" style="margin-top:10px">Need more? Your account manager will raise an invoice.</p>
 </div>
 
+<h2 style="font-size:17px;font-weight:600;margin:0 0 14px">Invoices</h2>
+<div id="invoices" style="margin-bottom:32px"></div>
+
 <h2 style="font-size:17px;font-weight:600;margin:0 0 14px">Statement</h2>
 <div id="ledger"></div>
 </main>
@@ -60,6 +63,45 @@ const KINDS = {
   renderAccount();
   $('balance').textContent = `${data.balance} credit${data.balance === 1 ? '' : 's'}`;
   if (data.balance <= 0) $('balance').style.color = 'var(--error)';
+
+  // Invoices: unpaid ones carry their payment link, so a customer can settle from here.
+  try {
+    const invoices = await api('/api/invoices');
+    if (!invoices.length) {
+      $('invoices').innerHTML = '<p class="empty-state">No invoices yet.</p>';
+    } else {
+      const it = document.createElement('table');
+      it.className = 'data';
+      it.innerHTML = '<thead><tr><th>Issued</th><th>Credits</th><th>Amount</th>' +
+                     '<th>Status</th><th class="num"></th></tr></thead>';
+      const ib = document.createElement('tbody');
+      invoices.forEach((inv) => {
+        const tr = document.createElement('tr');
+        const when = new Date(inv.issued_at).toLocaleDateString(undefined,
+          { day: 'numeric', month: 'short', year: 'numeric' });
+        [[when, ''], [String(inv.credits), 'strong'],
+         [`\u20b9${inv.amount.toLocaleString('en-IN')}`, ''], [inv.status, '']]
+          .forEach(([text, cls]) => {
+            const td = document.createElement('td');
+            td.className = cls;
+            td.textContent = text;
+            tr.appendChild(td);
+          });
+        const pay = document.createElement('td');
+        pay.className = 'num';
+        if (inv.status !== 'paid' && inv.url) {
+          pay.appendChild(Object.assign(document.createElement('a'),
+            { href: inv.url, target: '_blank', rel: 'noopener', textContent: 'Pay' }));
+        }
+        tr.appendChild(pay);
+        ib.appendChild(tr);
+      });
+      it.appendChild(ib);
+      $('invoices').replaceChildren(it);
+    }
+  } catch (error) {
+    $('invoices').innerHTML = '<p class="empty-state">Invoices unavailable.</p>';
+  }
 
   if (!data.ledger.length) {
     $('ledger').innerHTML = '<p class="empty-state">No activity yet.</p>';

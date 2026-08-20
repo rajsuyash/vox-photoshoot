@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 import admin
 import auth
+import billing
 import credits
 import db
 import jobs
@@ -64,6 +65,7 @@ def boot() -> None:
 # and every /api route additionally carries the current_session dependency — the gate
 # below is for humans typing URLs, the dependency is what actually protects the money.
 PUBLIC_PATHS = {'/login.html', '/healthz', '/api/auth/login',
+                '/api/webhooks/razorpay',
                 '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png'}
 
 
@@ -621,6 +623,51 @@ def admin_grant(workspace_id: str = Form(...), credits_amount: int = Form(..., a
     if credits_amount == 0:
         raise HTTPException(400, 'nothing to grant')
     return {'balance': credits.grant(workspace_id, credits_amount, note)}
+
+
+@app.post('/api/webhooks/razorpay')
+async def razorpay_webhook(request: Request):
+    """Razorpay calls this. Authenticated by HMAC, not by session.
+
+    Always answers 200 once the signature is good: a non-200 makes Razorpay retry
+    forever, and a duplicate delivery is normal rather than an error.
+    """
+    raw = await request.body()          # the exact bytes, before any parsing
+    signature = request.headers.get('x-razorpay-signature', '')
+    try:
+        result = billing.handle(raw, signature)
+    except PermissionError:
+        raise HTTPException(400, 'bad signature')
+    except Exception as error:          # noqa: BLE001 - never retry-loop on our own bug
+        print(f'razorpay webhook failed: {error!r}', flush=True)
+        return {'ok': False}
+    print(f'razorpay webhook: {result}', flush=True)
+    return {'ok': True, **result}
+
+
+@app.post('/api/admin/invoices')
+def admin_invoice(workspace_id: str = Form(...), credits_count: int = Form(..., alias='credits'),
+                  session: dict = Depends(auth.current_session)):
+    """Raise a GST invoice for a credit pack and email it to the customer."""
+    auth.require_admin(session)
+    if not billing.configured():
+        raise HTTPException(503, 'Razorpay is not configured on this deployment')
+    try:
+        return billing.raise_invoice(workspace_id, credits_count)
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+
+
+@app.get('/api/invoices')
+def list_invoices(session: dict = Depends(auth.current_session)):
+    workspace_id = auth.current_workspace(session)
+    return [
+        {'id': row['razorpay_invoice_id'], 'credits': row['credits'],
+         'amount': row['amount_paise'] / 100, 'status': row['status'],
+         'url': row['short_url'], 'issued_at': row['issued_at'].isoformat(),
+         'paid_at': row['paid_at'].isoformat() if row['paid_at'] else None}
+        for row in billing.invoices_for(workspace_id)
+    ]
 
 
 @app.get('/media/{path:path}')
