@@ -77,6 +77,35 @@ The generated password is printed once and is not recoverable.
 - **`credits.reconcile()`** compares the ledger sum against the newest row's
   `balance_after`. If those ever disagree, something is wrong that day, not at audit.
 
+### Pricing
+
+**₹35 per credit, ex-GST.** A shoot is ₹105, a reshoot or retouch ₹35. Derived in
+`billing.py`, not guessed — there are self-checks that fail if the price stops clearing
+cost, so a fal price rise or a rupee move cannot quietly put you underwater.
+
+| | per credit |
+|---|---|
+| fal generation @2K | $0.1500 |
+| Anthropic detection (⅓ of a shoot) | $0.0008 |
+| S3 + App Runner CPU | $0.0007 |
+| forex markup 3% | $0.0045 |
+| **marginal** | **₹14.94** |
+
+Plus ~₹2,283/month fixed (App Runner memory, RDS, Secrets Manager). AWS currently bills
+**$0** because account credits absorb it; that is costed in anyway, because it comes back.
+
+Contribution is ₹19.23 per credit after the Razorpay fee, so:
+
+| shoots/mo | revenue | profit | net |
+|---:|---:|---:|---:|
+| 25 | ₹2,625 | −₹840 | −32% |
+| **40** | ₹4,200 | ₹0 | **break-even** |
+| 100 | ₹10,500 | ₹3,487 | 33% |
+| 200 | ₹21,000 | ₹9,257 | 44% |
+
+**Below ~40 shoots a month this loses money**, because the fixed base does not care how
+little you use it. That is the number to watch on a single-client deployment.
+
 ### Infrastructure
 
 | | |

@@ -561,6 +561,7 @@ def get_billing(session: dict = Depends(auth.current_session)):
     return {
         'balance': credits.balance(workspace_id),
         'costs': credits.COST,
+        'rupees_per_credit': billing.RUPEES_PER_CREDIT,
         'ledger': [
             {'kind': row['kind'], 'delta': row['delta'],
              'balance_after': row['balance_after'], 'note': row['note'],

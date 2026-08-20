@@ -28,9 +28,30 @@ import os
 import credits
 import db
 
-# Rupees per credit. One credit is one generated image. Set here rather than per-invoice
-# so a price is never accidentally taken from the browser.
-RUPEES_PER_CREDIT = 40
+# --- what a credit costs, and what it sells for -----------------------------------
+#
+# One credit is one generated image. Set here rather than per-invoice so a price can
+# never be taken from the browser.
+#
+# Derived rather than guessed, from measured numbers (2026-08-20, USD/INR 95.75):
+#
+#   fal nano-banana-pro/edit @2K          $0.150000   published rate
+#   Anthropic detection, 1/3 of a shoot   $0.000821   measured 2299 in + 33 out, haiku
+#   S3 storage 30 days + PUT              $0.000127   ~5MB PNG
+#   App Runner active CPU                 $0.000567   ~1 min at 0.5 vCPU
+#   forex markup on USD billing 3%        $0.004545
+#                                         ---------
+#   marginal                              $0.156061 = Rs 14.94
+#
+# Plus Rs 2,283/month of fixed cost (App Runner memory, RDS, Secrets Manager) which is
+# pure volume arithmetic. At the planning figure of 100 shoots a month — 300 credits —
+# that is Rs 7.84 a credit, so all-in cost is Rs 22.78. Priced at cost + 50%, grossed up
+# for the Razorpay fee, that is Rs 35.
+#
+# NOTE: AWS is currently billing $0 because account credits absorb it. The Rs 2,283
+# appears when those run out, so it is costed in deliberately rather than ignored.
+MARGINAL_COST_RUPEES = 14.94        # per credit, excludes fixed monthly costs
+RUPEES_PER_CREDIT = 35              # ex-GST. 18% GST is added on the invoice.
 
 # The only event that may add credits. See the module docstring.
 CREDITING_EVENT = 'invoice.paid'
@@ -218,6 +239,22 @@ def demo() -> None:
 
     assert price_paise(10) == 10 * RUPEES_PER_CREDIT * 100
     assert isinstance(price_paise(3), int)
+
+    # The price has to clear the marginal cost with room to spare. This is the check
+    # that fires if fal raises its rate or the rupee moves and nobody re-does the maths
+    # — otherwise the first anyone hears of selling below cost is the bank balance.
+    assert RUPEES_PER_CREDIT > MARGINAL_COST_RUPEES * 1.5, (
+        f'Rs {RUPEES_PER_CREDIT}/credit does not clear Rs {MARGINAL_COST_RUPEES} '
+        f'marginal cost by 50% — re-derive the price')
+    # And it must cover the fixed base at the volume it was priced for.
+    FIXED_RUPEES_MONTH, PLANNED_CREDITS_MONTH = 2283, 300
+    all_in = MARGINAL_COST_RUPEES + FIXED_RUPEES_MONTH / PLANNED_CREDITS_MONTH
+    assert RUPEES_PER_CREDIT >= all_in * 1.5 * 0.98, (
+        f'Rs {RUPEES_PER_CREDIT} is under cost+50% (Rs {all_in * 1.5:.2f}) at '
+        f'{PLANNED_CREDITS_MONTH} credits/month')
+    # Break-even volume, for the record: below this the fixed base eats the margin.
+    breakeven = FIXED_RUPEES_MONTH / (RUPEES_PER_CREDIT / 1.5 - MARGINAL_COST_RUPEES)
+    assert breakeven < PLANNED_CREDITS_MONTH, breakeven
 
     if os.environ.get('DATABASE_URL'):
         import uuid

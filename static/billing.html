@@ -25,7 +25,8 @@
 </header>
 <main>
 <h1 class="page">Billing</h1>
-<p class="lede">One credit is one generated image. A shoot is 3, a reshoot is 1, a retouch is 1.</p>
+<p class="lede">One credit is one generated image. A shoot is 3, a reshoot is 1, a retouch is 1.
+  <span id="rate"></span></p>
 <div id="error" class="error hidden"></div>
 
 <div class="card-box" style="margin-bottom:32px">
@@ -62,6 +63,9 @@ const KINDS = {
   session.balance = data.balance;
   renderAccount();
   $('balance').textContent = `${data.balance} credit${data.balance === 1 ? '' : 's'}`;
+  if (data.rupees_per_credit) {
+    $('rate').textContent = `\u20b9${data.rupees_per_credit} per credit, plus GST.`;
+  }
   if (data.balance <= 0) $('balance').style.color = 'var(--error)';
 
   // Invoices: unpaid ones carry their payment link, so a customer can settle from here.
