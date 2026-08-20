@@ -335,10 +335,26 @@ def save_upload(upload: UploadFile, path: pathlib.Path) -> None:
 
 
 def piece_path(piece_id: str) -> pathlib.Path:
+    """The client's own photograph, on local disk, fetching it back if it is not.
+
+    Local disk is a cache and nothing more. It is ephemeral on App Runner, so a piece
+    uploaded before the last deploy has gone from it while the job row that points at
+    the piece has not — which is what made reshooting anything older than the most
+    recent deploy answer 410 forever.
+    """
     matches = sorted(UPLOADS.glob(f'{piece_id}.*'))
-    if not matches:
+    if matches:
+        return matches[0]
+
+    key = storage.find(f'uploads/{piece_id}.')
+    if not key:
         raise HTTPException(410, 'that upload is no longer available — upload it again')
-    return matches[0]
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    try:
+        return storage.fetch(key, UPLOADS / pathlib.Path(key).name)
+    except Exception as error:                      # noqa: BLE001 - S3 is not our caller
+        log.warning('could not fetch %s: %r', key, error)
+        raise HTTPException(410, 'that upload could not be retrieved — upload it again')
 
 
 @app.post('/api/pieces')
@@ -355,6 +371,10 @@ async def create_piece(upload: UploadFile,
     suffix = pathlib.Path(upload.filename or 'upload.jpg').suffix or '.jpg'
     path = UPLOADS / f'{piece_id}{suffix}'
     save_upload(upload, path)
+    # To S3 before anything else touches it. This file is the one thing in the system
+    # the customer cannot regenerate — every image we make is derived from it, and a
+    # redeploy takes the container's disk with it.
+    storage.put(path, f'uploads/{piece_id}{suffix}')
 
     piece = product.identify(path)
     # detected is returned, not just logged: a shoot built on the fallback is a shoot
@@ -486,6 +506,8 @@ async def create_retouch(
     suffix = pathlib.Path(upload.filename or 'upload.jpg').suffix or '.jpg'
     path = UPLOADS / f'{piece}{suffix}'
     save_upload(upload, path)
+    # Same reason as the shoot path: the source photograph outlives this container.
+    storage.put(path, f'uploads/{piece}{suffix}')
 
     cost = credits.COST['retouch']
     params = {'mode': mode, 'background': background,

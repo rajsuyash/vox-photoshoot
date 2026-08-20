@@ -60,6 +60,47 @@ def put(path, key: str) -> str:
     return key
 
 
+def find(prefix: str) -> str | None:
+    """The first key under a prefix, or None. The S3 answer to a glob.
+
+    Used to recover an upload whose extension we no longer know, which is what the
+    local-disk glob in piece_path did before uploads outlived the container.
+    """
+    target = bucket()
+    if not target:
+        matches = sorted(LOCAL_ROOT.glob(f'{prefix}*'))
+        return matches[0].relative_to(LOCAL_ROOT).as_posix() if matches else None
+
+    page = _client().list_objects_v2(Bucket=target, Prefix=prefix, MaxKeys=1)
+    contents = page.get('Contents') or []
+    return contents[0]['Key'] if contents else None
+
+
+def fetch(key: str, destination) -> pathlib.Path:
+    """Bring an object back to local disk so a provider call can read it.
+
+    App Runner's disk is ephemeral, so a piece uploaded before the last deploy is not
+    here any more even though the customer's job row still points at it. Without this a
+    reshoot of last week's bangle answers 410 forever.
+    """
+    destination = pathlib.Path(destination)
+    if destination.exists():
+        return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    target = bucket()
+    if not target:
+        source = LOCAL_ROOT / key
+        if not source.exists():
+            raise FileNotFoundError(key)
+        if source.resolve() != destination.resolve():
+            destination.write_bytes(source.read_bytes())
+        return destination
+
+    _client().download_file(target, key, str(destination))
+    return destination
+
+
 def presign(key: str) -> str:
     """A URL the browser can fetch right now. Call this at read time, not at write time."""
     target = bucket()
@@ -89,6 +130,24 @@ def demo() -> None:
         served = LOCAL_ROOT / key
         assert served.read_bytes() == b'not really a png', 'put() did not place the file'
         assert presign(key) == '/media/out/shoots/job1/hero-1.png'
+
+        # find() is the S3 answer to a glob, and is how an upload is recovered when the
+        # extension is not known — the case piece_path hits after a redeploy.
+        put(served, 'uploads/abc123.png')
+        assert find('uploads/abc123.') == 'uploads/abc123.png'
+        assert find('uploads/nothing-here.') is None
+
+        # fetch() must bring it back to a path that does not exist yet. Before this,
+        # a reshoot of anything older than the last deploy answered 410 forever.
+        gone = LOCAL_ROOT / 'cache' / 'abc123.png'
+        gone.unlink(missing_ok=True)
+        assert fetch('uploads/abc123.png', gone).read_bytes() == b'not really a png'
+        # And must be a no-op when the file is already local, not a re-download.
+        gone.write_bytes(b'already here')
+        assert fetch('uploads/abc123.png', gone).read_bytes() == b'already here'
+
+        gone.unlink()
+        (LOCAL_ROOT / 'uploads' / 'abc123.png').unlink()
         served.unlink()
         source.unlink()
     finally:
