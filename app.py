@@ -20,10 +20,12 @@ from fastapi import (BackgroundTasks, Depends, FastAPI, Form, HTTPException, Req
                      Response, UploadFile)
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 
 import admin
 import auth
 import billing
+import branding
 import credits
 import db
 import jobs
@@ -315,7 +317,8 @@ def list_categories(session: dict = Depends(auth.current_session)):
     return [category_spec(c) for c in product.CATEGORIES.values()]
 
 
-def save_upload(upload: UploadFile, path: pathlib.Path) -> None:
+def save_upload(upload: UploadFile, path: pathlib.Path,
+                limit: int = MAX_UPLOAD_BYTES) -> None:
     """Stream an upload to disk, refusing anything over the cap.
 
     Checked while copying, not after: a straight copy would happily write the whole 2GB
@@ -325,11 +328,11 @@ def save_upload(upload: UploadFile, path: pathlib.Path) -> None:
     with path.open('wb') as handle:
         while chunk := upload.file.read(1024 * 1024):
             written += len(chunk)
-            if written > MAX_UPLOAD_BYTES:
+            if written > limit:
                 handle.close()
                 path.unlink(missing_ok=True)
                 raise HTTPException(
-                    413, f'that photo is over {MAX_UPLOAD_BYTES // (1024 * 1024)}MB — '
+                    413, f'that file is over {limit // (1024 * 1024)}MB — '
                          f'please upload a smaller one')
             handle.write(chunk)
 
@@ -685,6 +688,130 @@ def get_shoot(job_id: str, session: dict = Depends(auth.current_session)):
 # enough: the container also holds every .py file, so /media/locations.py handed out
 # the prompt system — the actual IP — to anyone who asked.
 MEDIA_ROOTS = ('assets', 'out')
+
+
+MAX_LOGO_BYTES = 2 * 1024 * 1024
+
+
+@app.get('/api/brand')
+def get_brand(session: dict = Depends(auth.current_session)):
+    """The workspace's branding, for the settings page and the download toggle."""
+    workspace_id = auth.current_workspace(session)
+    row = db.query(
+        'SELECT brand_logo_key, brand_text, brand_position, brand_opacity '
+        'FROM workspaces WHERE id = %s', (workspace_id,), one=True) or {}
+    text = row.get('brand_text') or ''
+    return {
+        'text': text,
+        'position': row.get('brand_position') or branding.DEFAULT_POSITION,
+        'opacity': int(row.get('brand_opacity') or branding.DEFAULT_OPACITY),
+        'has_logo': bool(row.get('brand_logo_key')),
+        'logo_url': (storage.presign(row['brand_logo_key'])
+                     if row.get('brand_logo_key') else None),
+        'positions': list(branding.POSITIONS),
+        # Reported so the client finds out at typing time. Stamping a script the
+        # bundled fonts cannot draw puts identical boxes on an image they paid for.
+        'unsupported': branding.unsupported(text),
+        'configured': bool(row.get('brand_logo_key') or text),
+    }
+
+
+@app.post('/api/brand')
+async def set_brand(logo: UploadFile | None = None, text: str = Form(''),
+                    position: str = Form(branding.DEFAULT_POSITION),
+                    opacity: int = Form(branding.DEFAULT_OPACITY),
+                    remove_logo: str = Form(''),
+                    session: dict = Depends(auth.current_session)):
+    """Save branding. Only an owner may change how the workspace's images are marked."""
+    workspace_id = auth.current_workspace(session)
+    if position not in branding.POSITIONS:
+        raise HTTPException(400, 'unknown position')
+    opacity = max(10, min(100, int(opacity)))
+    text = text.strip()[:200]
+
+    key = None
+    if logo is not None and logo.filename:
+        UPLOADS.mkdir(parents=True, exist_ok=True)
+        suffix = pathlib.Path(logo.filename).suffix.lower()
+        if suffix not in ('.png', '.webp'):
+            # A JPEG cannot carry transparency, so a JPEG logo is a white rectangle
+            # stamped on a photograph. Refusing is kinder than delivering that.
+            raise HTTPException(400, 'the logo must be a PNG or WEBP with a '
+                                     'transparent background')
+        staged = UPLOADS / f'brand-{uuid.uuid4().hex[:12]}{suffix}'
+        save_upload(logo, staged, limit=MAX_LOGO_BYTES)
+        try:
+            with Image.open(staged) as check:
+                check.verify()
+        except Exception:
+            staged.unlink(missing_ok=True)
+            raise HTTPException(400, 'that file is not a readable image')
+        key = storage.put(staged, f'brand/{workspace_id}/{staged.name}')
+
+    sets = ['brand_text = %s', 'brand_position = %s', 'brand_opacity = %s']
+    args = [text or None, position, opacity]
+    if key:
+        sets.append('brand_logo_key = %s')
+        args.append(key)
+    elif remove_logo:
+        sets.append('brand_logo_key = NULL')
+    args.append(workspace_id)
+    db.query(f'UPDATE workspaces SET {", ".join(sets)} WHERE id = %s', tuple(args))
+
+    return get_brand(session)
+
+
+@app.get('/api/images/{job_id}/{framing}')
+def download_image(job_id: str, framing: str, branded: str = '',
+                   session: dict = Depends(auth.current_session)):
+    """One image, optionally stamped with the workspace's branding.
+
+    Branding is applied here rather than at generation, so the stored file stays the
+    clean master. A brand that rebrands, or needs an unbranded file for a magazine,
+    downloads it from the same original instead of paying to reshoot a catalogue.
+    """
+    workspace_id = auth.current_workspace(session)
+    job = jobs.get(job_id, workspace_id)
+    if job is None:
+        raise HTTPException(404, 'no such job')
+
+    image = next((i for i in job['images'] if i['framing'] == framing), None)
+    if image is None:
+        raise HTTPException(404, 'no such image')
+
+    name = download_name(job.get('sku'), framing, image['attempt'], image['s3_key'])
+
+    if not branded:
+        # Nothing to composite, so hand back a presigned URL and let S3 serve the bytes
+        # rather than paying to stream them through a 0.5 vCPU container.
+        return RedirectResponse(storage.presign(image['s3_key'], name), status_code=307)
+
+    brand = db.query(
+        'SELECT brand_logo_key, brand_text, brand_position, brand_opacity '
+        'FROM workspaces WHERE id = %s', (workspace_id,), one=True) or {}
+    if not (brand.get('brand_logo_key') or brand.get('brand_text')):
+        raise HTTPException(400, 'no branding set up for this workspace yet')
+
+    scratch = SHOOTS / 'brand-cache' / f'{uuid.uuid4().hex[:12]}.png'
+    original = storage.fetch(image['s3_key'], scratch)
+    logo_bytes = None
+    if brand.get('brand_logo_key'):
+        logo_file = storage.fetch(
+            brand['brand_logo_key'],
+            SHOOTS / 'brand-cache' / pathlib.Path(brand['brand_logo_key']).name)
+        logo_bytes = logo_file.read_bytes()
+
+    stamped = branding.apply(
+        original.read_bytes(), logo_bytes, brand.get('brand_text') or '',
+        brand.get('brand_position') or branding.DEFAULT_POSITION,
+        int(brand.get('brand_opacity') or branding.DEFAULT_OPACITY))
+    scratch.unlink(missing_ok=True)
+
+    stem = pathlib.Path(name).stem
+    return Response(
+        stamped, media_type='image/png',
+        headers={'Content-Disposition':
+                 f'attachment; filename="{storage.safe_name(stem)}-branded.png"'})
 
 
 @app.get('/api/billing')

@@ -65,7 +65,8 @@ function renderAccount() {
   const menu = document.createElement('div');
   menu.className = 'acct';
   menu.title = email;
-  const links = [['History', '/history.html'], ['Billing', '/billing.html']];
+  const links = [['History', '/history.html'], ['Branding', '/settings.html'],
+                 ['Billing', '/billing.html']];
   if (isAdmin) links.push(['Admin', '/admin.html']);
   links.forEach(([label, href]) => {
     if (location.pathname === href) return;

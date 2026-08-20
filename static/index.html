@@ -570,6 +570,9 @@ async function load() {
   await loadSession();
   await loadBalance();
   showWelcome();
+  // Decides whether the results gallery offers a branded download at all. Failing soft:
+  // a workspace with no branding is the normal case, not an error worth showing.
+  state.brand = await api('/api/brand').catch(() => null);
   const [models, places, categories, retouchOptions] = await Promise.all([
     fetch('/api/models').then((r) => r.json()),
     fetch('/api/locations').then((r) => r.json()),
@@ -779,12 +782,19 @@ async function poll(jobId) {
   // A retouch is one image and cannot be reshot — the reshoot endpoint only takes real
   // framings. It gets the more useful button instead: a cleaned photo is a better shoot
   // reference than the desk shot it came from.
+  // Branded downloads go through /api/images, which composites the workspace's logo on
+  // the way out. The stored file is never touched, so both versions stay available
+  // forever — and the link only appears once branding is actually set up.
+  const branded = state.brand && state.brand.configured;
   $('results').innerHTML = job.images.map(({ framing, url }) =>
     `<figure><img src="${url}" alt="${framing}">
       <figcaption><span>${titleCase(framing)}</span><span>
       <button class="link" data-${framing === 'retouch' ? 'shootable' : 'framing'}="${framing}">${
         framing === 'retouch' ? 'Shoot this' : 'Reshoot'}</button>
-      &nbsp;<a href="${url}" download>Download</a></span></figcaption></figure>`
+      &nbsp;<a href="${url}" download>Download</a>${branded
+        ? `&nbsp;<a href="/api/images/${jobId}/${encodeURIComponent(framing)}?branded=1"
+             title="With your logo and contact line">+&nbsp;logo</a>`
+        : ''}</span></figcaption></figure>`
   ).join('');
   document.querySelectorAll('#results button.link[data-framing]').forEach((button) => {
     button.addEventListener('click', () => reshoot(jobId, button.dataset.framing));

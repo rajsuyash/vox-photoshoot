@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Branding · Donna Photoshoot</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<style>
+  /* The logo sits on a chequerboard, because a white wordmark on a white card looks
+     like a broken upload. This is the only honest way to show transparency. */
+  .logo-well { width: 190px; height: 110px; border-radius: 10px; flex: none;
+    border: 1px solid var(--line); display: grid; place-items: center; padding: 10px;
+    background-color: #2a2a2e;
+    background-image:
+      linear-gradient(45deg, #1e1e22 25%, transparent 25%, transparent 75%, #1e1e22 75%),
+      linear-gradient(45deg, #1e1e22 25%, transparent 25%, transparent 75%, #1e1e22 75%);
+    background-size: 16px 16px; background-position: 0 0, 8px 8px; }
+  .logo-well img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .logo-well .none { color: var(--faint); font-size: 12px; }
+  .logo-row { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+
+  /* Where the branding lands, drawn rather than described — nine words of UI copy
+     cannot say "bottom right" as fast as a dot in the corner of a rectangle. */
+  .spots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    max-width: 260px; }
+  .spot { aspect-ratio: 4/3; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--raised); cursor: pointer; position: relative; padding: 0;
+    transition: border-color .2s, background .2s; }
+  .spot:hover { background: rgba(255,255,255,.07); }
+  .spot[aria-pressed="true"] { border-color: var(--copper);
+    box-shadow: 0 0 0 3px var(--copper-soft); }
+  .spot i { position: absolute; width: 26%; height: 12%; border-radius: 2px;
+    background: var(--muted); }
+  .spot[aria-pressed="true"] i { background: var(--copper); }
+  .spot.empty { visibility: hidden; cursor: default; }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
+      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
+      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
+    </svg>
+    <b>Donna</b>&nbsp;<span>Photoshoot</span>
+  </a>
+  <div class="account" id="account"></div>
+</header>
+<main>
+<h1 class="page">Branding</h1>
+<p class="lede">Optional. Stamp your logo and contact details onto images as you download
+  them — for WhatsApp catalogues and reseller shares. Your stored images always stay
+  clean, so you can download either version at any time.</p>
+
+<div id="error" class="error hidden"></div>
+<div id="saved" class="notice hidden">Saved.</div>
+
+<div class="card-box" style="margin-bottom:26px">
+  <div class="logo-row">
+    <div class="logo-well" id="logoWell"><span class="none">No logo</span></div>
+    <div style="flex:1; min-width:240px">
+      <div class="fields">
+        <label class="wide"><span class="lbl">Logo <em>PNG or WEBP with a transparent background</em></span>
+          <input id="logo" type="file" accept="image/png,image/webp">
+          <span class="hint">A JPEG cannot be transparent, so it would stamp a white box
+            onto the photograph. Up to 2MB.</span>
+        </label>
+      </div>
+      <button type="button" class="link-btn hidden" id="removeLogo"
+              style="background:none;border:0;padding:0;margin-top:10px;color:var(--error);font:inherit;font-size:13px;cursor:pointer;text-decoration:underline">
+        Remove logo
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card-box" style="margin-bottom:26px">
+  <div class="fields">
+    <label class="wide"><span class="lbl">Contact line <em>optional</em></span>
+      <input id="text" type="text" maxlength="200"
+             placeholder="Kalyan Jewellers · +91 98765 43210 · kalyan.com">
+      <span class="hint" id="textHint">Appears under the logo. English and Hindi are
+        supported.</span>
+    </label>
+  </div>
+</div>
+
+<div class="card-box" style="margin-bottom:26px">
+  <div style="display:flex;gap:40px;flex-wrap:wrap">
+    <div>
+      <span class="lbl" style="display:block;color:var(--muted);font-size:13px;margin-bottom:10px">Position</span>
+      <div class="spots" id="spots"></div>
+    </div>
+    <div style="flex:1;min-width:220px">
+      <span class="lbl" style="display:block;color:var(--muted);font-size:13px;margin-bottom:10px">
+        Strength <b id="opacityValue" style="color:var(--copper-light)"></b>
+      </span>
+      <input id="opacity" type="range" min="10" max="100" step="5" style="width:100%">
+      <p class="hint">Lower is subtler. Around 70% reads clearly without competing with
+        the jewellery.</p>
+    </div>
+  </div>
+</div>
+
+<button class="go" id="save" type="button">Save branding</button>
+</main>
+<script src="/app.js"></script>
+<script>
+
+// Matches branding.POSITIONS on the server; the empty cells are spacers so the nine-cell
+// grid reads as a picture frame rather than a list.
+const LAYOUT = [
+  ['top-left', null, 'top-right'],
+  [null, null, null],
+  ['bottom-left', 'bottom-centre', 'bottom-right'],
+];
+const DOT = {
+  'top-left':      { top: '12%', left: '10%' },
+  'top-right':     { top: '12%', right: '10%' },
+  'bottom-left':   { bottom: '12%', left: '10%' },
+  'bottom-centre': { bottom: '12%', left: '37%' },
+  'bottom-right':  { bottom: '12%', right: '10%' },
+};
+
+let chosen = 'bottom-right';
+
+function drawSpots() {
+  const host = $('spots');
+  host.replaceChildren(...LAYOUT.flat().map((key) => {
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = 'spot' + (key ? '' : ' empty');
+    if (!key) return cell;
+    cell.setAttribute('aria-pressed', String(key === chosen));
+    cell.setAttribute('aria-label', key.replace('-', ' '));
+    const dot = document.createElement('i');
+    Object.assign(dot.style, DOT[key]);
+    cell.appendChild(dot);
+    cell.addEventListener('click', () => { chosen = key; drawSpots(); });
+    return cell;
+  }));
+}
+
+function showUnsupported(list) {
+  const hint = $('textHint');
+  if (list && list.length) {
+    // Named individually: "some characters are unsupported" sends someone hunting.
+    hint.textContent = `These characters cannot be printed and would appear as boxes: ${list.join(' ')}. `
+      + 'Only English and Hindi are supported — please write the rest in English.';
+    hint.style.color = 'var(--error)';
+  } else {
+    hint.textContent = 'Appears under the logo. English and Hindi are supported.';
+    hint.style.color = '';
+  }
+}
+
+function render(brand) {
+  $('text').value = brand.text || '';
+  chosen = brand.position || 'bottom-right';
+  $('opacity').value = brand.opacity;
+  $('opacityValue').textContent = `${brand.opacity}%`;
+  drawSpots();
+  showUnsupported(brand.unsupported);
+
+  const well = $('logoWell');
+  if (brand.logo_url) {
+    const img = document.createElement('img');
+    img.src = brand.logo_url;
+    img.alt = 'Your logo';
+    well.replaceChildren(img);
+    $('removeLogo').classList.remove('hidden');
+  } else {
+    well.innerHTML = '<span class="none">No logo</span>';
+    $('removeLogo').classList.add('hidden');
+  }
+}
+
+async function save(removeLogo = false) {
+  $('save').disabled = true;
+  $('save').textContent = 'Saving…';
+  $('error').classList.add('hidden');
+  $('saved').classList.add('hidden');
+  try {
+    const body = new FormData();
+    body.append('text', $('text').value.trim());
+    body.append('position', chosen);
+    body.append('opacity', $('opacity').value);
+    if (removeLogo) body.append('remove_logo', '1');
+    const file = $('logo').files[0];
+    if (file && !removeLogo) body.append('logo', file);
+
+    render(await api('/api/brand', { method: 'POST', body }));
+    $('logo').value = '';
+    $('saved').classList.remove('hidden');
+  } catch (error) {
+    $('error').textContent = String(error.message || error);
+    $('error').classList.remove('hidden');
+  } finally {
+    $('save').disabled = false;
+    $('save').textContent = 'Save branding';
+  }
+}
+
+(async () => {
+  await loadSession();
+  await loadBalance();
+  try {
+    render(await api('/api/brand'));
+  } catch (error) {
+    $('error').textContent = String(error.message || error);
+    $('error').classList.remove('hidden');
+    return;
+  }
+  $('opacity').addEventListener('input', () => {
+    $('opacityValue').textContent = `${$('opacity').value}%`;
+  });
+  // Local preview before saving, so a wrong file is obvious immediately.
+  $('logo').addEventListener('change', () => {
+    const file = $('logo').files[0];
+    if (!file) return;
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(file);
+    img.alt = 'Your logo';
+    $('logoWell').replaceChildren(img);
+  });
+  $('save').addEventListener('click', () => save());
+  $('removeLogo').addEventListener('click', () => save(true));
+})();
+
+</script>
+</body>
+</html>
