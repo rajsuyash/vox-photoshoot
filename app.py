@@ -116,7 +116,13 @@ def _issue_session(response, user_id: str, workspace_id: str | None) -> None:
 def google_start():
     """Send the browser to Google, remembering a state we can check on the way back."""
     if not oauth_google.configured():
-        raise HTTPException(503, 'Google sign-in is not configured on this deployment')
+        # Back to the login page, not a 503 body. This route is reached by clicking a
+        # link, so a raw JSON error is what the customer sees — and the password form
+        # right behind it still works.
+        return RedirectResponse(
+            '/login.html?error=' + quote('Google sign-in is not set up yet — '
+                                         'use your email and password'),
+            status_code=303)
 
     state = oauth_google.new_state()
     response = RedirectResponse(oauth_google.auth_url(state), status_code=303)
