@@ -29,6 +29,66 @@ Open http://localhost:8000.
 | `gallery.py` | one-time: location card thumbnails |
 | `docs/higgsfield-api.md` | endpoint reference, generated + live-verified |
 
+## Running it as a business
+
+Sales-led: there is no signup page. You provision a customer, they log in, they spend
+prepaid credits, and they get a GST invoice.
+
+**One credit is one generated image.** A shoot is 3, a reshoot is 1, a retouch is 1.
+Not a bundle — a partial shoot (two of three framings, which is normal) would otherwise
+need integer arithmetic on money and the answer is always slightly wrong. At 1:1 the
+refund is exact and the customer sentence is "you pay for images you receive".
+
+| file | role |
+|---|---|
+| `db.py` | Postgres pool and the migration runner |
+| `auth.py` | passwords, sessions, and who may spend a workspace's credits |
+| `jobs.py` | jobs, images, and recovering what a dead container left behind |
+| `credits.py` | the append-only ledger: reserve, settle, refund |
+| `billing.py` | Razorpay invoices and the webhook that credits on payment |
+| `admin.py` | provisioning, as a CLI and behind /admin.html |
+| `migrations/*.sql` | applied once each, in order, recorded in `schema_migrations` |
+
+### Onboarding a customer
+
+```bash
+# From the admin page, or from the terminal:
+.venv/bin/python admin.py workspace "Kalyan Jewellers" --gstin 32AABCK1234M1ZP \
+    --billing-email accounts@kalyan.com
+.venv/bin/python admin.py user priya@kalyan.com --workspace <id> --role owner
+.venv/bin/python admin.py grant <id> 100 --note "opening balance"
+```
+
+The generated password is printed once and is not recoverable.
+
+### Invariants worth not breaking
+
+- **Reserve and job creation are one transaction.** Job-then-crash gives away free work;
+  reserve-then-crash debits a customer for a job nothing will ever sweep, so the credits
+  vanish silently.
+- **Charge before the provider call.** Generate-then-debit is free work for anyone who
+  kills the connection.
+- **`UNIQUE (workspace_id, idempotency_key)`** is what makes a double-clicked Generate,
+  a retried settle, and a replayed Razorpay webhook all safe. Do not drop it.
+- **Every worker write is fenced** with `AND claimed_by = me`. Without it a stalled
+  container that resumes overwrites a job that was already failed and refunded.
+- **The orphan sweep runs from a request, not a timer.** App Runner throttles CPU
+  between requests, so a background loop is exactly what fails to run when needed.
+- **`credits.reconcile()`** compares the ledger sum against the newest row's
+  `balance_after`. If those ever disagree, something is wrong that day, not at audit.
+
+### Infrastructure
+
+| | |
+|---|---|
+| App Runner | 0.5 vCPU / 1 GB, **pinned to one instance** until jobs are fully multi-instance safe |
+| RDS | `db.t4g.micro`, public endpoint, TLS required |
+| Secrets | all four in Secrets Manager, pulled by the instance role at container start |
+| S3 | 30-day expiry on `shoots/` and `retouches/` |
+
+`./deploy.sh` builds an immutable `<sha>-<time>` tag, syncs `.env` into Secrets Manager,
+deploys, and verifies the live image is the one just built.
+
 ## Findings that shaped this (do not undo these)
 
 These were all established by testing against the live API. Each cost credits to learn.
