@@ -27,6 +27,19 @@ DEFAULTS = {'quality': 'high', 'aspect_ratio': '3:4'}
 SEEDS = {'hero': 101, 'profile': 202, 'detail': 303}
 
 
+def seed_for(framing: str, attempt: int = 1) -> int:
+    """Reproducible within an attempt, different across attempts.
+
+    Reproducibility and reshoot pull in opposite directions, and reproducibility used to
+    win by accident: reshoot passed the same model, location, description, options and
+    framing, so it got the same fixed seed and returned a byte-identical image. Free
+    when nobody was paying. Once a reshoot costs a credit, it is charging for nothing.
+
+    Attempt 1 of a given shoot is still always the same photograph.
+    """
+    return SEEDS[framing] + 1000 * (attempt - 1)
+
+
 def load_cast() -> dict:
     if not CAST_MANIFEST.exists():
         raise RuntimeError('no cast yet — run cast.py first')
@@ -35,7 +48,7 @@ def load_cast() -> dict:
 
 def build(product_urls: list[str], model_key: str, location_key: str,
           description: str, category, face_url: str | None = None,
-          framing: str = 'hero', options=None) -> tuple[str, dict]:
+          framing: str = 'hero', options=None, attempt: int = 1) -> tuple[str, dict]:
     """Return (prompt, arguments) without calling the API, so cost can be checked first.
 
     description and category both come from the uploaded photo (product.identify): what
@@ -66,28 +79,38 @@ def build(product_urls: list[str], model_key: str, location_key: str,
     return prompt, {
         'prompt': prompt,
         'image_urls': image_urls,
-        'seed': SEEDS[framing],
+        'seed': seed_for(framing, attempt),
         **DEFAULTS,
     }
 
 
 def shoot(product_paths, model_key: str, location_key: str, description: str,
-          category, framings=None, out_dir='out/shoots',
-          options=None) -> list[pathlib.Path]:
-    """Run one photoshoot: one generation per framing, saved locally.
+          category, framings=None, out_dir='out/shoots', options=None,
+          attempts=None, on_image=None) -> tuple[list[dict], list[tuple]]:
+    """Run one photoshoot: one generation per framing.
 
     This is the single entry point the web app calls.
+
+    attempts maps framing -> which go this is, so a reshoot gets a different seed and a
+    different filename from the image it replaces rather than overwriting it.
+
+    on_image is called with each image the moment it lands, before the next framing
+    starts. That is what makes a half-finished shoot worth something: the caller can
+    persist and charge per image, so a container that dies on framing three still owes
+    the customer nothing for the two they already have.
     """
     provider = providers.get()
     framings = list(framings or locations.FRAMINGS)
+    attempts = attempts or {}
     product_urls = [provider.upload(path) for path in product_paths]
     face_url = provider.upload(load_cast()[model_key]['file'])
 
     saved, failures = [], []
     for framing in framings:
+        attempt = attempts.get(framing, 1)
         _prompt, arguments = build(
             product_urls, model_key, location_key, description, category,
-            face_url, framing, options,
+            face_url, framing, options, attempt,
         )
         try:
             urls = provider.generate(**arguments)
@@ -100,9 +123,15 @@ def shoot(product_paths, model_key: str, location_key: str, description: str,
         if not urls:
             failures.append((framing, 'no images returned'))
             continue
-        saved += hf.download(
-            urls, out_dir, prefix=f'{model_key}-{location_key}-{framing}'
-        )
+
+        # The attempt is in the filename, so a reshoot cannot land on the key of the
+        # image it replaces. The customer paid for both and can compare them.
+        for path in hf.download(urls, out_dir, prefix=f'{framing}-{attempt}'):
+            image = {'framing': framing, 'attempt': attempt, 'path': path,
+                     'seed': arguments['seed']}
+            if on_image is not None:
+                on_image(image)
+            saved.append(image)
     return saved, failures
 
 
@@ -136,6 +165,24 @@ def demo() -> None:
     # Every framing this app can shoot must have a seed, or a reshoot silently reuses
     # another frame's seed and returns the same photograph.
     assert set(SEEDS) == set(locations.FRAMINGS), (sorted(SEEDS), locations.FRAMINGS)
+
+    # A reshoot must be a different photograph. This is the one that used to be a bug:
+    # same seed in, byte-identical image out, and the customer charged for it.
+    for name in locations.FRAMINGS:
+        seeds = {seed_for(name, attempt) for attempt in (1, 2, 3)}
+        assert len(seeds) == 3, f'{name} repeats a seed across attempts: {seeds}'
+    # ...while attempt 1 stays reproducible, which is why the seeds were fixed at all.
+    assert seed_for('hero', 1) == SEEDS['hero']
+    # No two framings may collide at any attempt, or a reshoot of one returns another.
+    everything = {seed_for(f, a) for f in locations.FRAMINGS for a in range(1, 6)}
+    assert len(everything) == len(locations.FRAMINGS) * 5, 'seed spaces overlap'
+
+    # build() must actually use the attempt, not just accept it.
+    _p, first = build(['u'], 'aditi', 'kyoto', description='p', category=earrings,
+                      framing='hero', attempt=1)
+    _p, second = build(['u'], 'aditi', 'kyoto', description='p', category=earrings,
+                       framing='hero', attempt=2)
+    assert first['seed'] != second['seed'], 'attempt does not reach the provider'
 
     # The category has to reach the provider arguments, not just the category presets.
     ring, _args = build(['u'], 'aditi', 'kyoto', description='a gold solitaire ring',

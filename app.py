@@ -9,7 +9,7 @@ Everything a photographer would decide is preset in locations.py.
 import dataclasses
 import json
 import pathlib
-import threading
+import time
 import uuid
 
 from fastapi import (BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request,
@@ -18,7 +18,9 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import auth
+import credits
 import db
+import jobs
 import locations
 import product
 import providers
@@ -73,17 +75,6 @@ async def require_login(request: Request, call_next):
         # Carry the original path so a deep link survives the detour through login.
         return RedirectResponse(f'/login.html?next={path}', status_code=303)
     return await call_next(request)
-
-# In-memory job store. Fine for a demo; on AWS this becomes a DynamoDB item keyed by
-# job id, and the worker becomes a Lambda triggered by the Higgsfield webhook.
-JOBS: dict[str, dict] = {}
-JOBS_LOCK = threading.Lock()
-
-
-def set_job(job_id: str, **fields) -> None:
-    with JOBS_LOCK:
-        JOBS.setdefault(job_id, {}).update(fields)
-
 
 @app.post('/api/auth/login')
 def login(response: Response, email: str = Form(...), password: str = Form(...)):
@@ -175,58 +166,49 @@ def list_locations(session: dict = Depends(auth.current_session)):
     ]
 
 
-def framing_of(path) -> str:
-    """'.../kavya-kerala-backwaters-hero-0.png' -> 'hero'.
+def run_shoot(job_id: str, shoot_id: str, product_path: pathlib.Path,
+              model_key: str, location_key: str, description: str, category,
+              framings=None, options=None) -> None:
+    """Generate, persisting each image the moment it lands.
 
-    Takes the FILE, never the URL: presigned S3 links carry a query string, so parsing
-    a framing back out of a URL is a trap.
+    shoot_id is the gallery this belongs to: for a reshoot it is the parent, so the new
+    frame joins the original set instead of starting a lonely one of its own.
     """
-    return pathlib.Path(path).stem.rsplit('-', 1)[0].rsplit('-', 1)[-1]
+    if not jobs.claim(job_id):
+        return          # another container already has it
 
+    framings = list(framings or locations.FRAMINGS)
+    # Which go this is at each framing. Drives the seed and the storage key, so a
+    # reshoot is a different photograph and cannot overwrite the one it replaces.
+    attempts = {name: jobs.next_attempt(shoot_id, name) for name in framings}
 
-def merge_images(existing: list[dict], fresh: list[dict]) -> list[dict]:
-    """A reshoot replaces only the framings it regenerated, keeping the rest."""
-    regenerated = {image['framing'] for image in fresh}
-    kept = [image for image in existing if image['framing'] not in regenerated]
-    order = list(locations.FRAMINGS)
-    return sorted(
-        kept + fresh,
-        key=lambda image: order.index(image['framing'])
-        if image['framing'] in order else len(order),
-    )
+    def persist(image):
+        key = f"shoots/{shoot_id}/{image['framing']}-{image['attempt']}.png"
+        jobs.add_image(job_id, shoot_id, image['framing'], image['attempt'],
+                       storage.put(image['path'], key), image['seed'])
+        # The heartbeat rides on real work, so it cannot tick while the job is wedged.
+        jobs.heartbeat(job_id)
 
-
-def run_shoot(job_id: str, product_path: pathlib.Path, model_key: str,
-              location_key: str, description: str, category, framings=None,
-              options=None) -> None:
     try:
-        saved, failures = shoot.shoot([product_path], model_key, location_key,
-                                      description, category, framings=framings,
-                                      out_dir=SHOOTS / job_id, options=options)
-        if not saved:
-            raise RuntimeError(
-                '; '.join(f'{framing}: {reason}' for framing, reason in failures)
-                or 'generation returned no images'
-            )
-        with JOBS_LOCK:
-            existing = list(JOBS.get(job_id, {}).get('images') or [])
-        # Copied off the container before anyone can lose them to a restart. The KEY is
-        # what gets stored — presigned URLs are minted at read time, because the
-        # credentials that sign them expire long before the client stops wanting the
-        # image. See storage.py.
-        fresh = [
-            {'framing': framing_of(path),
-             'key': storage.put(path, f'shoots/{job_id}/{path.name}')}
-            for path in saved
-        ]
-        set_job(job_id, status='completed', images=merge_images(existing, fresh),
-                # A partial shoot must say so — the UI offers a reshoot per frame.
-                warnings=[f'{framing} could not be generated ({reason})'
-                          for framing, reason in failures])
+        saved, failures = shoot.shoot(
+            [product_path], model_key, location_key, description, category,
+            framings=framings, out_dir=SHOOTS / job_id, options=options,
+            attempts=attempts, on_image=persist)
     except Exception as error:
-        # Surfaced to the UI rather than swallowed — a silent spinner is worse than a
-        # visible failure during a live client demo.
-        set_job(job_id, status='failed', error=str(error))
+        # Surfaced rather than swallowed — a silent spinner is worse than a visible
+        # failure during a live client demo.
+        credits.settle(job_id, delivered=jobs.image_count(job_id))
+        jobs.finish(job_id, 'failed', error=str(error))
+        return
+
+    delivered = len(saved)
+    credits.settle(job_id, delivered=delivered)
+    jobs.finish(job_id, 'succeeded' if delivered else 'failed',
+                failures=[[name, reason] for name, reason in failures],
+                error=None if delivered else '; '.join(
+                    f'{name}: {reason}' for name, reason in failures)
+                    or 'generation returned no images',
+                settled_credits=delivered)
 
 
 def category_spec(category) -> dict:
@@ -319,8 +301,13 @@ def create_shoot(
     finger: str = Form('ring'),
     hand: str = Form('right'),
     instructions: str = Form(''),
+    detected: str = Form('true'),
+    # Minted in the browser when the form is completed. Disabling the button is not a
+    # control: it does not survive a slow network, a second tab, or refresh-and-resubmit.
+    idempotency_key: str = Form(''),
     session: dict = Depends(auth.current_session),
 ):
+    workspace_id = auth.current_workspace(session)
     if model_key not in shoot.load_cast():
         raise HTTPException(400, f'unknown model {model_key}')
     if location_key not in locations.ALL:
@@ -329,6 +316,13 @@ def create_shoot(
         raise HTTPException(400, f'unknown category {category}')
     if not description.strip():
         raise HTTPException(400, 'the piece needs a description')
+    # product.identify never raises; it falls back to the client's earrings and says so.
+    # Free when nobody was paying. Now it would charge three credits for photographs of
+    # the wrong piece, so the shoot stops here instead.
+    if detected.lower() != 'true':
+        raise HTTPException(
+            422, 'we could not read that photo, so we cannot shoot it — please confirm '
+                 'what the piece is, or upload a clearer picture')
 
     product_path = piece_path(piece_id)
     chosen = product.CATEGORIES[category]
@@ -336,29 +330,49 @@ def create_shoot(
     # a finger on a necklace falls back to the default instead of 400ing a paid shoot.
     options = product.Options(size=size, type=type, finger=finger, hand=hand,
                               instructions=instructions.strip())
+    params = {'model': model_key, 'location': location_key, 'category': category,
+              'description': description.strip(),
+              'options': dataclasses.asdict(options)}
 
-    job_id = uuid.uuid4().hex[:12]
-    set_job(job_id, status='running', images=[], error=None,
-            model=model_key, location=location_key, piece=piece_id,
-            category=category, description=description.strip(), options=options)
-    background.add_task(run_shoot, job_id, product_path, model_key, location_key,
-                        description.strip(), chosen, None, options)
+    cost = credits.COST['shoot']
+    try:
+        # One transaction: the job and the credits it reserved commit together, or
+        # neither does. Either half alone is a way to lose money silently.
+        with db.tx() as conn:
+            job = jobs.create(workspace_id, session['user_id'], 'shoot',
+                              idempotency_key or f'shoot:{uuid.uuid4()}', params,
+                              piece_id=piece_id, reserved_credits=cost, conn=conn)
+            if job['created']:
+                credits.reserve(conn, workspace_id, str(job['id']), cost)
+    except credits.Insufficient as short:
+        raise HTTPException(402, f'not enough credits — {short}')
+
+    job_id = str(job['id'])
+    if job['created']:
+        background.add_task(run_shoot, job_id, job_id, product_path, model_key,
+                            location_key, description.strip(), chosen, None, options)
     return {'job_id': job_id, 'status': 'running',
-            'expected': len(locations.FRAMINGS)}
+            'expected': cost, 'balance': credits.balance(workspace_id)}
 
 
 def run_retouch(job_id: str, path: pathlib.Path, **options) -> None:
+    if not jobs.claim(job_id):
+        return
     try:
         saved = retouch.run(path, out_dir=RETOUCHES / job_id, **options)
-        set_job(job_id, status='completed', warnings=[], images=[
+        for index, image in enumerate(saved, start=1):
+            key = f'retouches/{job_id}/{image.name}'
             # 'retouch' rather than a framing name: it is one image, and the reshoot
             # endpoint only accepts real framings, so this cannot be re-rolled there.
-            {'framing': 'retouch',
-             'key': storage.put(image, f'retouches/{job_id}/{image.name}')}
-            for image in saved
-        ])
+            jobs.add_image(job_id, job_id, 'retouch', index,
+                           storage.put(image, key), None)
+        credits.settle(job_id, delivered=len(saved))
+        jobs.finish(job_id, 'succeeded' if saved else 'failed',
+                    error=None if saved else 'retouch returned no image',
+                    settled_credits=len(saved))
     except Exception as error:
-        set_job(job_id, status='failed', error=str(error))
+        credits.settle(job_id, delivered=jobs.image_count(job_id))
+        jobs.finish(job_id, 'failed', error=str(error))
 
 
 @app.get('/api/retouch-options')
@@ -378,38 +392,56 @@ async def create_retouch(
     retouch_stones: bool = Form(False),
     background: str = Form(retouch.DEFAULT_BACKGROUND),
     instructions: str = Form(''),
+    idempotency_key: str = Form(''),
     session: dict = Depends(auth.current_session),
 ):
+    workspace_id = auth.current_workspace(session)
     if mode not in retouch.MODES:
         raise HTTPException(400, f'unknown mode {mode}')
     if background not in retouch.BACKGROUNDS:
         raise HTTPException(400, f'unknown background {background}')
 
-    job_id = uuid.uuid4().hex[:12]
+    piece = uuid.uuid4().hex[:12]
     UPLOADS.mkdir(parents=True, exist_ok=True)
     suffix = pathlib.Path(upload.filename or 'upload.jpg').suffix or '.jpg'
-    path = UPLOADS / f'{job_id}{suffix}'
+    path = UPLOADS / f'{piece}{suffix}'
     save_upload(upload, path)
 
-    set_job(job_id, status='running', images=[], error=None, kind='retouch', mode=mode)
-    background_tasks.add_task(run_retouch, job_id, path, mode=mode,
-                              retouch_stones=retouch_stones, background=background,
-                              instructions=instructions.strip())
-    return {'job_id': job_id, 'status': 'running', 'expected': 1}
+    cost = credits.COST['retouch']
+    params = {'mode': mode, 'background': background,
+              'retouch_stones': retouch_stones, 'instructions': instructions.strip()}
+    try:
+        with db.tx() as conn:
+            job = jobs.create(workspace_id, session['user_id'], 'retouch',
+                              idempotency_key or f'retouch:{uuid.uuid4()}', params,
+                              piece_id=piece, reserved_credits=cost, conn=conn)
+            if job['created']:
+                credits.reserve(conn, workspace_id, str(job['id']), cost)
+    except credits.Insufficient as short:
+        raise HTTPException(402, f'not enough credits — {short}')
+
+    job_id = str(job['id'])
+    if job['created']:
+        background_tasks.add_task(run_retouch, job_id, path, mode=mode,
+                                  retouch_stones=retouch_stones, background=background,
+                                  instructions=instructions.strip())
+    return {'job_id': job_id, 'status': 'running', 'expected': cost,
+            'balance': credits.balance(workspace_id)}
 
 
 @app.post('/api/shoots/{job_id}/reshoot')
 def reshoot(job_id: str, background: BackgroundTasks, framing: str,
+            idempotency_key: str = '',
             session: dict = Depends(auth.current_session)):
-    """Regenerate a single frame.
+    """Regenerate a single frame as a job of its own.
 
-    Identity does not hold perfectly across framings, and the model occasionally invents
-    a necklace or nose stud. Rather than pretend otherwise, let the user rerun the one
-    bad frame for about 1.5 credits instead of discarding the whole shoot.
+    Its own row, pointing at the shoot via parent_job_id. Previously a reshoot wrote its
+    status onto the parent, so one framing rejected by content moderation made a
+    customer's three good images read "generation failed".
     """
-    with JOBS_LOCK:
-        job = JOBS.get(job_id)
-    if job is None:
+    workspace_id = auth.current_workspace(session)
+    parent = jobs.get(job_id, workspace_id)
+    if parent is None:
         raise HTTPException(404, 'no such shoot')
     if framing not in locations.FRAMINGS:
         raise HTTPException(400, f'unknown framing {framing}')
@@ -417,40 +449,106 @@ def reshoot(job_id: str, background: BackgroundTasks, framing: str,
     # Reuse everything the original shoot was built from — the detected piece and the
     # client's own size and placement choices. A reshoot that changes any of that is
     # not a reshoot, it is a different photograph.
-    category = product.CATEGORIES.get(job.get('category'), product.DEFAULT_CATEGORY)
-    description = job.get('description') or product.DEFAULT_PRODUCT
-    options = job.get('options') or product.Options()
+    params = parent['params'] or {}
+    category = product.CATEGORIES.get(params.get('category'), product.DEFAULT_CATEGORY)
+    description = params.get('description') or product.DEFAULT_PRODUCT
+    options = product.Options(**(params.get('options') or {}))
+    product_path = piece_path(parent['piece_id'])
 
-    set_job(job_id, status='running', error=None)
-    background.add_task(run_shoot, job_id, piece_path(job['piece']), job['model'],
-                        job['location'], description, category, [framing], options)
-    return {'job_id': job_id, 'status': 'running', 'framing': framing}
+    cost = credits.COST['reshoot']
+    try:
+        with db.tx() as conn:
+            job = jobs.create(workspace_id, session['user_id'], 'reshoot',
+                              idempotency_key or f'reshoot:{uuid.uuid4()}',
+                              {**params, 'framing': framing},
+                              piece_id=parent['piece_id'], reserved_credits=cost,
+                              parent_job_id=job_id, conn=conn)
+            if job['created']:
+                credits.reserve(conn, workspace_id, str(job['id']), cost)
+    except credits.Insufficient as short:
+        raise HTTPException(402, f'not enough credits — {short}')
+
+    if job['created']:
+        background.add_task(run_shoot, str(job['id']), job_id, product_path,
+                            params.get('model'), params.get('location'), description,
+                            category, [framing], options)
+    return {'job_id': job_id, 'reshoot_id': str(job['id']), 'status': 'running',
+            'framing': framing, 'balance': credits.balance(workspace_id)}
+
+
+# The orphan sweep runs from here rather than a timer: App Runner throttles CPU between
+# requests, so a background loop is exactly what fails to run when it is needed. The
+# frontend polls this every 3 seconds while anything is in flight.
+_last_sweep = 0.0
+SWEEP_EVERY = 30.0
+
+
+def sweep_if_due() -> None:
+    global _last_sweep
+    if time.monotonic() - _last_sweep < SWEEP_EVERY:
+        return
+    _last_sweep = time.monotonic()
+    for orphan in jobs.sweep():
+        # Refund what was reserved minus what actually landed. Exact, because images are
+        # persisted as each one arrives rather than in a batch at the end.
+        credits.settle(str(orphan['id']), delivered=int(orphan['delivered']))
+
+
+@app.get('/api/credits')
+def get_credits(session: dict = Depends(auth.current_session)):
+    workspace_id = auth.current_workspace(session)
+    return {'balance': credits.balance(workspace_id), 'costs': credits.COST}
+
+
+@app.get('/api/history')
+def get_history(session: dict = Depends(auth.current_session)):
+    workspace_id = auth.current_workspace(session)
+    return [
+        {'job_id': str(row['id']), 'kind': row['kind'], 'status': row['status'],
+         'images': int(row['images']), 'params': row['params'],
+         'created_at': row['created_at'].isoformat()}
+        for row in jobs.history(workspace_id)
+    ]
 
 
 @app.get('/api/shoots/{job_id}')
 def get_shoot(job_id: str, session: dict = Depends(auth.current_session)):
-    with JOBS_LOCK:
-        job = JOBS.get(job_id)
+    workspace_id = auth.current_workspace(session)
+    sweep_if_due()
+    job = jobs.get(job_id, workspace_id)
     if job is None:
         raise HTTPException(404, 'no such shoot')
-    # The job holds a product.Options so a reshoot can reuse it; JSON cannot. Sent as a
-    # plain dict rather than dropped, because it is what the shoot was actually built
-    # from and the client should be able to see it.
-    options = job.get('options')
+
+    # A shoot is finished when it and every reshoot hanging off it are finished — the
+    # spinner has to keep turning while a reshoot is still running.
+    children = db.query(
+        "SELECT status, error FROM jobs WHERE parent_job_id = %s ORDER BY created_at",
+        (job_id,))
+    running = (job['status'] in ('queued', 'running')
+               or any(c['status'] in ('queued', 'running') for c in children))
+    status = 'running' if running else ('completed' if job['images'] else 'failed')
+
     return JSONResponse({
-        'job_id': job_id, **job,
-        'options': dataclasses.asdict(options) if options else None,
+        'job_id': job_id,
+        'status': status,
+        'kind': job['kind'],
+        'error': job['error'] or next((c['error'] for c in children if c['error']), None),
+        # A partial shoot must say so — the UI offers a reshoot per frame.
+        'warnings': [f'{name} could not be generated ({reason})'
+                     for name, reason in (job['failures'] or [])],
+        'options': (job['params'] or {}).get('options'),
         # Minted here, on every read, from the stored key. The client never sees a key
         # and never holds a URL long enough for it to go stale.
-        'images': [{'framing': image['framing'], 'url': storage.presign(image['key'])}
-                   for image in job.get('images') or []],
+        'images': [{'framing': image['framing'], 'attempt': image['attempt'],
+                    'url': storage.presign(image['s3_key'])}
+                   for image in job['images']],
+        'balance': credits.balance(workspace_id),
     })
 
 
 # The only two trees /media may serve. Confining to the project directory was not
 # enough: the container also holds every .py file, so /media/locations.py handed out
-# the prompt system — the actual IP — to anyone who asked, and /media/.env would have
-# handed out the API keys had .dockerignore not excluded it.
+# the prompt system — the actual IP — to anyone who asked.
 MEDIA_ROOTS = ('assets', 'out')
 
 

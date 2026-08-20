@@ -604,18 +604,22 @@ async function load() {
 }
 
 function refresh() {
+  // A shoot costs credits; without them the button is a promise we cannot keep.
+  const broke = session.balance !== undefined && session.balance !== null
+                && session.balance <= 0;
   if (state.tool === 'retouch') {
-    const ready = Boolean(state.retouchFile);
+    const ready = Boolean(state.retouchFile) && !broke;
     state.expected = 1;
     $('go').disabled = !ready;
     $('go').textContent = 'Retouch photo';
-    $('summary').innerHTML = ready
-      ? 'photo ready &middot; <b>1 image</b>'
-      : 'Upload a photo to clean up';
+    $('summary').innerHTML = broke
+      ? 'Out of credits &middot; <a href="/billing.html">top up</a> to keep going'
+      : (ready ? 'photo ready &middot; <b>1 credit</b>'
+               : 'Upload a photo to clean up');
     return;
   }
   // The piece has to have been read before a shoot can be built from it.
-  const ready = state.piece && state.model && state.location;
+  const ready = state.piece && state.model && state.location && !broke;
   state.expected = 3;
   $('go').disabled = !ready;
   $('go').textContent = 'Generate shoot';
@@ -624,13 +628,17 @@ function refresh() {
   if (state.piece) bits.push(`<b>${titleCase(state.piece.category)}</b>`);
   if (state.model) bits.push(`model <b>${titleCase(state.model)}</b>`);
   if (state.location) bits.push('location set');
-  $('summary').innerHTML = ready
-    ? `${bits.join(' &middot; ')} &middot; <b>${state.expected} images</b>`
-    : (bits.join(' &middot; ') || 'Upload a product to begin');
+  $('summary').innerHTML = broke
+    ? 'Out of credits &middot; <a href="/billing.html">top up</a> to keep going'
+    : (ready ? `${bits.join(' &middot; ')} &middot; <b>${state.expected} credits</b>`
+             : (bits.join(' &middot; ') || 'Upload a product to begin'));
 }
 
 $('go').addEventListener('click', async () => {
   $('go').disabled = true;
+  // Minted here and reused across retries: disabling the button is not a control, it
+  // does not survive a slow network, a second tab, or refresh-and-resubmit.
+  state.idem = state.idem || crypto.randomUUID();
   $('out').classList.remove('hidden');
   $('error').classList.add('hidden');
   $('detected').classList.add('hidden');
@@ -651,6 +659,7 @@ $('go').addEventListener('click', async () => {
     body.append('background', $('rBackground').value);
     body.append('retouch_stones', String(state.stones));
     body.append('instructions', $('rInstructions').value);
+    body.append('idempotency_key', state.idem);
     $('detected').replaceChildren(document.createTextNode(
       `${$('rMode').value} · stones ${state.stones ? 'polished' : 'kept true'}`));
     $('detected').classList.remove('hidden');
@@ -660,8 +669,14 @@ $('go').addEventListener('click', async () => {
           if (!r.ok) throw new Error((await r.json()).detail || `failed (${r.status})`);
           return r.json();
         });
+      state.idem = null;
+      if (started.balance !== undefined) {
+        session.balance = started.balance;
+        renderAccount();
+      }
       poll(started.job_id);
     } catch (error) {
+      state.idem = null;
       fail(String(error));
     }
     return;
@@ -679,6 +694,8 @@ $('go').addEventListener('click', async () => {
   body.append('finger', $('pieceFinger').value);
   body.append('hand', $('pieceHand').value);
   body.append('instructions', $('pieceInstructions').value);
+  body.append('detected', String(state.piece.detected !== false));
+  body.append('idempotency_key', state.idem);
 
   // Echo back what this shoot was actually built from, so a wrong image is traceable
   // to a wrong input rather than being a mystery.
@@ -703,8 +720,14 @@ $('go').addEventListener('click', async () => {
         return r.json();
       });
     state.expected = started.expected || state.expected;
+    state.idem = null;
+    if (started.balance !== undefined) {
+      session.balance = started.balance;
+      renderAccount();
+    }
     poll(started.job_id);
   } catch (error) {
+    state.idem = null;
     fail(String(error));
   }
 });
@@ -718,7 +741,8 @@ function fail(message) {
 }
 
 async function poll(jobId) {
-  const job = await fetch(`/api/shoots/${jobId}`).then((r) => r.json());
+  const job = await api(`/api/shoots/${jobId}`);
+  if (job.balance !== undefined) { session.balance = job.balance; renderAccount(); }
   if (job.status === 'running') return setTimeout(() => poll(jobId), 3000);
   if (job.status === 'failed') return fail(job.error || 'generation failed');
 
@@ -778,7 +802,11 @@ async function shootRetouched(button) {
 async function reshoot(jobId, framing) {
   $('outNote').textContent = `regenerating the ${framing} shot…`;
   $('go').disabled = true;
-  await fetch(`/api/shoots/${jobId}/reshoot?framing=${framing}`, { method: 'POST' });
+  try {
+    await api(`/api/shoots/${jobId}/reshoot?framing=${framing}`, { method: 'POST' });
+  } catch (error) {
+    return fail(String(error.message || error));
+  }
   poll(jobId);
 }
 

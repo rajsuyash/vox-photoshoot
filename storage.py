@@ -42,7 +42,15 @@ def put(path, key: str) -> str:
     path = pathlib.Path(path)
     target = bucket()
     if not target:
-        # Already on local disk at out/<key>; nothing to copy.
+        # Local mode has to honour the same contract S3 does: after put(), the bytes are
+        # readable at <key>. Assuming the file was already in the right place was wrong —
+        # hf.download names files with its own index suffix, and a reshoot writes into
+        # its own job directory, so out/<key> was frequently a path that did not exist
+        # and presign() handed back a dead link.
+        destination = LOCAL_ROOT / key
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.resolve() != path.resolve():
+            destination.write_bytes(path.read_bytes())
         return key
 
     content_type = 'image/png' if path.suffix.lower() == '.png' else 'image/jpeg'
@@ -70,10 +78,19 @@ def demo() -> None:
     try:
         assert bucket() is None
         # put() returns the key in both modes, so callers never branch on storage.
+        # The source name deliberately differs from the key: hf.download adds its own
+        # index suffix and a reshoot writes into its own directory, so local mode has to
+        # actually place the bytes rather than assume they are already there.
+        source = LOCAL_ROOT / 'selfcheck' / 'hero-1-0.png'
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b'not really a png')
         key = 'shoots/job1/hero-1.png'
-        assert put('out/shoots/job1/hero-1.png', key) == key
-        # and out/<key> is where that file actually is on disk.
+        assert put(source, key) == key
+        served = LOCAL_ROOT / key
+        assert served.read_bytes() == b'not really a png', 'put() did not place the file'
         assert presign(key) == '/media/out/shoots/job1/hero-1.png'
+        served.unlink()
+        source.unlink()
     finally:
         if previous is not None:
             os.environ['S3_BUCKET'] = previous
