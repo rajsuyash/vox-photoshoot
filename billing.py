@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 
 import credits
 import db
@@ -70,6 +71,21 @@ GST_BASIS_POINTS = 1800             # 18%, as Razorpay wants it: hundredths of a
 # invoice; it is one constant.
 SAC_CODE = '998386'
 
+# What a customer can buy without talking to anyone. Keyed by name, never by amount:
+# /api/checkout takes a pack key and resolves the size here, so a client that posts
+# credits=99999 gets a KeyError rather than a discount.
+PACKS = {
+    'starter': 30,      # 10 shoots
+    'studio': 100,      # 33 shoots
+    'house': 300,       # 100 shoots — the volume the price was derived at
+}
+
+# How long a self-serve invoice stays payable. Short on purpose: an invoice-first
+# checkout is what buys the GST document, and the cost of that shape is an abandoned
+# cart leaving an issued invoice open. Expiry closes them without anyone doing it by
+# hand. Long enough that someone can go and find their UPI PIN.
+INVOICE_TTL_MINUTES = 30
+
 # The only event that may add credits. See the module docstring.
 CREDITING_EVENT = 'invoice.paid'
 
@@ -93,8 +109,14 @@ def price_paise(credits_count: int) -> int:
     return credits_count * RUPEES_PER_CREDIT * 100
 
 
-def raise_invoice(workspace_id: str, credits_count: int) -> dict:
-    """Create a GST invoice in Razorpay and email it to the workspace's billing address."""
+def raise_invoice(workspace_id: str, credits_count: int,
+                  expire_by: int | None = None) -> dict:
+    """Create a GST invoice in Razorpay and email it to the workspace's billing address.
+
+    An ISSUED invoice carries an order_id, which is what Checkout opens against — that
+    is what lets self-serve have both a modal and a tax invoice without hand-rolling
+    the document. Drafts have order_id NULL, so this must never create one.
+    """
     if credits_count <= 0:
         raise ValueError('an invoice needs at least one credit')
 
@@ -132,18 +154,23 @@ def raise_invoice(workspace_id: str, credits_count: int) -> dict:
         'notes': {'workspace_id': str(workspace_id), 'credits': str(credits_count)},
         'sms_notify': 1,
         'email_notify': 1,
+        # Unix seconds. Passed in rather than computed from a clock inside the payload
+        # so the caller decides how long the cart lives.
+        'expire_by': expire_by or int(time.time() + INVOICE_TTL_MINUTES * 60),
     })
 
     db.query(
-        """INSERT INTO invoices (workspace_id, razorpay_invoice_id, credits,
-                                 amount_paise, status, short_url)
-           VALUES (%s, %s, %s, %s, 'issued', %s)""",
-        (workspace_id, invoice['id'], credits_count, amount, invoice.get('short_url')))
+        """INSERT INTO invoices (workspace_id, razorpay_invoice_id, razorpay_order_id,
+                                 credits, amount_paise, status, short_url)
+           VALUES (%s, %s, %s, %s, %s, 'issued', %s)""",
+        (workspace_id, invoice['id'], invoice.get('order_id'), credits_count, amount,
+         invoice.get('short_url')))
     # Surfaced rather than assumed. Razorpay returns tax_amount = 0 when GST is not
     # configured on the account, and an invoice with no tax line looks entirely normal
     # until a customer's CA rejects it — so the caller gets told, every time.
     tax_paise = int(invoice.get('tax_amount') or 0)
     return {'invoice_id': invoice['id'], 'short_url': invoice.get('short_url'),
+            'order_id': invoice.get('order_id'),
             'credits': credits_count, 'amount_paise': amount,
             'tax_paise': tax_paise,
             'gross_paise': int(invoice.get('gross_amount') or amount),
@@ -268,6 +295,22 @@ def demo() -> None:
 
     assert price_paise(10) == 10 * RUPEES_PER_CREDIT * 100
     assert isinstance(price_paise(3), int)
+
+    # Packs are what a stranger can buy unattended, so the table gets checked rather
+    # than trusted. A pack that is not a whole number of shoots leaves credits stranded
+    # that the customer paid for and cannot spend on the thing they came for.
+    assert PACKS, 'no packs means no self-serve checkout'
+    for name, size in PACKS.items():
+        assert isinstance(size, int) and size > 0, name
+        # Deliberately NOT a whole number of shoots. Credits are fungible — a reshoot
+        # and a retouch cost one each — so the remainder on a 100-credit pack is spendable
+        # rather than stranded, and 100 is a better number to put on a card than 99.
+        assert size >= credits.COST['shoot'], (
+            f'pack {name!r} cannot buy even one shoot')
+    # No volume discount is encoded yet; if one is added, this is where it gets checked
+    # against MARGINAL_COST_RUPEES rather than discovered in a bank statement.
+    assert len(set(PACKS.values())) == len(PACKS), 'two packs are the same size'
+    assert 0 < INVOICE_TTL_MINUTES <= 24 * 60, 'a cart that lives a day is not a cart'
 
     # The price has to clear the marginal cost with room to spare. This is the check
     # that fires if fal raises its rate or the rupee moves and nobody re-does the maths

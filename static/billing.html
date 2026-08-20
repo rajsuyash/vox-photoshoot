@@ -10,6 +10,21 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/theme.css">
+<style>
+  .packs { display: grid; gap: 14px; margin-bottom: 32px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .pack { border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); padding: 20px; display: flex; flex-direction: column;
+    gap: 4px; }
+  .pack .size { font-size: 30px; font-weight: 700; letter-spacing: -.03em; }
+  .pack .unit { font-size: 13px; color: var(--muted); }
+  .pack .price { font-size: 15px; font-weight: 600; color: var(--copper-light);
+    margin-top: 10px; }
+  .pack .gst { font-size: 12px; color: var(--faint); }
+  .pack button { margin-top: 16px; }
+  /* The largest pack is the one the price was derived at, so it is the one to point at. */
+  .pack.best { border-color: var(--copper-line); background: var(--copper-soft); }
+</style>
 </head>
 <body>
 <header>
@@ -32,8 +47,12 @@
 <div class="card-box" style="margin-bottom:32px">
   <div style="font-size:13px;color:var(--faint);letter-spacing:.12em;text-transform:uppercase;font-weight:600">Balance</div>
   <div id="balance" style="font-size:40px;font-weight:700;letter-spacing:-.03em;margin-top:6px">—</div>
-  <p class="hint" id="topup" style="margin-top:10px">Need more? Your account manager will raise an invoice.</p>
+  <p class="hint" id="topup" style="margin-top:10px">Top up below. Payment is by UPI, card or netbanking, and you get a GST invoice.</p>
 </div>
+
+<h2 style="font-size:17px;font-weight:600;margin:0 0 4px">Buy credits</h2>
+<p class="hint" style="margin:0 0 14px">Credits never expire.</p>
+<div id="packs" class="packs"></div>
 
 <h2 style="font-size:17px;font-weight:600;margin:0 0 14px">Invoices</h2>
 <div id="invoices" style="margin-bottom:32px"></div>
@@ -49,6 +68,126 @@ const KINDS = {
   settle: 'Returned (undelivered images)', refund: 'Refunded (job failed)',
   chargeback: 'Chargeback',
 };
+
+// Razorpay's checkout script, fetched on the first Buy click rather than on page load.
+// Someone reading their statement should not pull a third-party script to do it.
+let checkoutReady = null;
+function loadCheckout() {
+  if (!checkoutReady) {
+    checkoutReady = new Promise((resolve, reject) => {
+      const tag = document.createElement('script');
+      tag.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      tag.onload = resolve;
+      tag.onerror = () => reject(new Error('could not reach Razorpay'));
+      document.head.appendChild(tag);
+    });
+  }
+  return checkoutReady;
+}
+
+// After the modal closes, the credits are NOT here yet: the webhook is what grants them,
+// and it arrives server-to-server on its own schedule. Polling the real balance is the
+// honest way to wait. Crediting from the browser callback instead would be a free-credits
+// endpoint wearing a payment flow's clothes.
+async function waitForCredits(before, seconds = 45) {
+  for (let i = 0; i < seconds; i += 1) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const { balance } = await api('/api/credits');
+    if (balance > before) return balance;
+  }
+  return null;
+}
+
+async function buy(pack, button) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Starting…';
+  $('error').classList.add('hidden');
+  try {
+    await loadCheckout();
+    const body = new FormData();
+    body.append('pack', pack);
+    const order = await api('/api/checkout', { method: 'POST', body });
+
+    // No order id means Checkout cannot open. The hosted page still can.
+    if (!order.order_id) {
+      location.href = order.short_url;
+      return;
+    }
+
+    const before = session.balance ?? 0;
+    button.textContent = 'Waiting for payment…';
+    const modal = new Razorpay({
+      key: order.key_id,
+      order_id: order.order_id,
+      name: 'Donna Photoshoot',
+      description: `${order.credits} image credits`,
+      prefill: { name: order.name, email: order.email },
+      theme: { color: '#c17f59' },
+      handler: async () => {
+        button.textContent = 'Confirming…';
+        const now = await waitForCredits(before);
+        if (now === null) {
+          $('error').textContent =
+            'Payment received. Credits usually land within a minute — refresh shortly, '
+            + 'and they will arrive even if you close this page.';
+          $('error').classList.remove('hidden');
+          button.disabled = false;
+          button.textContent = label;
+          return;
+        }
+        location.reload();
+      },
+      modal: {
+        ondismiss: () => { button.disabled = false; button.textContent = label; },
+      },
+    });
+    modal.open();
+  } catch (error) {
+    $('error').textContent = String(error.message || error);
+    $('error').classList.remove('hidden');
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+async function renderPacks() {
+  let info;
+  try {
+    info = await api('/api/packs');
+  } catch (error) {
+    $('packs').innerHTML = '<p class="empty-state">Credit packs unavailable.</p>';
+    return;
+  }
+  if (!info.available) {
+    $('packs').innerHTML =
+      '<p class="empty-state">Online payment is not switched on yet. '
+      + 'Email us and we will raise an invoice.</p>';
+    return;
+  }
+
+  const biggest = Math.max(...info.packs.map((p) => p.credits));
+  $('packs').replaceChildren(...info.packs.map((pack) => {
+    const card = document.createElement('div');
+    card.className = 'pack' + (pack.credits === biggest ? ' best' : '');
+
+    const size = Object.assign(document.createElement('div'),
+      { className: 'size', textContent: pack.credits });
+    const unit = Object.assign(document.createElement('div'),
+      { className: 'unit', textContent: `credits · about ${pack.shoots} shoots` });
+    const price = Object.assign(document.createElement('div'),
+      { className: 'price', textContent: `₹${pack.rupees.toLocaleString('en-IN')}` });
+    const gst = Object.assign(document.createElement('div'),
+      { className: 'gst', textContent: 'plus GST' });
+
+    const button = Object.assign(document.createElement('button'),
+      { className: 'go', type: 'button', textContent: 'Buy' });
+    button.addEventListener('click', () => buy(pack.key, button));
+
+    card.append(size, unit, price, gst, button);
+    return card;
+  }));
+}
 
 (async () => {
   await loadSession();
@@ -67,6 +206,10 @@ const KINDS = {
     $('rate').textContent = `\u20b9${data.rupees_per_credit} per credit, plus GST.`;
   }
   if (data.balance <= 0) $('balance').style.color = 'var(--error)';
+
+  // Before the early return further down, or a workspace with an empty ledger — which
+  // is every brand new account — would render no way to buy anything.
+  await renderPacks();
 
   // Invoices: unpaid ones carry their payment link, so a customer can settle from here.
   try {

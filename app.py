@@ -9,6 +9,7 @@ Everything a photographer would decide is preset in locations.py.
 import dataclasses
 import json
 import logging
+import os
 import pathlib
 import secrets
 import time
@@ -727,6 +728,57 @@ def admin_invoice(workspace_id: str = Form(...), credits_count: int = Form(..., 
         return billing.raise_invoice(workspace_id, credits_count)
     except ValueError as error:
         raise HTTPException(400, str(error))
+
+
+@app.get('/api/packs')
+def list_packs(session: dict = Depends(auth.current_session)):
+    """What a customer can buy, priced server-side."""
+    auth.current_workspace(session)
+    return {
+        'available': billing.configured(),
+        'rupees_per_credit': billing.RUPEES_PER_CREDIT,
+        'packs': [{'key': key, 'credits': size,
+                   'rupees': billing.price_paise(size) // 100,
+                   'shoots': size // credits.COST['shoot']}
+                  for key, size in billing.PACKS.items()],
+    }
+
+
+@app.post('/api/checkout')
+def checkout(pack: str = Form(...), session: dict = Depends(auth.current_session)):
+    """Start a purchase. Returns what Razorpay Checkout needs to open.
+
+    Takes a pack NAME, never an amount or a credit count. The size is resolved from
+    billing.PACKS here, so the browser cannot ask for three hundred credits at the
+    thirty-credit price — the only thing it gets to choose is which row of the table.
+    """
+    workspace_id = auth.current_workspace(session)
+    if not billing.configured():
+        raise HTTPException(503, 'payments are not configured on this deployment')
+    if pack not in billing.PACKS:
+        raise HTTPException(400, 'no such pack')
+
+    try:
+        invoice = billing.raise_invoice(workspace_id, billing.PACKS[pack])
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+
+    if not invoice.get('order_id'):
+        # Checkout cannot open without one. Falling through to the modal with a null
+        # order id would fail in the browser with nothing useful in it, so fail here
+        # where the hosted page is still a working answer.
+        log.error('invoice %s has no order_id; falling back to the hosted page',
+                  invoice['invoice_id'])
+
+    return {
+        'key_id': os.environ['RAZORPAY_KEY_ID'],   # publishable, not the secret
+        'order_id': invoice.get('order_id'),
+        'short_url': invoice.get('short_url'),     # the fallback, and the receipt link
+        'amount_paise': invoice['gross_paise'],
+        'credits': invoice['credits'],
+        'name': session.get('workspace_name') or '',
+        'email': session.get('email') or '',
+    }
 
 
 @app.get('/api/invoices')
