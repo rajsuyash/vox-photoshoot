@@ -376,6 +376,11 @@ VISION_MEDIA_TYPE = 'image/jpeg'
 # a 12MP phone photo only spends upload bandwidth and risks the request size limit.
 VISION_MAX_EDGE = 1568
 
+# Refuse rather than decode. Pillow only *warns* past its own threshold and then happily
+# allocates, so a decompression bomb — a small file declaring enormous dimensions — is a
+# one-request OOM on a 1GB container. 40MP is comfortably above any real phone camera.
+MAX_PIXELS = 40_000_000
+
 
 def encode(image_path) -> str:
     """Any image the client can produce -> base64 JPEG the vision API will accept."""
@@ -387,8 +392,21 @@ def encode(image_path) -> str:
     except ImportError:
         pass
 
+    # None disables Pillow's own warn-and-continue check so ours is the only one, and
+    # ours raises. Set per call: the constant is module-global in Pillow.
+    Image.MAX_IMAGE_PIXELS = None
+
     with Image.open(image_path) as image:
-        # convert() first: HEIC and PNG can carry alpha or a palette, and JPEG has
+        width, height = image.size
+        if width * height > MAX_PIXELS:
+            raise ValueError(f'image is {width}x{height}, over the {MAX_PIXELS:,} '
+                             f'pixel limit')
+        # draft() before convert() is the whole point: for JPEG it decodes at a reduced
+        # DCT scale, so the full-resolution bitmap is never allocated. A 48MP photo
+        # would otherwise be ~140MB of RGB in memory before thumbnail() shrinks it.
+        # No-op for formats that cannot do it, which is why thumbnail() still follows.
+        image.draft('RGB', (VISION_MAX_EDGE, VISION_MAX_EDGE))
+        # convert() next: HEIC and PNG can carry alpha or a palette, and JPEG has
         # neither. thumbnail() is a no-op on anything already small enough.
         image = image.convert('RGB')
         image.thumbnail((VISION_MAX_EDGE, VISION_MAX_EDGE))
@@ -538,6 +556,26 @@ def demo() -> None:
         assert decoded.format == 'JPEG', (suffix, decoded.format)
         assert max(decoded.size) == VISION_MAX_EDGE, (suffix, decoded.size)
         path.unlink()
+
+    # A decompression bomb must be refused before it is decoded, not warned about.
+    # Pillow's own limit only warns, so without this a small file that declares huge
+    # dimensions is a one-request OOM.
+    bomb = pathlib.Path(tempfile.gettempdir()) / 'vox-bomb-test.png'
+    Image.MAX_IMAGE_PIXELS = None
+    Image.new('RGB', (9000, 5000), 'blue').save(bomb, format='PNG')   # 45M pixels
+    try:
+        try:
+            encode(bomb)
+        except ValueError as error:
+            assert 'pixel limit' in str(error), error
+        else:
+            raise AssertionError('an oversized image should have been refused')
+
+        # And identify() must turn that refusal into a fallback, never a 500. Asserted
+        # while the file still exists, or it passes on FileNotFoundError instead.
+        assert identify(bomb).detected is False
+    finally:
+        bomb.unlink()
 
     print('product ok')
 

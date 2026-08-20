@@ -9,7 +9,6 @@ Everything a photographer would decide is preset in locations.py.
 import dataclasses
 import json
 import pathlib
-import shutil
 import threading
 import uuid
 
@@ -29,7 +28,28 @@ SHOOTS = pathlib.Path('out/shoots')
 RETOUCHES = pathlib.Path('out/retouches')
 STATIC = pathlib.Path('static')
 
-app = FastAPI(title='Donna Photoshoot')
+# Largest upload accepted, checked while streaming rather than after. Phone photos are
+# 3-8MB; this leaves room for a RAW-ish export without letting a 2GB POST fill the
+# container's 1GB of memory and take every running shoot down with it.
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+# The interactive docs enumerate every money-spending endpoint and its exact parameters.
+# Nothing needs them in production.
+app = FastAPI(title='Donna Photoshoot',
+              docs_url=None, redoc_url=None, openapi_url=None)
+
+
+@app.on_event('startup')
+def bound_concurrency() -> None:
+    """Cap how many generations can run at once inside one container.
+
+    Sync endpoints and BackgroundTasks land on anyio's threadpool, which defaults to 40.
+    Forty concurrent shoots on 0.5 vCPU / 1GB is an OOM, not throughput — each holds
+    decoded PNGs in memory. Six keeps the box alive; the surplus waits its turn.
+    """
+    import anyio.to_thread
+
+    anyio.to_thread.current_default_thread_limiter().total_tokens = 6
 
 # In-memory job store. Fine for a demo; on AWS this becomes a DynamoDB item keyed by
 # job id, and the worker becomes a Lambda triggered by the Higgsfield webhook.
@@ -112,10 +132,13 @@ def run_shoot(job_id: str, product_path: pathlib.Path, model_key: str,
             )
         with JOBS_LOCK:
             existing = list(JOBS.get(job_id, {}).get('images') or [])
-        # Copied off the container before anyone can lose them to a restart.
+        # Copied off the container before anyone can lose them to a restart. The KEY is
+        # what gets stored — presigned URLs are minted at read time, because the
+        # credentials that sign them expire long before the client stops wanting the
+        # image. See storage.py.
         fresh = [
             {'framing': framing_of(path),
-             'url': storage.put(path, f'shoots/{job_id}/{path.name}')}
+             'key': storage.put(path, f'shoots/{job_id}/{path.name}')}
             for path in saved
         ]
         set_job(job_id, status='completed', images=merge_images(existing, fresh),
@@ -152,6 +175,25 @@ def list_categories():
     return [category_spec(c) for c in product.CATEGORIES.values()]
 
 
+def save_upload(upload: UploadFile, path: pathlib.Path) -> None:
+    """Stream an upload to disk, refusing anything over the cap.
+
+    Checked while copying, not after: a straight copy would happily write the whole 2GB
+    first, and we would be out of disk before we could complain about it.
+    """
+    written = 0
+    with path.open('wb') as handle:
+        while chunk := upload.file.read(1024 * 1024):
+            written += len(chunk)
+            if written > MAX_UPLOAD_BYTES:
+                handle.close()
+                path.unlink(missing_ok=True)
+                raise HTTPException(
+                    413, f'that photo is over {MAX_UPLOAD_BYTES // (1024 * 1024)}MB — '
+                         f'please upload a smaller one')
+            handle.write(chunk)
+
+
 def piece_path(piece_id: str) -> pathlib.Path:
     matches = sorted(UPLOADS.glob(f'{piece_id}.*'))
     if not matches:
@@ -171,8 +213,7 @@ async def create_piece(upload: UploadFile):
     UPLOADS.mkdir(parents=True, exist_ok=True)
     suffix = pathlib.Path(upload.filename or 'upload.jpg').suffix or '.jpg'
     path = UPLOADS / f'{piece_id}{suffix}'
-    with path.open('wb') as handle:
-        shutil.copyfileobj(upload.file, handle)
+    save_upload(upload, path)
 
     piece = product.identify(path)
     # detected is returned, not just logged: a shoot built on the fallback is a shoot
@@ -233,7 +274,7 @@ def run_retouch(job_id: str, path: pathlib.Path, **options) -> None:
             # 'retouch' rather than a framing name: it is one image, and the reshoot
             # endpoint only accepts real framings, so this cannot be re-rolled there.
             {'framing': 'retouch',
-             'url': storage.put(image, f'retouches/{job_id}/{image.name}')}
+             'key': storage.put(image, f'retouches/{job_id}/{image.name}')}
             for image in saved
         ])
     except Exception as error:
@@ -267,8 +308,7 @@ async def create_retouch(
     UPLOADS.mkdir(parents=True, exist_ok=True)
     suffix = pathlib.Path(upload.filename or 'upload.jpg').suffix or '.jpg'
     path = UPLOADS / f'{job_id}{suffix}'
-    with path.open('wb') as handle:
-        shutil.copyfileobj(upload.file, handle)
+    save_upload(upload, path)
 
     set_job(job_id, status='running', images=[], error=None, kind='retouch', mode=mode)
     background_tasks.add_task(run_retouch, job_id, path, mode=mode,
@@ -315,16 +355,32 @@ def get_shoot(job_id: str):
     # plain dict rather than dropped, because it is what the shoot was actually built
     # from and the client should be able to see it.
     options = job.get('options')
-    return JSONResponse({'job_id': job_id, **job,
-                         'options': dataclasses.asdict(options) if options else None})
+    return JSONResponse({
+        'job_id': job_id, **job,
+        'options': dataclasses.asdict(options) if options else None,
+        # Minted here, on every read, from the stored key. The client never sees a key
+        # and never holds a URL long enough for it to go stale.
+        'images': [{'framing': image['framing'], 'url': storage.presign(image['key'])}
+                   for image in job.get('images') or []],
+    })
+
+
+# The only two trees /media may serve. Confining to the project directory was not
+# enough: the container also holds every .py file, so /media/locations.py handed out
+# the prompt system — the actual IP — to anyone who asked, and /media/.env would have
+# handed out the API keys had .dockerignore not excluded it.
+MEDIA_ROOTS = ('assets', 'out')
 
 
 @app.get('/media/{path:path}')
 def media(path: str):
-    # Confined to the project directory so a crafted path cannot escape it.
     root = pathlib.Path.cwd().resolve()
     resolved = (root / path).resolve()
     if not resolved.is_relative_to(root) or not resolved.is_file():
+        raise HTTPException(404, 'not found')
+    # Compared against the resolved path, so ../ cannot smuggle its way past the prefix.
+    relative = resolved.relative_to(root)
+    if not relative.parts or relative.parts[0] not in MEDIA_ROOTS:
         raise HTTPException(404, 'not found')
     return FileResponse(resolved)
 
