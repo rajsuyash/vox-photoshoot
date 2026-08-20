@@ -188,11 +188,15 @@
   .account .acct a:hover, .account .acct button:hover { color: var(--ink); }
   @media (max-width: 900px) { .account .acct a { display: none; } }
 
-  .tools { display: flex; gap: 4px; align-self: center;
+  /* Centred above step 1. inline-flex inside a text-align:center wrapper is what keeps
+     the pill hugging its buttons instead of stretching the width of main. */
+  .tools-row { text-align: center; margin: 0 0 40px; }
+  .tools { display: inline-flex; gap: 4px;
     background: var(--surface); border: 1px solid var(--line);
-    padding: 3px; border-radius: 999px; }
-  .tools button { font: inherit; font-size: 13px; padding: 6px 16px; border: 0;
+    padding: 4px; border-radius: 999px; }
+  .tools button { font: inherit; font-size: 14px; padding: 9px 26px; border: 0;
     border-radius: 999px; background: none; color: var(--muted); cursor: pointer;
+    font-weight: 500;
     transition: background .2s, color .2s; }
   .tools button:hover { color: var(--ink); }
   .tools button[aria-pressed="true"] { background: var(--copper); color: var(--bg); }
@@ -245,13 +249,19 @@
   </a>
   <span class="tag">product photo to campaign imagery</span>
   <div class="account" id="account"></div>
-  <nav class="tools" id="tools">
-    <button type="button" data-tool="shoot" aria-pressed="true">Photoshoot</button>
-    <button type="button" data-tool="retouch" aria-pressed="false">Retouch</button>
-  </nav>
 </header>
 
 <main>
+  <!-- Which of the two tools you are using. It lived in the header beside the account
+       chip, where it read as navigation and got missed — it is the first decision on
+       the page, so it sits above the first step and is centred to be seen. -->
+  <div class="tools-row">
+    <nav class="tools" id="tools" aria-label="Tool">
+      <button type="button" data-tool="shoot" aria-pressed="true">Photoshoot</button>
+      <button type="button" data-tool="retouch" aria-pressed="false">Retouch</button>
+    </nav>
+  </div>
+
   <section id="s1">
     <div class="step"><span class="num">1</span><h2>Upload the piece</h2><em>one clean front-facing photo works best</em></div>
     <div class="drop" id="drop">
