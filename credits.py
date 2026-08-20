@@ -29,6 +29,19 @@ COST = {
 }
 
 
+# What a new self-serve account gets: two full shoots, enough to photograph a real piece
+# twice rather than glimpse it once.
+FREE_CREDITS = 6
+WELCOME_NOTE = 'welcome'
+
+# The ceiling on what a scripted signup loop can cost in a day. Six credits is roughly
+# Rs 90 of real fal and Anthropic spend, so this caps the damage at about Rs 2,250 —
+# survivable and noticeable, where an uncapped funnel against a balance measured in single
+# dollars is neither. A Google account is friction, not a wall: making a thousand is a
+# morning's work for anyone who wants the images badly enough.
+MAX_FREE_GRANTS_PER_DAY = 25
+
+
 class Insufficient(Exception):
     """Not enough credits. The caller turns this into a 402."""
 
@@ -111,15 +124,25 @@ def settle(job_id: str, delivered: int) -> None:
                 job_id=job_id, note=note)
 
 
-def grant(workspace_id: str, amount: int, note: str = 'manual grant') -> int:
+def grant(workspace_id: str, amount: int, note: str = 'manual grant',
+          key: str | None = None, conn=None) -> int:
     """Admin goodwill, or the free credits that come with an account.
 
     This is also the answer to "was that bad image the customer's fault" — a human
     decides and it is recorded, rather than becoming a discount rule in code.
+
+    A random key by default, because two deliberate grants of the same size to the same
+    workspace are two grants and both should land. Pass `key` for a grant that must
+    happen at most once however many times the caller runs — the signup grant is keyed
+    on the user, so a replayed OAuth callback cannot mint a second free trial. Pass
+    `conn` to enlist in a caller's transaction, so the grant commits with the account
+    that earned it or not at all.
     """
-    with db.tx() as conn:
-        return _append(conn, workspace_id, amount, 'grant',
-                       f'grant:{uuid.uuid4()}', note=note)
+    key = key or f'grant:{uuid.uuid4()}'
+    if conn is not None:
+        return _append(conn, workspace_id, amount, 'grant', key, note=note)
+    with db.tx() as own:
+        return _append(own, workspace_id, amount, 'grant', key, note=note)
 
 
 def purchase(workspace_id: str, amount: int, payment_id: str, note: str = '') -> int:
@@ -132,6 +155,23 @@ def purchase(workspace_id: str, amount: int, payment_id: str, note: str = '') ->
     with db.tx() as conn:
         return _append(conn, workspace_id, amount, 'purchase',
                        f'razorpay:{payment_id}', note=note or payment_id)
+
+
+def free_trial_remaining_today(conn=None) -> int:
+    """How many welcome grants are still allowed today. Never negative.
+
+    Counted from the ledger rather than kept as a counter: the ledger is already the
+    only record that cannot drift, and a separate counter would be a second source of
+    truth about money that someone eventually has to reconcile.
+    """
+    sql = ("SELECT count(*) FROM credit_ledger "
+           "WHERE kind = 'grant' AND note = %s AND created_at >= date_trunc('day', now())")
+    if conn is not None:
+        used = int(conn.execute(sql, (WELCOME_NOTE,)).fetchone()[0])
+    else:
+        used = int(db.query(sql.replace('count(*)', 'count(*) AS n'),
+                            (WELCOME_NOTE,), one=True)['n'])
+    return max(0, MAX_FREE_GRANTS_PER_DAY - used)
 
 
 def ledger(workspace_id: str, limit: int = 100) -> list[dict]:

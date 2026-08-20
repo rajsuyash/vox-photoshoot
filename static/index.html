@@ -553,6 +553,7 @@ function cardButton({ key, image, title, subtitle, onPick, group }) {
 async function load() {
   await loadSession();
   await loadBalance();
+  showWelcome();
   const [models, places, categories, retouchOptions] = await Promise.all([
     fetch('/api/models').then((r) => r.json()),
     fetch('/api/locations').then((r) => r.json()),

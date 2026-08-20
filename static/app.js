@@ -96,6 +96,28 @@ async function loadBalance() {
   }
 }
 
+// A first-sign-in banner. The Google callback lands on /?welcome=N, where N is the
+// credits granted — 0 when the daily trial budget is spent, which needs saying out loud
+// rather than leaving someone to interpret an empty balance as a broken signup.
+function showWelcome() {
+  const raw = new URLSearchParams(location.search).get('welcome');
+  if (raw === null) return;
+  const granted = Number(raw);
+  history.replaceState({}, '', location.pathname);   // survive a refresh only once
+
+  const banner = document.createElement('div');
+  banner.className = granted > 0 ? 'notice' : 'error';
+  banner.style.marginBottom = '24px';
+  banner.textContent = granted > 0
+    ? `Welcome — ${granted} free credits are in your account. `
+      + `One credit is one image, so that is ${Math.floor(granted / 3)} full shoots.`
+    : 'Welcome. Free trials are all claimed for today, so your account starts empty — '
+      + 'buy credits from Billing, or email us and we will top you up.';
+
+  const main = document.querySelector('main');
+  if (main) main.prepend(banner);
+}
+
 function titleCase(text) {
   return String(text).charAt(0).toUpperCase() + String(text).slice(1);
 }

@@ -16,12 +16,15 @@ export BUCKET=vox-photoshoot-085193942944
 export INSTANCE_ROLE="arn:aws:iam::${ACCOUNT}:role/VoxPhotoshootInstanceRole"
 export ACCESS_ROLE="arn:aws:iam::${ACCOUNT}:role/AppRunnerECRAccessRole"
 export URI="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
+# Where the app believes it lives. Only used to build the Google OAuth redirect URI,
+# which must match what is registered on the OAuth client exactly.
+export PUBLIC_ORIGIN="https://photo.voxdonna.com"
 
 # Every key the container gets from Secrets Manager. ONE list, read by both the sync
 # below and the RuntimeEnvironmentSecrets map — they were two hardcoded tuples, and a
 # key added to only one of them syncs but is never wired in, which is how the Razorpay
 # webhook secret reached Secrets Manager as a value nothing ever read.
-export SECRET_KEYS="FAL_KEY HF_KEY ANTHROPIC_API_KEY DATABASE_URL RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET"
+export SECRET_KEYS="FAL_KEY HF_KEY ANTHROPIC_API_KEY DATABASE_URL RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET"
 
 cd "$(dirname "$0")"
 [ -f .env ] || { echo "no .env — need at least FAL_KEY, ANTHROPIC_API_KEY, DATABASE_URL" >&2; exit 1; }
@@ -74,6 +77,10 @@ print(json.dumps({
           "PROVIDER": os.environ.get("PROVIDER", "fal"),
           "S3_BUCKET": os.environ["BUCKET"],
           "AWS_REGION": os.environ["REGION"],
+          # Google validates the redirect URI byte for byte, and it is built from this
+          # rather than from the request's Host header — Host is attacker-controlled,
+          # and trusting it is how an auth code ends up delivered somewhere else.
+          "PUBLIC_ORIGIN": os.environ["PUBLIC_ORIGIN"],
         },
         # Pulled from Secrets Manager at container start, by the instance role. The
         # values never appear in the service description, in CloudTrail, or in this

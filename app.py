@@ -8,9 +8,12 @@ Everything a photographer would decide is preset in locations.py.
 
 import dataclasses
 import json
+import logging
 import pathlib
+import secrets
 import time
 import uuid
+from urllib.parse import quote
 
 from fastapi import (BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request,
                      Response, UploadFile)
@@ -24,11 +27,16 @@ import credits
 import db
 import jobs
 import locations
+import oauth_google
 import product
 import providers
 import retouch
 import shoot
 import storage
+
+# Named, not the root logger: uvicorn owns the root and App Runner ships whatever lands
+# on stdout to CloudWatch, which is where the sign-in failures need to be readable.
+log = logging.getLogger('donna')
 
 UPLOADS = pathlib.Path('out/uploads')
 SHOOTS = pathlib.Path('out/shoots')
@@ -65,6 +73,7 @@ def boot() -> None:
 # and every /api route additionally carries the current_session dependency — the gate
 # below is for humans typing URLs, the dependency is what actually protects the money.
 PUBLIC_PATHS = {'/login.html', '/healthz', '/api/auth/login',
+                '/api/auth/google', '/api/auth/google/callback',
                 '/api/webhooks/razorpay',
                 '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png'}
 
@@ -88,13 +97,74 @@ def login(response: Response, email: str = Form(...), password: str = Form(...))
         raise HTTPException(401, 'that email and password do not match')
 
     spaces = auth.workspaces_for(user['id'])
-    token = auth.start_session(user['id'], spaces[0]['id'] if spaces else None)
+    _issue_session(response, str(user['id']), spaces[0]['id'] if spaces else None)
+    return {'ok': True, 'workspaces': len(spaces)}
+
+
+def _issue_session(response, user_id: str, workspace_id: str | None) -> None:
+    """Mint a session cookie. One place, so password and Google login cannot drift."""
+    token = auth.start_session(user_id, workspace_id)
     response.set_cookie(
         auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400,
         httponly=True, samesite='lax',
         # Secure only where TLS exists, or login breaks on http://localhost.
         secure=bool(storage.bucket()))
-    return {'ok': True, 'workspaces': len(spaces)}
+
+
+@app.get('/api/auth/google')
+def google_start():
+    """Send the browser to Google, remembering a state we can check on the way back."""
+    if not oauth_google.configured():
+        raise HTTPException(503, 'Google sign-in is not configured on this deployment')
+
+    state = oauth_google.new_state()
+    response = RedirectResponse(oauth_google.auth_url(state), status_code=303)
+    response.set_cookie(
+        oauth_google.STATE_COOKIE, state, max_age=oauth_google.STATE_TTL_SECONDS,
+        httponly=True, samesite='lax', secure=bool(storage.bucket()))
+    return response
+
+
+@app.get('/api/auth/google/callback')
+def google_callback(request: Request, code: str = '', state: str = '', error: str = ''):
+    """Google's return leg. Everything here fails to the login page, never to a 500.
+
+    A stack trace on this route is a stranger's first impression of the product, and the
+    interesting failures — a cancelled consent screen, a stale tab, a replayed link —
+    are all ordinary rather than exceptional.
+    """
+    def back(message: str):
+        gone = RedirectResponse(f'/login.html?error={quote(message)}', status_code=303)
+        gone.delete_cookie(oauth_google.STATE_COOKIE)
+        return gone
+
+    if error or not code:
+        # Most often the user pressed Cancel. That is not an error worth a message.
+        return back('Google sign-in was cancelled')
+
+    # Checked before the code is spent: a callback that did not originate from a request
+    # this browser made is a CSRF attempt, and must cost nothing to reject.
+    expected = request.cookies.get(oauth_google.STATE_COOKIE)
+    if not expected or not secrets.compare_digest(expected, state):
+        return back('That sign-in link expired — please try again')
+
+    try:
+        claims = oauth_google.exchange(code)
+        result = auth.sign_in_with_google(claims)
+    except ValueError as problem:
+        log.warning('google sign-in refused: %s', problem)
+        return back(str(problem))
+
+    # A brand new account lands with ?welcome=N so the app can say what just happened.
+    # N is 0 when the daily trial cap is spent, which the banner explains rather than
+    # leaving someone staring at an empty balance wondering what they did wrong.
+    destination = f'/?welcome={result["granted"]}' if result['created'] else '/'
+    response = RedirectResponse(destination, status_code=303)
+    response.delete_cookie(oauth_google.STATE_COOKIE)
+    _issue_session(response, result['user_id'], result['workspace_id'])
+    if result['created']:
+        log.info('new account %s, granted %s credits', claims['email'], result['granted'])
+    return response
 
 
 @app.post('/api/auth/logout')
