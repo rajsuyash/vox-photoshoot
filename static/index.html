@@ -140,6 +140,47 @@
   button.go:disabled { background: var(--raised); color: var(--faint); cursor: not-allowed; }
   @media (max-width: 720px) { .bar { padding: 14px 20px; } }
 
+  /* Composition. Chip rows, one per control, label on the left so the eye can scan
+     down the choices rather than hunting for headings. */
+  .comp { border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); padding: 22px 24px; }
+  .comp-row { display: flex; align-items: flex-start; gap: 16px; padding: 11px 0;
+    border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .comp-row:first-child { border-top: 0; padding-top: 0; }
+  .comp-label { flex: none; width: 92px; padding-top: 7px; font-size: 12px;
+    letter-spacing: .1em; text-transform: uppercase; font-weight: 600;
+    color: var(--faint); }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; flex: 1; min-width: 220px; }
+  .chip { font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--raised); color: var(--muted);
+    cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+  .chip:hover { color: var(--ink); border-color: rgba(255,255,255,.18); }
+  .chip[aria-pressed="true"] { background: var(--copper); border-color: var(--copper);
+    color: var(--bg); font-weight: 600; }
+  /* Locked rather than hidden: seeing what you cannot choose yet explains the toggle
+     underneath far better than the sentence explaining the toggle does. */
+  .chips.locked { opacity: .4; pointer-events: none; }
+
+  .suggest { display: flex; align-items: center; justify-content: space-between;
+    gap: 18px; flex-wrap: wrap; margin: 14px 0; padding: 14px 16px;
+    border: 1px solid var(--copper-line); background: var(--copper-soft);
+    border-radius: var(--radius); }
+  .suggest b { font-size: 14px; font-weight: 600; }
+  .suggest .hint { margin: 3px 0 0; }
+  button.ghost { font: inherit; font-size: 13px; font-weight: 600; padding: 9px 20px;
+    border-radius: 999px; border: 1px solid var(--copper); background: none;
+    color: var(--copper-light); cursor: pointer; white-space: nowrap; }
+  button.ghost:hover:not(:disabled) { background: var(--copper); color: var(--bg); }
+  button.ghost:disabled { opacity: .5; cursor: not-allowed; }
+
+  .comp-custom { margin-top: 16px; padding-top: 4px; border-top: 1px solid var(--line); }
+  .comp-toggle { display: flex; align-items: flex-start; gap: 10px; cursor: pointer;
+    padding: 14px 0 4px; }
+  .comp-toggle input { width: 16px; height: 16px; margin-top: 2px; flex: none;
+    accent-color: var(--copper); cursor: pointer; }
+  .comp-toggle b { font-size: 14px; font-weight: 600; display: block; }
+  .comp-toggle em { font-style: normal; font-size: 13px; color: var(--muted); }
+
   .brand-bar { display: flex; align-items: center; justify-content: space-between;
     gap: 16px; flex-wrap: wrap; margin: 0 0 18px; padding: 12px 16px;
     border: 1px solid var(--copper-line); background: var(--copper-soft);
@@ -336,6 +377,72 @@
     <div id="locations"></div>
   </section>
 
+  <!-- Composition. Optional: every control has a default that reproduces what the app
+       did before this section existed, so leaving it alone changes nothing. -->
+  <section id="s4">
+    <div class="step"><span class="num">4</span><h2>Composition</h2>
+      <em>optional &middot; sensible defaults already set</em></div>
+
+    <div class="comp">
+      <div class="comp-row">
+        <span class="comp-label">Shape</span>
+        <div class="chips" id="cAspect"></div>
+      </div>
+      <div class="comp-row">
+        <span class="comp-label">Detail</span>
+        <div class="chips" id="cResolution"></div>
+        <span class="hint" id="resNote"></span>
+      </div>
+
+      <div class="suggest">
+        <div>
+          <b>Not sure? Let us compose it.</b>
+          <p class="hint">Picks expression, view, angle and pose to suit your piece and
+            location. Free — it writes no image.</p>
+        </div>
+        <button type="button" class="ghost" id="cSuggest">Suggest</button>
+      </div>
+
+      <div class="comp-row">
+        <span class="comp-label">Expression</span>
+        <div class="chips" id="cExpression"></div>
+      </div>
+      <div class="comp-row">
+        <span class="comp-label">View</span>
+        <div class="chips" id="cView"></div>
+      </div>
+      <div class="comp-row">
+        <span class="comp-label">Angle</span>
+        <div class="chips" id="cAngle"></div>
+      </div>
+      <div class="comp-row">
+        <span class="comp-label">Pose</span>
+        <div class="chips" id="cPose"></div>
+      </div>
+
+      <!-- Frame and Distance belong to hero/profile/detail on a normal shoot — those
+           framings already ARE frames and distances. Only a single custom shot can own
+           them, so they stay disabled until that is chosen. -->
+      <div class="comp-custom">
+        <label class="comp-toggle">
+          <input type="checkbox" id="cCustom">
+          <span><b>One custom shot instead of three</b>
+            <em>choose the exact crop yourself &middot; 1 image, 1 credit</em></span>
+        </label>
+        <div class="comp-row">
+          <span class="comp-label">Frame</span>
+          <div class="chips locked" id="cFrame"></div>
+        </div>
+        <div class="comp-row">
+          <span class="comp-label">Distance</span>
+          <div class="chips locked" id="cDistance"></div>
+        </div>
+        <p class="hint" id="lockNote">Set by each of the three shots. Tick the box above
+          to choose them yourself.</p>
+      </div>
+    </div>
+  </section>
+
   <!-- Retouch: one photo in, the same piece back without the desk, the dust and the
        colour cast. No model and no location, so none of the steps above apply. -->
   <section id="r1" class="hidden">
@@ -409,6 +516,8 @@ const state = {
   size: 'm',
   retouchFile: null,
   stones: false,    // keep the stone's real inclusions unless asked otherwise
+  comp: {},         // composition choices, key per control
+  compOptions: null,
 };
 
 const drop = $('drop'), fileInput = $('file');
@@ -459,6 +568,7 @@ async function acceptFile(file) {
     state.piece = piece;
     state.specs[piece.category] = piece.spec;
     renderPiece();
+    loadComposition(piece.category);
     $('s1').dataset.done = 'true';
   } catch (error) {
     fail(String(error));
@@ -568,6 +678,11 @@ $('pieceCategory').addEventListener('change', async (event) => {
   if (!state.specs[key]) return;
   state.piece = { ...state.piece, category: key, type: '' };
   renderPiece();
+  // A pose from the old category is not a pose in the new one, and the server drops it
+  // anyway — clearing here keeps the chips honest about what will actually be sent.
+  state.comp.pose = '';
+  state.comp.frame = '';
+  loadComposition(key);
 });
 
 function cardButton({ key, image, title, subtitle, onPick, group }) {
@@ -676,7 +791,9 @@ function refresh() {
   }
   // The piece has to have been read before a shoot can be built from it.
   const ready = state.piece && state.model && state.location && !broke;
-  state.expected = 3;
+  const images = $('cCustom') && $('cCustom').checked ? 1 : 3;
+  const multiplier = state.comp.resolution === '4K' ? 2 : 1;
+  state.expected = images * multiplier;
   $('go').disabled = !ready;
   $('go').textContent = 'Generate shoot';
   const bits = [];
@@ -686,8 +803,118 @@ function refresh() {
   if (state.location) bits.push('location set');
   $('summary').innerHTML = broke
     ? 'Out of credits &middot; <a href="/billing.html">top up</a> to keep going'
-    : (ready ? `${bits.join(' &middot; ')} &middot; <b>${state.expected} credits</b>`
+    : (ready ? `${bits.join(' &middot; ')} &middot; <b>${state.expected} `
+               + `credit${state.expected === 1 ? '' : 's'}</b>`
              : (bits.join(' &middot; ') || 'Upload a product to begin'));
+}
+
+
+// --- Composition ---------------------------------------------------------------------
+// Every list comes from the server. A frontend with its own copy of the pose vocabulary
+// drifts from the server's the first time either is edited, and the symptom is a chip
+// that silently does nothing.
+
+const COMP_ROWS = [
+  ['cExpression', 'expressions', 'expression'],
+  ['cView', 'views', 'view'],
+  ['cAngle', 'angles', 'angle'],
+  ['cPose', 'poses', 'pose'],
+  ['cFrame', 'frames', 'frame'],
+  ['cDistance', 'distances', 'distance'],
+  ['cAspect', 'aspects', 'aspect'],
+  ['cResolution', 'resolutions', 'resolution'],
+];
+
+function drawChips(hostId, items, field, { clearable = false } = {}) {
+  const host = $(hostId);
+  if (!host) return;
+  host.replaceChildren(...items.map((item) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip';
+    chip.textContent = item.label;
+    if (item.note) chip.title = item.note;
+    chip.setAttribute('aria-pressed', String(state.comp[field] === item.key));
+    chip.addEventListener('click', () => {
+      // Pose is the one control with a meaningful "unset": leaving it off lets the
+      // shot's own direction stand rather than imposing a gesture on all three frames.
+      state.comp[field] = (clearable && state.comp[field] === item.key) ? '' : item.key;
+      // The whole section, not just this row: the resolution note lives outside the
+      // chips and went stale when only the clicked row was redrawn.
+      drawComposition();
+      refresh();
+    });
+    return chip;
+  }));
+}
+
+function drawComposition() {
+  const opts = state.compOptions;
+  if (!opts) return;
+  COMP_ROWS.forEach(([hostId, listName, field]) => {
+    drawChips(hostId, opts[listName] || [], field, { clearable: field === 'pose' });
+  });
+  const four = state.comp.resolution === '4K';
+  $('resNote').textContent = four
+    ? '4K costs double — two credits per image'
+    : '2K is 1792 x 2400, large enough for print';
+}
+
+async function loadComposition(category) {
+  try {
+    state.compOptions = await api(`/api/composition?category=${encodeURIComponent(category)}`);
+  } catch (error) {
+    return;                     // the section stays on defaults; nothing else breaks
+  }
+  // Defaults come from the server too, so "leave it alone" reproduces exactly what the
+  // app did before this section existed.
+  const d = state.compOptions.defaults || {};
+  Object.entries(d).forEach(([field, value]) => {
+    if (!state.comp[field]) state.comp[field] = value;
+  });
+  drawComposition();
+  refresh();
+}
+
+$('cCustom').addEventListener('change', (event) => setCustomMode(event.target.checked));
+
+$('cSuggest').addEventListener('click', async () => {
+  if (!state.piece) {
+    fail('Upload your piece first — the suggestion is built around it.');
+    return;
+  }
+  const button = $('cSuggest');
+  button.disabled = true;
+  button.textContent = 'Thinking…';
+  try {
+    const body = new FormData();
+    body.append('category', state.piece.category);
+    body.append('description', $('pieceDescription').value || '');
+    body.append('location_key', state.location || '');
+    const picked = await api('/api/composition/suggest', { method: 'POST', body });
+    // Merged, not replaced: shape and detail are the client's commercial choices and a
+    // suggestion about how a model stands has no business overriding them.
+    ['expression', 'view', 'angle', 'pose'].forEach((field) => {
+      if (picked[field]) state.comp[field] = picked[field];
+    });
+    drawComposition();
+    refresh();
+  } catch (error) {
+    fail(String(error.message || error));
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Suggest';
+  }
+});
+
+function setCustomMode(on) {
+  ['cFrame', 'cDistance'].forEach((id) => $(id).classList.toggle('locked', !on));
+  $('lockNote').textContent = on
+    ? 'One image, composed exactly as you set it.'
+    : 'Set by each of the three shots. Tick the box above to choose them yourself.';
+  if (!on) { state.comp.frame = ''; }
+  drawComposition();
+  refresh();
 }
 
 $('go').addEventListener('click', async () => {
@@ -752,6 +979,11 @@ $('go').addEventListener('click', async () => {
   body.append('hand', $('pieceHand').value);
   body.append('instructions', $('pieceInstructions').value);
   body.append('sku', $('pieceSku').value.trim());
+  // Composition. Keys only — the server resolves each against its own vocabulary, so
+  // nothing typed in a browser can reach a prompt.
+  ['expression', 'view', 'angle', 'pose', 'aspect', 'resolution', 'frame', 'distance']
+    .forEach((field) => body.append(field, state.comp[field] || ''));
+  body.append('custom_shot', $('cCustom').checked ? '1' : '');
   body.append('detected', String(state.piece.detected !== false));
   body.append('idempotency_key', state.idem);
 

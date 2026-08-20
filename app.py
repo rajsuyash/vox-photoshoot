@@ -26,6 +26,7 @@ import admin
 import auth
 import billing
 import branding
+import composition
 import credits
 import db
 import jobs
@@ -250,7 +251,7 @@ def list_locations(session: dict = Depends(auth.current_session)):
 
 def run_shoot(job_id: str, shoot_id: str, product_path: pathlib.Path,
               model_key: str, location_key: str, description: str, category,
-              framings=None, options=None) -> None:
+              framings=None, options=None, comp=None) -> None:
     """Generate, persisting each image the moment it lands.
 
     shoot_id is the gallery this belongs to: for a reshoot it is the parent, so the new
@@ -275,7 +276,7 @@ def run_shoot(job_id: str, shoot_id: str, product_path: pathlib.Path,
         saved, failures = shoot.shoot(
             [product_path], model_key, location_key, description, category,
             framings=framings, out_dir=SHOOTS / job_id, options=options,
-            attempts=attempts, on_image=persist)
+            attempts=attempts, on_image=persist, comp=comp)
     except Exception as error:
         # Surfaced rather than swallowed — a silent spinner is worse than a visible
         # failure during a live client demo.
@@ -423,6 +424,19 @@ def create_shoot(
     # The client's own reference for the piece. Free text: every jewellery business
     # already has a coding scheme and none of them want a second one.
     sku: str = Form(''),
+    # Composition. Resolved server-side against composition.py, exactly like the pack key
+    # in /api/checkout: the browser picks a row from a table we own, never free text that
+    # would be appended into a prompt.
+    expression: str = Form(''),
+    view: str = Form(''),
+    angle: str = Form(''),
+    pose: str = Form(''),
+    aspect: str = Form(''),
+    resolution: str = Form(''),
+    # Custom mode only. Frame and distance are owned by hero/profile/detail otherwise.
+    custom_shot: str = Form(''),
+    frame: str = Form(''),
+    distance: str = Form(''),
     detected: str = Form('true'),
     # Minted in the browser when the form is completed. Disabling the button is not a
     # control: it does not survive a slow network, a second tab, or refresh-and-resubmit.
@@ -452,11 +466,27 @@ def create_shoot(
     # a finger on a necklace falls back to the default instead of 400ing a paid shoot.
     options = product.Options(size=size, type=type, finger=finger, hand=hand,
                               instructions=instructions.strip())
+
+    wants_custom = custom_shot.lower() in ('1', 'true', 'yes', 'on')
+    comp = composition.parse({
+        'expression': expression, 'view': view, 'angle': angle, 'pose': pose,
+        'aspect': aspect, 'resolution': resolution,
+        'frame': frame if wants_custom else '',
+        'distance': distance if wants_custom else '',
+    }, category)
+    # A custom shot with no frame chosen is just a normal shot with fewer photographs,
+    # which is a worse deal at the same price. Refuse rather than silently deliver it.
+    if wants_custom and not comp.frame:
+        raise HTTPException(400, 'a custom shot needs a frame')
+
+    framings = ['custom'] if wants_custom else list(locations.FRAMINGS)
     params = {'model': model_key, 'location': location_key, 'category': category,
               'description': description.strip(),
-              'options': dataclasses.asdict(options)}
+              'options': dataclasses.asdict(options),
+              'composition': dataclasses.asdict(comp),
+              'framings': framings}
 
-    cost = credits.COST['shoot']
+    cost = credits.cost('shoot', images=len(framings), resolution=comp.resolution)
     try:
         # One transaction: the job and the credits it reserved commit together, or
         # neither does. Either half alone is a way to lose money silently.
@@ -473,7 +503,8 @@ def create_shoot(
     job_id = str(job['id'])
     if job['created']:
         background.add_task(run_shoot, job_id, job_id, product_path, model_key,
-                            location_key, description.strip(), chosen, None, options)
+                            location_key, description.strip(), chosen, framings,
+                            options, comp)
     return {'job_id': job_id, 'status': 'running',
             'expected': cost, 'balance': credits.balance(workspace_id)}
 
@@ -602,7 +633,9 @@ def reshoot(job_id: str, background: BackgroundTasks, framing: str,
     if job['created']:
         background.add_task(run_shoot, str(job['id']), job_id, product_path,
                             params.get('model'), params.get('location'), description,
-                            category, [framing], options)
+                            category, [framing], options,
+                            composition.parse(params.get('composition'),
+                                              params.get('category', '')))
     return {'job_id': job_id, 'reshoot_id': str(job['id']), 'status': 'running',
             'framing': framing, 'balance': credits.balance(workspace_id)}
 
@@ -691,6 +724,82 @@ MEDIA_ROOTS = ('assets', 'out')
 
 
 MAX_LOGO_BYTES = 2 * 1024 * 1024
+
+
+@app.get('/api/composition')
+def composition_options(category: str = 'ring',
+                        session: dict = Depends(auth.current_session)):
+    """The vocabularies for one category, so the UI never hardcodes a list.
+
+    A frontend with its own copy of the pose list drifts from the server's the first time
+    either is edited, and the symptom is a chip that silently does nothing.
+    """
+    if category not in product.CATEGORIES:
+        raise HTTPException(400, f'unknown category {category}')
+    return composition.options_for(category)
+
+
+@app.post('/api/composition/suggest')
+def composition_suggest(category: str = Form(...), description: str = Form(''),
+                        location_key: str = Form(''),
+                        session: dict = Depends(auth.current_session)):
+    """Pick a composition to suit the piece and the location.
+
+    Most jewellers do not know what contrapposto is, and should not have to. Costs about
+    a fifth of a rupee and no credits — it writes no image.
+
+    Whatever comes back is passed through composition.parse, which keeps only values we
+    actually offer. A model that invents {"pose": "levitating"} therefore yields the
+    default, never a sentence of its own devising reaching a prompt.
+    """
+    auth.current_workspace(session)
+    if category not in product.CATEGORIES:
+        raise HTTPException(400, f'unknown category {category}')
+
+    options = composition.options_for(category)
+    menu = {field: [item['key'] for item in options[field]]
+            for field in ('expressions', 'views', 'angles', 'distances', 'poses',
+                          'frames')}
+    place = locations.ALL.get(location_key)
+    try:
+        picked = _ask_for_composition(category, description.strip(), place, menu)
+    except Exception as error:              # noqa: BLE001 - a suggestion is optional
+        log.warning('composition suggest failed: %r', error)
+        raise HTTPException(502, 'could not suggest a composition just now')
+
+    return dataclasses.asdict(composition.parse(picked, category))
+
+
+def _ask_for_composition(category, description: str, place, menu: dict) -> dict:
+    """One Anthropic call, forced into our own vocabulary by a JSON schema."""
+    import anthropic
+
+    scene = f'{place.scene} Lighting: {place.light}.' if place else 'a studio setting'
+    schema = {
+        'type': 'object',
+        'properties': {
+            field: {'type': 'string', 'enum': keys}
+            for field, keys in (('expression', menu['expressions']),
+                                ('view', menu['views']),
+                                ('angle', menu['angles']),
+                                ('pose', menu['poses']))
+            if keys
+        },
+        'required': ['expression', 'view', 'angle'],
+        'additionalProperties': False,
+    }
+    reply = anthropic.Anthropic().messages.create(
+        model='claude-haiku-4-5',
+        max_tokens=300,
+        system=('You are a jewellery campaign photographer choosing how to compose one '
+                'shot. Pick the options that make the piece read most clearly against '
+                'the location. Prefer a pose that brings the piece toward the camera.'),
+        messages=[{'role': 'user', 'content':
+                   f'The piece is {category} jewellery: {description or "unspecified"}. '
+                   f'The location is {scene} Choose the composition.'}],
+        output_config={'format': {'type': 'json_schema', 'schema': schema}},
+    )
+    return json.loads(reply.content[0].text)
 
 
 @app.get('/api/brand')

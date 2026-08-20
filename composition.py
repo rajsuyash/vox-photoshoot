@@ -265,7 +265,7 @@ def options_for(category_key: str) -> dict:
 
 def _label(key: str) -> str:
     """'hand-to-cheek' -> 'Hand to cheek'. Keys are the contract; labels are cosmetic."""
-    words = key.replace('-', ' ')
+    words = key.replace('-34', ' three-quarter').replace('-', ' ')
     return words[:1].upper() + words[1:]
 
 
