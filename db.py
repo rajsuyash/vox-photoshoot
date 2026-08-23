@@ -85,7 +85,22 @@ def query(sql: str, params=(), one: bool = False):
 
 
 def migrate() -> list[str]:
-    """Apply every unapplied migration, in filename order. Safe to run on every boot."""
+    """Apply every unapplied migration, in filename order. Safe to run on every boot.
+
+    Refuses to run without the directory rather than treating it as "nothing to do".
+    The Dockerfile did not copy migrations/ in, so for months this globbed a path that
+    did not exist, applied nothing, and returned an empty list that boot read as
+    success — the production schema was only ever whatever had been run against RDS by
+    hand, and a deploy that added a table shipped an app that could not create it.
+
+    An empty directory is a broken image, and a process that cannot manage its own
+    schema should not come up and start taking money.
+    """
+    if not MIGRATIONS.is_dir():
+        raise RuntimeError(f'{MIGRATIONS}/ is missing — the image was built without it')
+    if not any(MIGRATIONS.glob('*.sql')):
+        raise RuntimeError(f'{MIGRATIONS}/ has no .sql files')
+
     applied = []
     with connect() as conn:
         conn.execute("""
@@ -111,8 +126,21 @@ def migrate() -> list[str]:
 
 def demo() -> None:
     """Self-check. Needs DATABASE_URL; applies migrations and exercises the pool."""
+    # First, and without a database: an image built without migrations/ must fail loudly
+    # instead of booting with whatever schema happens to be on the server. This is the
+    # check that was missing while the Dockerfile quietly left the directory out.
+    global MIGRATIONS
+    real, MIGRATIONS = MIGRATIONS, pathlib.Path('migrations-that-do-not-exist')
+    try:
+        migrate()
+        raise AssertionError('migrate() accepted a missing migrations directory')
+    except RuntimeError:
+        pass
+    finally:
+        MIGRATIONS = real
+
     if not os.environ.get('DATABASE_URL'):
-        print('db: DATABASE_URL not set, skipping (set it to run this check)')
+        print('db: DATABASE_URL not set, skipping the rest (set it to run this check)')
         return
 
     migrate()
@@ -121,7 +149,8 @@ def demo() -> None:
     # Every table the app depends on must exist after migrate().
     names = {row['table_name'] for row in query(
         "SELECT table_name FROM information_schema.tables WHERE table_schema='public'")}
-    for table in ('workspaces', 'users', 'memberships', 'sessions'):
+    for table in ('workspaces', 'users', 'memberships', 'sessions', 'jobs',
+                  'job_images', 'credit_ledger', 'pieces'):
         assert table in names, f'{table} missing after migrate()'
 
     # migrate() must be idempotent — it runs on every container boot.
