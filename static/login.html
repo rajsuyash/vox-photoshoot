@@ -37,7 +37,11 @@
   .sub { text-align: center; color: var(--faint); font-size: 11px; letter-spacing: .12em;
     text-transform: uppercase; font-weight: 600; margin-bottom: 34px; }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-  input { font: inherit; font-size: 15px; color: var(--ink); width: 100%;
+  /* 16px, not 15: iOS Safari zooms the page when a field under 16px takes focus and
+     never zooms back out. This page does not link theme.css — it carries its own
+     styles for the image wall — so the app-wide fix does not reach it, and this is the
+     first form anyone touches. */
+  input { font: inherit; font-size: 16px; color: var(--ink); width: 100%;
     padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px;
     background: var(--raised); margin-bottom: 16px; }
   input:focus { outline: 1px solid var(--copper); outline-offset: -1px;
