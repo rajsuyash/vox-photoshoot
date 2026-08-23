@@ -115,6 +115,20 @@ still serving the previous build. The cheap check is a route that only exists in
 build: `401` means deployed and protected, `404` means it is not there — with a made-up
 route as a control to prove `401` is not a catch-all.
 
+**A successful boot proves the process started, not that it did its job.** The Dockerfile
+copied `*.py`, `static/` and `assets/` — never `migrations/`. So `db.migrate()` globbed a
+directory that did not exist, applied nothing, returned `[]`, and boot read that as
+success. Every deploy for months reported healthy against a schema that had only ever been
+applied to RDS by hand. It surfaced the first time a deploy actually needed a new table:
+the image shipped code writing to `pieces` with no way to create it. **Any step that can
+legitimately do nothing must be able to tell "nothing to do" from "nothing to do it
+with"** — `migrate()` now refuses to boot on a missing or empty migrations directory, and
+`/healthz` answering finally means the schema was checked.
+
+**Check the artifact, not the recipe.** The bug lived in a `COPY` line that was never
+wrong-looking. `docker run <image> ls migrations/` would have found it on day one, and now
+does — the same lesson as verifying the running image rather than the tag, one layer down.
+
 **Backgrounded deploys die with their shell.** `nohup ./deploy.sh &` inside a command that
 then exits gets killed mid-flight; the log stops somewhere harmless-looking. Use a tracked
 background task.
