@@ -271,7 +271,6 @@
   .seg button:first-child { border-left: 0; }
   .seg button:hover { color: var(--ink); }
   .seg button[aria-pressed="true"] { background: var(--copper); color: var(--bg); }
-  .hidden { display: none; }
 </style>
 </head>
 <body>
@@ -667,12 +666,6 @@ $('tools').addEventListener('click', (event) => {
 const FINGERS = ['index', 'middle', 'ring', 'little', 'thumb'];
 const HANDS = ['left', 'right'];
 
-function fillSelect(select, values, chosen) {
-  select.replaceChildren(...values.map((value) => Object.assign(
-    document.createElement('option'), { value, textContent: titleCase(value),
-                                        selected: value === chosen })));
-}
-
 function renderPiece() {
   const { category, type, description, detected } = state.piece;
   const spec = state.specs[category];
@@ -735,6 +728,7 @@ function cardButton({ key, image, title, subtitle, note, onPick, group, tags = {
   button.type = 'button';
   button.setAttribute('aria-pressed', 'false');
   button.dataset.group = group;
+  button.dataset.key = key;      // so a deep link can find and click the right card
   // Everything the search box reads, lowercased once here rather than on every keystroke.
   button.dataset.search =
     [title, subtitle, note, ...Object.values(tags)].join(' ').toLowerCase();
@@ -865,16 +859,31 @@ async function load() {
     // The three things a jeweller actually chooses between, on two lines because all
     // three on one truncated a third of the cast mid-word — which is the exact fault
     // this replaced. The prompt is not on the card at all; it is not a shopping label.
-    subtitle: [model.age, model.origin].filter(Boolean).join(' · '),
-    note: model.hair,
-    tags: { skin: model.skin, hairGroup: model.hair_group },
-    onPick: (key) => { state.model = key; $('s2').dataset.done = 'true'; refresh(); },
+    // A workspace's own model has none of those fields, so she says what she is.
+    subtitle: model.mine ? 'Your model'
+      : [model.age, model.origin].filter(Boolean).join(' · '),
+    note: model.mine
+      ? (model.source === 'uploaded' ? 'From your photo' : 'Made by you')
+      : model.hair,
+    tags: { skin: model.skin, hairGroup: model.hair_group,
+            owner: model.mine ? 'mine' : 'house' },
+    onPick: (key) => {
+      state.model = key;
+      // Her name, not her key. A built-in model's key is her name; a custom one's is a
+      // hex slug, and "model 6c307a78912b" is not a summary of anything.
+      state.modelName = model.name || titleCase(model.key);
+      $('s2').dataset.done = 'true';
+      refresh();
+    },
   })));
   $('modelCount').dataset.total = cast.models.length;
   pickerControls({
     host: $('modelPicker'), group: 'model', placeholder: 'Search by name, look or region',
     counter: $('modelCount'), empty: $('modelsEmpty'),
     filters: [
+      // Only offered once there is something to filter to. A chip that always returns
+      // nothing is worse than an absent one.
+      ...(cast.own ? [{ field: 'owner', options: [{ key: 'mine', label: 'Yours' }] }] : []),
       { field: 'skin', options: cast.skin_tones },
       { field: 'hairGroup', options: cast.hair_groups },
     ],
@@ -910,6 +919,17 @@ async function load() {
   });
 
   if (fromLibrary) await usePiece(fromLibrary);
+
+  // Models links here as /?model=<key>. Selects her the same way a click would, so the
+  // card shows as chosen rather than the choice being invisible state.
+  const withModel = new URLSearchParams(location.search).get('model');
+  if (withModel) {
+    const card = modelGrid.querySelector(`.card[data-key="${CSS.escape(withModel)}"]`);
+    if (card) {
+      card.click();
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
 }
 
 function refresh() {
@@ -937,7 +957,7 @@ function refresh() {
   const bits = [];
   if (state.file && !state.piece) bits.push('reading your photo&hellip;');
   if (state.piece) bits.push(`<b>${titleCase(state.piece.category)}</b>`);
-  if (state.model) bits.push(`model <b>${titleCase(state.model)}</b>`);
+  if (state.model) bits.push(`model <b>${state.modelName || titleCase(state.model)}</b>`);
   if (state.location) bits.push('location set');
   $('summary').innerHTML = broke
     ? 'Out of credits &middot; <a href="/billing.html">top up</a> to keep going'

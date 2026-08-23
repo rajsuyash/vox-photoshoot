@@ -26,6 +26,10 @@ COST = {
     'shoot': len(locations.FRAMINGS),
     'reshoot': 1,
     'retouch': 1,
+    # A custom model is one portrait. It is reusable across every future shoot, so it is
+    # worth more than one throwaway image — but it is priced as what it is, because a
+    # customer who has not seen the result yet reads a bigger number as a bigger risk.
+    'model': 1,
 }
 
 

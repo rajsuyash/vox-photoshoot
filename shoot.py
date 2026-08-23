@@ -49,7 +49,7 @@ def load_cast() -> dict:
 def build(product_urls: list[str], model_key: str, location_key: str,
           description: str, category, face_url: str | None = None,
           framing: str = 'hero', options=None, attempt: int = 1,
-          comp=None) -> tuple[str, dict]:
+          comp=None, face: dict | None = None) -> tuple[str, dict]:
     """Return (prompt, arguments) without calling the API, so cost can be checked first.
 
     description and category both come from the uploaded photo (product.identify): what
@@ -61,9 +61,16 @@ def build(product_urls: list[str], model_key: str, location_key: str,
     different woman every generation and drifts non-Indian at foreign locations — see
     identity_test.py. The portrait has to go into image_urls to hold identity.
     """
-    cast = load_cast()
-    if model_key not in cast:
-        raise KeyError(f'unknown model {model_key!r}; have {sorted(cast)}')
+    # `face` is a workspace's own model: the same {description, file} shape as a cast
+    # entry, resolved by the caller because it lives in the database and this module
+    # does not know there is one. Given it, the built-in manifest is not consulted at
+    # all — a customer's model has no key in it and never will.
+    entry = face
+    if entry is None:
+        cast = load_cast()
+        if model_key not in cast:
+            raise KeyError(f'unknown model {model_key!r}; have {sorted(cast)}')
+        entry = cast[model_key]
     if location_key not in locations.ALL:
         raise KeyError(f'unknown location {location_key!r}; have {sorted(locations.ALL)}')
 
@@ -73,7 +80,7 @@ def build(product_urls: list[str], model_key: str, location_key: str,
         # The description carries its own opening ("a 26 year old Kashmiri woman, ...").
         # A hardcoded 'An Indian woman,' in front of it said it twice, and made a cast
         # entry of any other heritage impossible to describe honestly.
-        model_description=cast[model_key]['description'],
+        model_description=entry['description'],
         location_key=location_key,
         framing=framing,
         options=options,
@@ -98,7 +105,8 @@ def build(product_urls: list[str], model_key: str, location_key: str,
 
 def shoot(product_paths, model_key: str, location_key: str, description: str,
           category, framings=None, out_dir='out/shoots', options=None,
-          attempts=None, on_image=None, comp=None) -> tuple[list[dict], list[tuple]]:
+          attempts=None, on_image=None, comp=None,
+          face: dict | None = None) -> tuple[list[dict], list[tuple]]:
     """Run one photoshoot: one generation per framing.
 
     This is the single entry point the web app calls.
@@ -115,14 +123,15 @@ def shoot(product_paths, model_key: str, location_key: str, description: str,
     framings = list(framings or locations.FRAMINGS)
     attempts = attempts or {}
     product_urls = [provider.upload(path) for path in product_paths]
-    face_url = provider.upload(load_cast()[model_key]['file'])
+    # A workspace's own model when the caller resolved one, the house cast otherwise.
+    face_url = provider.upload((face or load_cast()[model_key])['file'])
 
     saved, failures = [], []
     for framing in framings:
         attempt = attempts.get(framing, 1)
         _prompt, arguments = build(
             product_urls, model_key, location_key, description, category,
-            face_url, framing, options, attempt, comp,
+            face_url, framing, options, attempt, comp, face,
         )
         try:
             urls = provider.generate(**arguments)
@@ -157,6 +166,22 @@ def demo() -> None:
     assert arguments['image_urls'] == ['https://example.com/a.jpg']
     assert 'bamboo' in prompt
     assert arguments['aspect_ratio'] == '3:4'
+
+    # A workspace's own model bypasses the cast manifest entirely, description and all.
+    mine = {'description': 'a 31 year old Tamil model, deep bronze skin',
+            'file': 'out/talent/whatever.png'}
+    own_prompt, _own = build(
+        ['https://example.com/a.jpg'], 'not-in-the-cast', 'kyoto',
+        description='a ruby ring', category=product.CATEGORIES['ring'], face=mine,
+    )
+    assert 'deep bronze skin' in own_prompt, 'a custom model lost its description'
+    try:
+        build(['https://example.com/a.jpg'], 'not-in-the-cast', 'kyoto',
+              description='a ruby ring', category=product.CATEGORIES['ring'])
+    except KeyError:
+        pass
+    else:
+        raise AssertionError('an unknown model key was accepted without a face')
 
     # The face must be appended after the product, never before it.
     _prompt, with_face = build(

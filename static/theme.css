@@ -175,7 +175,12 @@ table.data a:hover { color: var(--copper-light); }
   color: var(--copper-light); padding: 14px 16px; border-radius: var(--radius);
   font-size: 14px; }
 .empty-state { color: var(--faint); font-size: 14px; padding: 40px 0; text-align: center; }
-.hidden { display: none; }
+/* !important because this is a utility, and a utility that loses is a bug waiting to
+   happen: any page rule of the form `.drop img { display: block }` outranks a bare
+   `.hidden` on the same element, and the symptom is a broken-image icon sitting in a
+   dropzone that believes it is hidden. A class whose whole job is "not visible" must
+   never be outvoted by a rule about what something looks like when it is. */
+.hidden { display: none !important; }
 
 /* Below 900px the sidebar goes back to being a bar across the top. A 248px column on a
    375px screen leaves no page, and a hamburger is a tap in front of every navigation on

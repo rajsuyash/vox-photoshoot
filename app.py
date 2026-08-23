@@ -39,6 +39,7 @@ import providers
 import retouch
 import shoot
 import storage
+import talent
 
 # Named, not the root logger: uvicorn owns the root and App Runner ships whatever lands
 # on stdout to CloudWatch, which is where the sign-in failures need to be readable.
@@ -266,14 +267,18 @@ def list_models(session: dict = Depends(auth.current_session)):
     list so the frontend never keeps its own copy of them to drift from.
     """
     entries = shoot.load_cast()
+    workspace_id = auth.current_workspace(session)
+    # The workspace's own first: a jeweller who made a model wants to see her, not
+    # scroll past thirty strangers to reach her.
+    mine = [talent.card(row) for row in talent.recent(workspace_id)]
+    house = [{'key': key, 'description': entry['description'],
+              'image': f'/media/{entry["file"]}', 'mine': False, **cast.card(key)}
+             for key, entry in entries.items()]
     return {
-        'models': [
-            {'key': key, 'description': entry['description'],
-             'image': f'/media/{entry["file"]}', **cast.card(key)}
-            for key, entry in entries.items()
-        ],
+        'models': mine + house,
         'skin_tones': [{'key': k, 'label': l} for k, l in cast.SKIN_TONES],
         'hair_groups': [{'key': k, 'label': l} for k, l in cast.HAIR_GROUPS],
+        'own': len(mine),
     }
 
 
@@ -294,7 +299,7 @@ def list_locations(session: dict = Depends(auth.current_session)):
 
 def run_shoot(job_id: str, shoot_id: str, product_path: pathlib.Path,
               model_key: str, location_key: str, description: str, category,
-              framings=None, options=None, comp=None) -> None:
+              framings=None, options=None, comp=None, face=None) -> None:
     """Generate, persisting each image the moment it lands.
 
     shoot_id is the gallery this belongs to: for a reshoot it is the parent, so the new
@@ -319,7 +324,7 @@ def run_shoot(job_id: str, shoot_id: str, product_path: pathlib.Path,
         saved, failures = shoot.shoot(
             [product_path], model_key, location_key, description, category,
             framings=framings, out_dir=SHOOTS / job_id, options=options,
-            attempts=attempts, on_image=persist, comp=comp)
+            attempts=attempts, on_image=persist, comp=comp, face=face)
     except Exception as error:
         # Surfaced rather than swallowed — a silent spinner is worse than a visible
         # failure during a live client demo.
@@ -454,6 +459,130 @@ async def create_piece(upload: UploadFile,
             'spec': category_spec(piece.category)}
 
 
+# --- the workspace's own models ------------------------------------------------------
+
+def _make_talent(workspace_id: str, user_id: str, name: str, description: str,
+                 prompt: str, source: str, reference: pathlib.Path | None,
+                 idempotency_key: str) -> dict:
+    """Reserve, generate one portrait, store it, settle. The money path is the job's.
+
+    Run inline rather than in the background: it is one image, the customer is waiting
+    on a page that has nothing else to show them, and a job row they would have to poll
+    for a single portrait is machinery for its own sake. The job row still exists, so
+    the credit is reserved and settled by exactly the same code every other kind uses,
+    and a double-clicked Create is one charge rather than two.
+    """
+    cost = credits.cost('model')
+    try:
+        with db.tx() as conn:
+            job = jobs.create(workspace_id, user_id, 'model',
+                              idempotency_key or f'model:{uuid.uuid4()}',
+                              {'name': name, 'source': source},
+                              reserved_credits=cost, conn=conn)
+            if job['created']:
+                credits.reserve(conn, workspace_id, str(job['id']), cost)
+    except credits.Insufficient as short:
+        raise HTTPException(402, f'not enough credits — {short}')
+
+    job_id = str(job['id'])
+    if not job['created']:
+        raise HTTPException(409, 'that model is already being made')
+
+    try:
+        path = talent.portrait(prompt, reference)
+        row = talent.create(workspace_id, user_id, name, description, path, source)
+    except Exception as error:                  # noqa: BLE001 - refund, then report
+        credits.settle(job_id, delivered=0)
+        jobs.finish(job_id, 'failed', error=str(error))
+        log.warning('model generation failed: %r', error)
+        raise HTTPException(502, 'that model could not be generated — nothing was charged')
+
+    credits.settle(job_id, delivered=1)
+    jobs.finish(job_id, 'succeeded', settled_credits=1)
+    return {**talent.card(row), 'balance': credits.balance(workspace_id)}
+
+
+@app.get('/api/talent')
+def list_talent(session: dict = Depends(auth.current_session)):
+    """The workspace's own models. The built-in cast comes from /api/models."""
+    workspace_id = auth.current_workspace(session)
+    return [talent.card(row) for row in talent.recent(workspace_id)]
+
+
+@app.post('/api/talent')
+def create_talent(
+    name: str = Form(...),
+    age: str = Form(''),
+    skin: str = Form(...),
+    origin: str = Form(...),
+    hair: str = Form(''),
+    build: str = Form(''),
+    idempotency_key: str = Form(''),
+    session: dict = Depends(auth.current_session),
+):
+    """Describe a model and get a portrait, through the same brief the cast was made with.
+
+    The customer's words fill slots in cast.EDITORIAL_BRIEF rather than becoming the
+    prompt. That brief is what forbids jewellery, watermarks and bare shoulders and what
+    asks for the professional-model look — a description in an empty prompt produces a
+    snapshot, which is what the first version of the built-in cast was.
+    """
+    workspace_id = auth.current_workspace(session)
+    if not skin.strip() or not origin.strip():
+        raise HTTPException(400, 'a complexion and a region are needed')
+    description = talent.describe(age, skin, origin, hair, build)
+    return _make_talent(workspace_id, session['user_id'], name, description,
+                        talent.brief(description), 'generated', None, idempotency_key)
+
+
+@app.post('/api/talent/upload')
+async def upload_talent(
+    upload: UploadFile,
+    name: str = Form(...),
+    description: str = Form(''),
+    # Not a formality. Reproducing a person's likeness needs their express permission
+    # under both providers' terms, and the difference between a brand ambassador with a
+    # release and a photograph off the internet is exactly this box.
+    consent: str = Form(''),
+    idempotency_key: str = Form(''),
+    session: dict = Depends(auth.current_session),
+):
+    """Take a photograph of a real person and normalise it into a usable reference.
+
+    The raw upload is never stored as the reference. A real photograph carries her own
+    earrings, her own neckline and her own lighting, and every one of those bleeds into
+    the shot of the customer's piece — which is the failure the house brief exists to
+    prevent. One generation pass restyles the wardrobe and the setting while holding the
+    face, and that result is what the shoots condition on.
+    """
+    workspace_id = auth.current_workspace(session)
+    if consent.strip().lower() not in ('1', 'true', 'yes', 'on'):
+        raise HTTPException(
+            422, 'we need you to confirm this person has agreed to their likeness '
+                 'being used for this brand')
+
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    staged = UPLOADS / f'talent-{uuid.uuid4().hex[:12]}{pieces.suffix_of(upload.filename)}'
+    save_upload(upload, staged)
+
+    # Kept short and generic on purpose: this is the identity the shoot re-describes at
+    # every framing, and a wrong guess about her age or heritage in text fights the
+    # photograph it sits beside. The reference image carries the face; the text only has
+    # to not contradict it.
+    written = description.strip() or 'a professional fashion model'
+    return _make_talent(workspace_id, session['user_id'], name, written,
+                        talent.NORMALISE, 'uploaded', staged, idempotency_key)
+
+
+@app.delete('/api/talent/{talent_id}')
+def remove_talent(talent_id: str, session: dict = Depends(auth.current_session)):
+    """Take a model out of the workspace. Shoots already made with her are untouched."""
+    workspace_id = auth.current_workspace(session)
+    if not talent.archive(talent_id, workspace_id):
+        raise HTTPException(404, 'no such model')
+    return {'removed': talent_id}
+
+
 @app.get('/api/pieces')
 def list_pieces(session: dict = Depends(auth.current_session)):
     """The workspace's product library, most recently used first."""
@@ -525,7 +654,10 @@ def create_shoot(
     session: dict = Depends(auth.current_session),
 ):
     workspace_id = auth.current_workspace(session)
-    if model_key not in shoot.load_cast():
+    # The house cast first, then the workspace's own. A custom model is resolved here
+    # rather than inside shoot.py, which has no database and should not grow one.
+    own = None if model_key in shoot.load_cast() else talent.owned(model_key, workspace_id)
+    if own is None and model_key not in shoot.load_cast():
         raise HTTPException(400, f'unknown model {model_key}')
     if location_key not in locations.ALL:
         raise HTTPException(400, f'unknown location {location_key}')
@@ -595,9 +727,11 @@ def create_shoot(
         # Outside the money transaction on purpose: the library's sort order is not worth
         # failing a paid shoot over, and a piece that misses a touch simply sorts older.
         pieces.touch(piece_id, workspace_id, sku)
+        if own is not None:
+            talent.touch(model_key, workspace_id)
         background.add_task(run_shoot, job_id, job_id, product_path, model_key,
                             location_key, description.strip(), chosen, framings,
-                            options, comp)
+                            options, comp, talent.face(own) if own else None)
     return {'job_id': job_id, 'status': 'running',
             'expected': cost, 'balance': credits.balance(workspace_id)}
 
@@ -724,11 +858,18 @@ def reshoot(job_id: str, background: BackgroundTasks, framing: str,
         raise HTTPException(402, f'not enough credits — {short}')
 
     if job['created']:
+        # The original may have been shot with the workspace's own model, which is not
+        # in the cast manifest — resolve it here too, or a reshoot of a custom-model
+        # shoot dies on a KeyError the customer has already paid a credit for.
+        model_key = params.get('model')
+        own = (None if model_key in shoot.load_cast()
+               else talent.owned(model_key, workspace_id))
         background.add_task(run_shoot, str(job['id']), job_id, product_path,
-                            params.get('model'), params.get('location'), description,
+                            model_key, params.get('location'), description,
                             category, [framing], options,
                             composition.parse(params.get('composition'),
-                                              params.get('category', '')))
+                                              params.get('category', '')),
+                            talent.face(own) if own else None)
     return {'job_id': job_id, 'reshoot_id': str(job['id']), 'status': 'running',
             'framing': framing, 'balance': credits.balance(workspace_id)}
 

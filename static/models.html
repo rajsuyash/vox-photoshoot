@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Models · Donna Photoshoot</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<style>
+  .ways { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    margin-bottom: 40px; }
+  .way { border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); padding: 22px; }
+  .way h2 { margin: 0 0 4px; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .way > p { margin: 0 0 18px; color: var(--faint); font-size: 13px; line-height: 1.5; }
+
+  .drop { border: 1px dashed var(--line); border-radius: var(--radius);
+    background: var(--raised); padding: 26px; text-align: center; cursor: pointer;
+    transition: border-color .2s; }
+  .drop:hover, .drop.over { border-color: var(--copper-line); }
+  .drop strong { font-size: 14px; font-weight: 500; display: block; }
+  .drop p { margin: 4px 0 0; color: var(--faint); font-size: 12px; }
+  .drop img { max-height: 150px; border-radius: 10px; display: block; margin: 0 auto; }
+
+  .consent { display: flex; gap: 9px; align-items: flex-start; margin: 14px 0 0;
+    font-size: 12px; color: var(--faint); line-height: 1.5; }
+  .consent input { margin: 2px 0 0; flex: none; width: 16px; height: 16px;
+    accent-color: var(--copper); }
+
+  .go-row { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
+  .go-row .cost { font-size: 12px; color: var(--faint); }
+
+  .mine { display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .face { border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); overflow: hidden; display: flex; flex-direction: column; }
+  .face img { display: block; width: 100%; aspect-ratio: 3/4; object-fit: cover;
+    background: #e8e6e3; }
+  .face .meta { padding: 11px 12px 0; flex: 1; min-width: 0; }
+  .face .meta b { display: block; font-size: 14px; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .face .meta small { display: block; font-size: 12px; color: var(--muted);
+    margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .face .row { display: flex; align-items: center; gap: 8px; padding: 11px 12px; }
+  .face .row a { flex: 1; text-align: center; text-decoration: none; font-size: 13px;
+    font-weight: 600; padding: 8px 10px; border-radius: 999px;
+    background: var(--copper); color: var(--bg); }
+  .face .row a:hover { background: var(--copper-light); }
+  .face .row button { flex: none; font: inherit; font-size: 13px; cursor: pointer;
+    color: var(--faint); background: none; border: 0; padding: 8px; border-radius: 8px; }
+  .face .row button:hover { color: var(--error); background: rgba(229,115,115,.10); }
+
+  @media (max-width: 720px) {
+    .way { padding: 18px; }
+    .fields input, .fields select { font-size: 16px; }
+    .face .row a, .face .row button { min-height: 44px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
+      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
+      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
+    </svg>
+    <b>Donna</b>&nbsp;<span>Photoshoot</span>
+  </a>
+  <div class="account" id="account"></div>
+</header>
+<main>
+<h1 class="page">Models</h1>
+<p class="lede">Thirty models come with the app. These are yours — describe one, or bring
+  your own. Either way she becomes a face you can shoot any piece on.</p>
+
+<div id="error" class="error hidden"></div>
+<div id="notice" class="notice hidden"></div>
+
+<div class="ways">
+  <section class="way">
+    <h2>Describe a model</h2>
+    <p>Say who she is and we photograph her. She comes back lit and styled like the rest
+      of the cast, so she works as a reference straight away.</p>
+    <div class="fields">
+      <label class="wide"><span class="lbl">Name her <em>for your own reference</em></span>
+        <input id="gName" type="text" maxlength="60" placeholder="e.g. Diwali campaign face">
+      </label>
+      <label>Age
+        <input id="gAge" type="number" min="18" max="70" value="26">
+      </label>
+      <label>Complexion
+        <select id="gSkin"></select>
+      </label>
+      <label>Region or heritage
+        <input id="gOrigin" type="text" maxlength="40" placeholder="e.g. Tamil, Punjabi, Bengali">
+      </label>
+      <label><span class="lbl">Hair <em>optional</em></span>
+        <input id="gHair" type="text" maxlength="60" placeholder="e.g. a long sleek ponytail">
+      </label>
+      <label class="wide"><span class="lbl">Anything else <em>optional</em></span>
+        <input id="gBuild" type="text" maxlength="80"
+               placeholder="e.g. high cheekbones, a long neck, an oval face">
+      </label>
+    </div>
+    <div class="go-row">
+      <button class="go" id="gGo" type="button">Create model</button>
+      <span class="cost">1 credit · one portrait, reusable forever</span>
+    </div>
+  </section>
+
+  <section class="way">
+    <h2>Use your own model</h2>
+    <p>A photo of your brand ambassador, or anyone whose likeness you have permission to
+      use. We restyle the wardrobe and lighting to match the cast and keep the face.</p>
+
+    <div class="drop" id="uDrop">
+      <div id="uIdle"><strong>Drop a photo of her here</strong>
+        <p>or click to choose · a clear, front-facing head and shoulders works best</p></div>
+      <img id="uPreview" class="hidden" alt="The photo you chose">
+    </div>
+    <input type="file" id="uFile" accept="image/*" hidden>
+
+    <div class="fields">
+      <label class="wide">Name her
+        <input id="uName" type="text" maxlength="60" placeholder="e.g. Meera, our ambassador">
+      </label>
+    </div>
+
+    <label class="consent">
+      <input type="checkbox" id="uConsent">
+      <span>This person has agreed to their likeness being used in imagery for this
+        brand, and I have the rights to this photograph.</span>
+    </label>
+
+    <div class="go-row">
+      <button class="go" id="uGo" type="button" disabled>Add model</button>
+      <span class="cost">1 credit · we restyle her into a usable reference</span>
+    </div>
+  </section>
+</div>
+
+<h2 class="page" style="font-size:17px;margin-bottom:14px">Your models <span id="count"
+  style="color:var(--faint);font-weight:400"></span></h2>
+<div class="mine" id="list"></div>
+<p class="empty-state hidden" id="empty">None yet. Make one above and she appears here and
+  in step 2 of every shoot.</p>
+</main>
+<script src="/app.js"></script>
+<script>
+
+// Same vocabulary the cast filters use, so "Deep" means the same thing in both places.
+const SKIN = [
+  ['very fair', 'Very fair'], ['fair', 'Fair'], ['wheatish', 'Wheatish'],
+  ['medium brown', 'Medium'], ['deep bronze', 'Deep bronze'], ['dark brown', 'Deep'],
+];
+
+let mine = [];
+
+function say(id, message) {
+  const other = id === 'error' ? 'notice' : 'error';
+  $(other).classList.add('hidden');
+  $(id).textContent = message;
+  $(id).classList.remove('hidden');
+}
+
+function tile(row) {
+  const card = document.createElement('article');
+  card.className = 'face';
+  const img = new Image();
+  img.src = row.image;
+  img.alt = row.name;
+  img.loading = 'lazy';
+  card.appendChild(img);
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.appendChild(Object.assign(document.createElement('b'),
+    { textContent: row.name, title: row.name }));
+  meta.appendChild(Object.assign(document.createElement('small'),
+    { textContent: row.source === 'uploaded' ? 'From your photo' : row.description,
+      title: row.description }));
+  card.appendChild(meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'row';
+  actions.appendChild(Object.assign(document.createElement('a'),
+    { href: `/?model=${encodeURIComponent(row.key)}`, textContent: 'New shoot' }));
+  const remove = Object.assign(document.createElement('button'),
+    { type: 'button', textContent: 'Remove' });
+  remove.addEventListener('click', async () => {
+    remove.disabled = true;
+    try {
+      await api(`/api/talent/${encodeURIComponent(row.key)}`, { method: 'DELETE' });
+      mine = mine.filter((m) => m.key !== row.key);
+      draw();
+    } catch (error) {
+      remove.disabled = false;
+      say('error', String(error.message || error));
+    }
+  });
+  actions.appendChild(remove);
+  card.appendChild(actions);
+  return card;
+}
+
+function draw() {
+  $('count').textContent = mine.length ? `· ${mine.length}` : '';
+  $('list').replaceChildren(...mine.map(tile));
+  $('empty').classList.toggle('hidden', mine.length > 0);
+}
+
+// One key per attempt, minted before the request. A double-tapped Create is one charge:
+// the server returns the existing job rather than starting a second generation.
+function idem(prefix) {
+  return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function submit(button, label, path, body) {
+  button.disabled = true;
+  button.textContent = 'Photographing…';
+  try {
+    const row = await api(path, { method: 'POST', body });
+    mine.unshift(row);
+    draw();
+    if (row.balance !== undefined) { session.balance = row.balance; renderAccount(); }
+    say('notice', `${row.name} is ready. She is in step 2 of every shoot from now on.`);
+    return true;
+  } catch (error) {
+    say('error', String(error.message || error));
+    return false;
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+$('gGo').addEventListener('click', async () => {
+  const origin = $('gOrigin').value.trim();
+  if (!origin) return say('error', 'tell us her region or heritage — it is what makes her look like someone rather than anyone');
+  const body = new FormData();
+  body.append('name', $('gName').value.trim() || `${origin} model`);
+  body.append('age', $('gAge').value);
+  body.append('skin', $('gSkin').value);
+  body.append('origin', origin);
+  body.append('hair', $('gHair').value.trim());
+  body.append('build', $('gBuild').value.trim());
+  body.append('idempotency_key', idem('model'));
+  await submit($('gGo'), 'Create model', '/api/talent', body);
+});
+
+// --- upload ---------------------------------------------------------------------
+let chosen = null;
+const uDrop = $('uDrop');
+uDrop.addEventListener('click', () => $('uFile').click());
+uDrop.addEventListener('dragover', (e) => { e.preventDefault(); uDrop.classList.add('over'); });
+uDrop.addEventListener('dragleave', () => uDrop.classList.remove('over'));
+uDrop.addEventListener('drop', (e) => {
+  e.preventDefault(); uDrop.classList.remove('over');
+  if (e.dataTransfer.files[0]) take(e.dataTransfer.files[0]);
+});
+$('uFile').addEventListener('change', () => $('uFile').files[0] && take($('uFile').files[0]));
+
+function take(file) {
+  if (!file.type.startsWith('image/')) return;
+  chosen = file;
+  const reader = new FileReader();
+  reader.onload = () => {
+    $('uPreview').src = reader.result;
+    $('uPreview').classList.remove('hidden');
+    $('uIdle').classList.add('hidden');
+  };
+  reader.readAsDataURL(file);
+  ready();
+}
+
+// Both are required, and the checkbox is not decoration: it is the difference between a
+// brand ambassador with a release and a photograph off the internet.
+function ready() {
+  $('uGo').disabled = !(chosen && $('uConsent').checked && $('uName').value.trim());
+}
+$('uConsent').addEventListener('change', ready);
+$('uName').addEventListener('input', ready);
+
+$('uGo').addEventListener('click', async () => {
+  const body = new FormData();
+  body.append('upload', chosen);
+  body.append('name', $('uName').value.trim());
+  body.append('consent', $('uConsent').checked ? 'true' : '');
+  body.append('idempotency_key', idem('upload'));
+  if (await submit($('uGo'), 'Add model', '/api/talent/upload', body)) {
+    chosen = null;
+    $('uPreview').classList.add('hidden');
+    $('uIdle').classList.remove('hidden');
+    $('uConsent').checked = false;
+    $('uName').value = '';
+    ready();
+  }
+});
+
+(async () => {
+  await loadSession();
+  await loadBalance();
+  fillSelect($('gSkin'), SKIN.map(([value]) => value), 'wheatish');
+  [...$('gSkin').options].forEach((option) => {
+    option.textContent = (SKIN.find(([value]) => value === option.value) || [])[1] || option.value;
+  });
+  try {
+    mine = await api('/api/talent');
+  } catch (error) {
+    return say('error', String(error.message || error));
+  }
+  draw();
+})();
+
+</script>
+</body>
+</html>

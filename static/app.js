@@ -37,6 +37,7 @@ const ICONS = {
   clock: 'M11 3.2a7.8 7.8 0 1 0 0 15.6 7.8 7.8 0 0 0 0-15.6zM11 6.8V11l3 1.8',
   brand: 'M3.6 11.4 10 5h6.4v6.4L10 17.8zM13.4 8.6h.01',
   box: 'M11 3.1 4 6.7v8.6l7 3.6 7-3.6V6.7zM4.2 6.9 11 10.3l6.8-3.4M11 10.3v8.4',
+  face: 'M11 3.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2zM4 18.6a7 7 0 0 1 14 0',
   card: 'M3 7.5A2.5 2.5 0 0 1 5.5 5h11A2.5 2.5 0 0 1 19 7.5v7a2.5 2.5 0 0 1-2.5 2.5h-11'
       + 'A2.5 2.5 0 0 1 3 14.5zM3 9.5h16M6.5 13.8h3',
   shield: 'M11 3.4 4.8 6v4.9c0 3.4 2.5 6.5 6.2 7.7 3.7-1.2 6.2-4.3 6.2-7.7V6z',
@@ -79,6 +80,7 @@ function renderAccount() {
   const nav = document.createElement('nav');
   const routes = [
     ['/', 'New photoshoot', 'camera', true],
+    ['/models.html', 'Models', 'face'],
     ['/products.html', 'Products', 'box'],
     ['/history.html', 'History', 'clock'],
     ['/settings.html', 'Branding', 'brand'],
@@ -187,6 +189,15 @@ function showWelcome() {
 
   const main = document.querySelector('main');
   if (main) main.prepend(banner);
+}
+
+// Shared by the generator and the models page. It lived in index.html, which is why
+// models.html could not have a dropdown without a fourth copy of a thing this codebase
+// already had three copies of.
+function fillSelect(select, values, chosen) {
+  select.replaceChildren(...values.map((value) => Object.assign(
+    document.createElement('option'), { value, textContent: titleCase(value),
+                                        selected: value === chosen })));
 }
 
 function titleCase(text) {
