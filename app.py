@@ -33,6 +33,7 @@ import db
 import jobs
 import locations
 import oauth_google
+import pieces
 import product
 import providers
 import retouch
@@ -428,22 +429,60 @@ async def create_piece(upload: UploadFile,
     is shown — you cannot ask for a ring's finger before you know it is a ring. The file
     stays on disk under the returned id so the shoot does not re-upload it.
     """
+    workspace_id = auth.current_workspace(session)
     piece_id = uuid.uuid4().hex[:12]
     UPLOADS.mkdir(parents=True, exist_ok=True)
-    suffix = pathlib.Path(upload.filename or 'upload.jpg').suffix or '.jpg'
+    suffix = pieces.suffix_of(upload.filename)
     path = UPLOADS / f'{piece_id}{suffix}'
     save_upload(upload, path)
     # To S3 before anything else touches it. This file is the one thing in the system
     # the customer cannot regenerate — every image we make is derived from it, and a
     # redeploy takes the container's disk with it.
-    storage.put(path, f'uploads/{piece_id}{suffix}')
+    key = f'{pieces.KEY_PREFIX}{piece_id}{suffix}'
+    storage.put(path, key)
 
     piece = product.identify(path)
+    # Recorded against the workspace, not just returned to one browser tab. This is what
+    # makes the piece findable again, and what lets /api/shoots refuse a piece belonging
+    # to someone else.
+    pieces.create(piece_id, workspace_id, session['user_id'], key,
+                  piece.category.key, piece.type, piece.description)
     # detected is returned, not just logged: a shoot built on the fallback is a shoot
     # of the wrong piece, and the client should see that before the images do.
     return {'piece_id': piece_id, 'category': piece.category.key, 'type': piece.type,
             'description': piece.description, 'detected': piece.detected,
             'spec': category_spec(piece.category)}
+
+
+@app.get('/api/pieces')
+def list_pieces(session: dict = Depends(auth.current_session)):
+    """The workspace's product library, most recently used first."""
+    workspace_id = auth.current_workspace(session)
+    return [pieces.card(piece) for piece in pieces.recent(workspace_id)]
+
+
+@app.get('/api/pieces/{piece_id}')
+def get_piece(piece_id: str, session: dict = Depends(auth.current_session)):
+    """One piece, so a shoot can start from the library without a re-upload."""
+    workspace_id = auth.current_workspace(session)
+    piece = pieces.owned(piece_id, workspace_id)
+    if piece is None:
+        raise HTTPException(404, 'no such product')
+    spec = category_spec(product.CATEGORIES.get(piece['category'],
+                                                product.DEFAULT_CATEGORY))
+    # Shaped like /api/pieces' response so the generator fills itself in from either.
+    # detected is true by definition here: the customer already confirmed this piece
+    # once, by paying to shoot it or by uploading it and being shown what it was read as.
+    return {**pieces.card(piece), 'detected': True, 'spec': spec}
+
+
+@app.delete('/api/pieces/{piece_id}')
+def remove_piece(piece_id: str, session: dict = Depends(auth.current_session)):
+    """Take a product out of the library. Its past shoots are untouched."""
+    workspace_id = auth.current_workspace(session)
+    if not pieces.archive(piece_id, workspace_id):
+        raise HTTPException(404, 'no such product')
+    return {'removed': piece_id}
 
 
 @app.post('/api/shoots')
@@ -502,6 +541,15 @@ def create_shoot(
             422, 'we could not read that photo, so we cannot shoot it — please confirm '
                  'what the piece is, or upload a clearer picture')
 
+    # Before the pieces table this was a path lookup and nothing else: any workspace
+    # could post any piece_id and shoot from a photograph it had never uploaded. Twelve
+    # hex characters was the only thing standing in the way.
+    #
+    # Uploads that predate the table have no row and no owner, so they cannot be proved
+    # to belong to anyone — a shoot from one is refused rather than trusted, and the
+    # customer re-uploads. That costs one file picker, once.
+    if pieces.owned(piece_id, workspace_id) is None:
+        raise HTTPException(404, 'that product is not in your library — upload it again')
     product_path = piece_path(piece_id)
     chosen = product.CATEGORIES[category]
     # Options validates its own fields against the category, so an out-of-range size or
@@ -544,6 +592,9 @@ def create_shoot(
 
     job_id = str(job['id'])
     if job['created']:
+        # Outside the money transaction on purpose: the library's sort order is not worth
+        # failing a paid shoot over, and a piece that misses a touch simply sorts older.
+        pieces.touch(piece_id, workspace_id, sku)
         background.add_task(run_shoot, job_id, job_id, product_path, model_key,
                             location_key, description.strip(), chosen, framings,
                             options, comp)

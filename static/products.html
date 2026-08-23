@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Products · Donna Photoshoot</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<style>
+  .products { display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+
+  .product { border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); overflow: hidden; display: flex;
+    flex-direction: column; transition: border-color .2s, transform .2s; }
+  .product:hover { transform: translateY(-2px); border-color: var(--copper-line); }
+
+  /* Neutral, and object-fit: contain — a product photo is a thing on a background, not
+     a picture to crop. Cropping a ring to fill a square is how you lose the ring. */
+  .product .shot { display: block; width: 100%; aspect-ratio: 1; object-fit: contain;
+    background: #e8e6e3; }
+  .product .noshot { display: grid; place-items: center; width: 100%; aspect-ratio: 1;
+    background: var(--raised); color: var(--faint); font-size: 12px; text-align: center;
+    padding: 16px; }
+
+  .product .meta { padding: 12px 13px 0; flex: 1; min-width: 0; }
+  .product .meta b { display: block; font-size: 14px; font-weight: 600;
+    letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .product .meta small { display: block; font-size: 12px; color: var(--muted);
+    margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .product .meta .when { color: var(--faint); font-size: 12px; margin-top: 6px; }
+
+  .product .row { display: flex; align-items: center; gap: 8px; padding: 12px 13px; }
+  .product .row a { flex: 1; text-align: center; text-decoration: none;
+    font-size: 13px; font-weight: 600; padding: 8px 10px; border-radius: 999px;
+    background: var(--copper); color: var(--bg); }
+  .product .row a:hover { background: var(--copper-light); }
+  .product .row button { flex: none; font: inherit; font-size: 13px; cursor: pointer;
+    color: var(--faint); background: none; border: 0; padding: 8px; border-radius: 8px; }
+  .product .row button:hover { color: var(--error); background: rgba(229,115,115,.10); }
+
+  .toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 22px;
+    flex-wrap: wrap; }
+  .toolbar input[type="search"] { font: inherit; font-size: 14px; color: var(--ink);
+    width: 300px; padding: 9px 13px; border: 1px solid var(--line);
+    border-radius: 999px; background: var(--raised);
+    -webkit-appearance: none; appearance: none; }
+  .toolbar input::placeholder { color: var(--faint); }
+  .toolbar input:focus { outline: 1px solid var(--copper); outline-offset: -1px;
+    border-color: var(--copper); }
+  .toolbar .count { color: var(--faint); font-size: 13px; }
+  .toolbar .new { margin-left: auto; }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
+      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
+      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
+    </svg>
+    <b>Donna</b>&nbsp;<span>Photoshoot</span>
+  </a>
+  <div class="account" id="account"></div>
+</header>
+<main>
+<h1 class="page">Products</h1>
+<p class="lede">Every piece you have uploaded. Start a shoot from one and you never
+  upload it twice.</p>
+
+<div id="error" class="error hidden"></div>
+
+<div class="toolbar">
+  <input id="q" type="search" autocomplete="off"
+         placeholder="SKU, description or category">
+  <span class="count" id="count"></span>
+</div>
+
+<div class="products" id="list"></div>
+<p class="empty-state hidden" id="empty"></p>
+</main>
+<script src="/app.js"></script>
+<script>
+
+let products = [];
+
+function when(row) {
+  const stamp = row.last_used_at || row.created_at;
+  if (!stamp) return '';
+  const date = new Date(stamp).toLocaleDateString(undefined,
+    { day: 'numeric', month: 'short', year: 'numeric' });
+  return row.last_used_at ? `Last shot ${date}` : `Added ${date}`;
+}
+
+function tile(row) {
+  const card = document.createElement('article');
+  card.className = 'product';
+
+  if (row.image) {
+    const img = new Image();
+    img.className = 'shot';
+    img.src = row.image;
+    // The description is model output about a customer's upload, so it goes in as text
+    // and never as markup — the same rule the history table follows.
+    img.alt = row.description || row.name;
+    img.loading = 'lazy';
+    // A key can exist in the row and the object not exist in the bucket — a piece
+    // recovered from job history, or one restored from cold storage. A broken image
+    // icon on the product you are trying to identify is worse than a plain sentence.
+    img.addEventListener('error', () => img.replaceWith(Object.assign(
+      document.createElement('div'),
+      { className: 'noshot', textContent: 'original not available' })));
+    card.appendChild(img);
+  } else {
+    // The original outlived its S3 object, or predates the library and could not be
+    // found. Say so rather than showing a broken image icon.
+    card.appendChild(Object.assign(document.createElement('div'),
+      { className: 'noshot', textContent: 'original not available' }));
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.appendChild(Object.assign(document.createElement('b'),
+    { textContent: row.name, title: row.name }));
+  meta.appendChild(Object.assign(document.createElement('small'),
+    { textContent: [titleCase(row.category), row.type].filter(Boolean).join(' · '),
+      title: row.description }));
+  meta.appendChild(Object.assign(document.createElement('div'),
+    { className: 'when', textContent: when(row) }));
+  card.appendChild(meta);
+
+  const row2 = document.createElement('div');
+  row2.className = 'row';
+  row2.appendChild(Object.assign(document.createElement('a'),
+    { href: `/?piece=${encodeURIComponent(row.piece_id)}`, textContent: 'New shoot' }));
+
+  const remove = Object.assign(document.createElement('button'),
+    { type: 'button', textContent: 'Remove', title: 'Remove from this list' });
+  remove.addEventListener('click', async () => {
+    remove.disabled = true;
+    try {
+      await api(`/api/pieces/${encodeURIComponent(row.piece_id)}`, { method: 'DELETE' });
+      products = products.filter((p) => p.piece_id !== row.piece_id);
+      draw($('q').value.trim().toLowerCase());
+    } catch (error) {
+      remove.disabled = false;
+      $('error').textContent = String(error.message || error);
+      $('error').classList.remove('hidden');
+    }
+  });
+  row2.appendChild(remove);
+  card.appendChild(row2);
+  return card;
+}
+
+function draw(query = '') {
+  const shown = query
+    ? products.filter((p) => [p.name, p.sku, p.description, p.category]
+        .join(' ').toLowerCase().includes(query))
+    : products;
+
+  $('count').textContent = products.length
+    ? `${shown.length} of ${products.length}` : '';
+  $('list').replaceChildren(...shown.map(tile));
+
+  const empty = $('empty');
+  empty.classList.toggle('hidden', shown.length > 0);
+  if (!shown.length) {
+    empty.textContent = products.length
+      ? 'Nothing matches that.'
+      : 'Nothing uploaded yet. Start a photoshoot and the piece lands here.';
+  }
+}
+
+(async () => {
+  await loadSession();
+  await loadBalance();
+  try {
+    products = await api('/api/pieces');
+  } catch (error) {
+    $('error').textContent = String(error.message || error);
+    $('error').classList.remove('hidden');
+    return;
+  }
+  draw();
+  $('q').addEventListener('input', () => draw($('q').value.trim().toLowerCase()));
+})();
+
+</script>
+</body>
+</html>

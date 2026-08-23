@@ -585,6 +585,37 @@ async function acceptFile(file) {
   refresh();
 }
 
+// Products links here as /?piece=<id>. Everything acceptFile does except the upload —
+// the photograph is already in S3 and already read, so re-posting it would spend a
+// second Anthropic call and mint a duplicate row for a piece we can name.
+async function usePiece(pieceId) {
+  let piece;
+  try {
+    piece = await api(`/api/pieces/${encodeURIComponent(pieceId)}`);
+  } catch (error) {
+    return fail('that product is no longer in your library — upload it again');
+  }
+  state.file = null;                       // there is no File; the server holds the bytes
+  state.piece = piece;
+  state.specs[piece.category] = piece.spec;
+
+  if (piece.image) {
+    $('previewImg').src = piece.image;
+    $('previewImg').classList.remove('hidden');
+  } else {
+    $('previewImg').classList.add('hidden');
+  }
+  $('previewName').textContent = piece.name;
+  $('dropIdle').classList.add('hidden');
+  $('dropPreview').classList.remove('hidden');
+  $('s1').dataset.done = 'true';
+
+  renderPiece();
+  if (piece.sku) $('pieceSku').value = piece.sku;
+  loadComposition(piece.category);
+  refresh();
+}
+
 // --- Retouch ------------------------------------------------------------------
 const rDrop = $('rDrop'), rFileInput = $('rFile');
 rDrop.addEventListener('click', () => rFileInput.click());
@@ -798,6 +829,9 @@ async function load() {
     $('outNote').textContent = 'loading…';
     poll(deepLink).catch(() => fail('that shoot could not be opened'));
   }
+  // Products links here. Deferred until after the pickers are built below, because
+  // renderPiece and the composition chips both expect the category specs to exist.
+  const fromLibrary = new URLSearchParams(location.search).get('piece');
   const [cast, places, categories, retouchOptions] = await Promise.all([
     fetch('/api/models').then((r) => r.json()),
     fetch('/api/locations').then((r) => r.json()),
@@ -870,6 +904,8 @@ async function load() {
       { key: 'India', label: 'India' }, { key: 'International', label: 'International' },
     ] }],
   });
+
+  if (fromLibrary) await usePiece(fromLibrary);
 }
 
 function refresh() {
