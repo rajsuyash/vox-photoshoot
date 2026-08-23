@@ -20,56 +20,103 @@
   --ok: #5cb85c;
   --radius: 12px;
   --radius-lg: 20px;
+  --side: 248px;               /* the sidebar's width, read by anything that clears it */
 }
 
 * { box-sizing: border-box; }
 
+/* The shell is a two column grid: a full height sidebar, then the page. Every page's
+   body is <header> + <main>, so both get their column without any page markup change. */
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font: 400 16px/1.55 Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+  display: grid; grid-template-columns: var(--side) minmax(0, 1fr);
+  min-height: 100vh;
 }
 
 header {
-  padding: 0 48px; height: 64px; border-bottom: 1px solid var(--line);
-  display: flex; align-items: center; gap: 14px;
-  position: sticky; top: 0; background: rgba(10,10,12,.8);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px); z-index: 10;
+  grid-column: 1; position: sticky; top: 0; align-self: start;
+  height: 100vh; padding: 22px 12px 16px;
+  border-right: 1px solid var(--line); background: var(--surface);
+  display: flex; flex-direction: column; gap: 20px; z-index: 10;
 }
 
 /* Matches .nav-logo on voxdonna.com: mark, then wordmark with the brand word in copper. */
 .logo { display: flex; align-items: center; gap: 8px; flex: none; white-space: nowrap;
-  font-size: 18px; font-weight: 700; letter-spacing: -.02em;
+  font-size: 18px; font-weight: 700; letter-spacing: -.02em; padding: 0 10px;
   text-decoration: none; color: inherit; }
 .logo svg { flex: none; }
 .logo b { font-weight: 700; color: var(--copper); }
 .logo span { font-weight: 400; color: var(--muted); }
-header .tag { color: var(--faint); font-size: 11px; letter-spacing: .12em;
-  text-transform: uppercase; font-weight: 600; }
+/* The strapline belongs on the login page, not on every screen of the working app. */
+header .tag { display: none; }
 
-main { max-width: 1200px; margin: 0 auto; padding: 48px 48px 160px; }
+main { grid-column: 2; max-width: 1200px; width: 100%; margin: 0 auto;
+  padding: 48px 48px 96px; }
 
 h1.page { margin: 0 0 6px; font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
 p.lede { margin: 0 0 32px; color: var(--muted); font-size: 14px; }
 
-/* Header account area: workspace, credit balance, and the way out. */
-.account { display: flex; align-items: center; gap: 14px; margin-left: auto;
-  font-size: 13px; }
-.account .ws-name { color: var(--ink); font-weight: 500; }
+/* The sidebar body: navigation at the top, account and credits pinned to the bottom.
+   app.js renders all of it into #account, so a page never lists the routes itself and
+   a new screen appears in every page's nav at once. */
+.account { display: flex; flex-direction: column; flex: 1; min-height: 0;
+  font-size: 14px; }
+
+.account nav { display: flex; flex-direction: column; gap: 2px; }
+.account nav a {
+  display: flex; align-items: center; gap: 11px; padding: 9px 10px;
+  border-radius: 9px; text-decoration: none; color: var(--muted);
+  font-size: 14px; font-weight: 500; transition: background .15s, color .15s;
+}
+.account nav a svg { flex: none; opacity: .8; }
+.account nav a:hover { background: var(--raised); color: var(--ink); }
+.account nav a[aria-current="page"] { background: var(--copper-soft);
+  color: var(--copper-light); }
+.account nav a[aria-current="page"] svg { opacity: 1; }
+
+/* The one action the whole product exists for, so it does not sit in the list as a
+   peer of Billing. */
+.account .new { justify-content: center; gap: 8px; margin-bottom: 14px;
+  background: var(--copper); color: var(--bg); font-weight: 600;
+  border-radius: 999px; padding: 11px 14px; }
+.account .new:hover { background: var(--copper-light); color: var(--bg); }
+
+.account .foot { margin-top: auto; padding-top: 16px; display: grid; gap: 10px; }
+
+/* Credits read as a card here rather than a chip: the sidebar has the room, and the
+   number is the thing a customer checks before starting work. */
+.account .credits { display: grid; gap: 2px; padding: 12px 13px;
+  border: 1px solid var(--copper-line); background: var(--copper-soft);
+  border-radius: var(--radius); }
+.account .credits b { color: var(--copper-light); font-size: 20px; font-weight: 600;
+  letter-spacing: -.02em; line-height: 1.2; }
+.account .credits span { color: var(--muted); font-size: 12px; }
+.account .credits.empty { border-color: rgba(229,115,115,.28);
+  background: rgba(229,115,115,.10); }
+.account .credits.empty b { color: var(--error); }
+.account .credits a { color: var(--copper-light); font-size: 12px; font-weight: 600;
+  text-decoration: none; margin-top: 4px; }
+.account .credits a:hover { text-decoration: underline; }
+
 .account select.ws { font: inherit; font-size: 13px; color: var(--ink);
   background: var(--raised); border: 1px solid var(--line); border-radius: 8px;
-  padding: 5px 9px; }
-.account .credits { color: var(--copper-light); font-weight: 600;
-  background: var(--copper-soft); border: 1px solid var(--copper-line);
-  padding: 4px 11px; border-radius: 999px; white-space: nowrap; }
-.account .credits.empty { color: var(--error); background: rgba(229,115,115,.10);
-  border-color: rgba(229,115,115,.28); }
-.account .acct { display: flex; align-items: center; gap: 12px; }
-.account .acct a, .account .acct button { color: var(--muted); font: inherit;
-  font-size: 13px; text-decoration: none; background: none; border: 0;
-  padding: 0; cursor: pointer; }
-.account .acct a:hover, .account .acct button:hover { color: var(--ink); }
+  padding: 7px 9px; width: 100%; }
+.account .ws-name { color: var(--faint); font-size: 12px; padding: 0 2px; }
+
+.account .who { display: flex; align-items: center; gap: 9px; padding: 8px 2px 0;
+  border-top: 1px solid var(--line); min-width: 0; }
+.account .who .avatar { width: 26px; height: 26px; border-radius: 999px; flex: none;
+  display: grid; place-items: center; background: var(--raised);
+  border: 1px solid var(--line); font-size: 12px; font-weight: 600;
+  color: var(--muted); text-transform: uppercase; }
+.account .who .email { font-size: 12px; color: var(--muted); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.account .who button { margin-left: auto; flex: none; color: var(--faint);
+  font: inherit; font-size: 12px; background: none; border: 0; padding: 0;
+  cursor: pointer; }
+.account .who button:hover { color: var(--ink); }
 
 button.go {
   border: 0; border-radius: 999px; padding: 13px 30px; font-size: 14px; font-weight: 600;
@@ -127,10 +174,47 @@ table.data a:hover { color: var(--copper-light); }
 .empty-state { color: var(--faint); font-size: 14px; padding: 40px 0; text-align: center; }
 .hidden { display: none; }
 
-@media (max-width: 900px) { .account .acct a { display: none; } }
+/* Below 900px the sidebar goes back to being a bar across the top. A 248px column on a
+   375px screen leaves no page, and a hamburger is a tap in front of every navigation on
+   a five item app. The nav scrolls sideways instead; the account details move into it. */
+@media (max-width: 900px) {
+  body { grid-template-columns: minmax(0, 1fr); }
+  header {
+    grid-column: 1; height: auto; padding: 12px 20px;
+    /* flex-start, not center: the account block is two rows tall here, and centring
+       the logo against both of them floats it into the gap between them. */
+    flex-direction: row; align-items: flex-start; gap: 16px;
+    border-right: 0; border-bottom: 1px solid var(--line);
+    background: rgba(10, 10, 12, .8);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+  }
+  main { grid-column: 1; padding: 32px 20px 120px; }
+  .logo { min-height: 30px; }   /* matches the account row it now sits beside */
+
+  /* Two rows: identity and account on the first, navigation across the second. One row
+     could not hold both — on a 390px screen the nav was left about 40px and every link
+     but the first sat off the edge behind a swipe nobody would try. */
+  .account { flex-direction: row; flex-wrap: wrap; align-items: center;
+    gap: 10px 14px; flex: 1; min-width: 0; }
+  .account .foot { order: 0; flex: none; margin-top: 0; margin-left: auto;
+    padding-top: 0; grid-auto-flow: column; align-items: center; gap: 12px; }
+  .account nav { order: 1; flex: 1 0 100%; flex-direction: row; align-items: center;
+    gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .account nav::-webkit-scrollbar { display: none; }
+  .account nav a { white-space: nowrap; padding: 7px 10px; flex: none; }
+  .account .new { margin-bottom: 0; padding: 7px 14px; }
+  /* The credits card collapses to the chip it used to be — there is no vertical room
+     for a stacked number and label in a 56px bar. */
+  .account .credits { display: flex; align-items: baseline; gap: 5px;
+    padding: 5px 11px; border-radius: 999px; white-space: nowrap; }
+  .account .credits b { font-size: 14px; }
+  .account .credits a, .account .ws-name { display: none; }
+  .account .who { border-top: 0; padding: 0; }
+  .account .who .email { display: none; }
+}
+
 @media (max-width: 720px) {
-  header { padding: 0 20px; gap: 10px; } main { padding: 32px 20px 120px; }
-  header .tag { display: none; }
-  .logo { font-size: 16px; }
+  .logo { font-size: 16px; padding: 0; }
   .logo span { display: none; }   /* "Donna" + the mark carry it on a phone */
 }

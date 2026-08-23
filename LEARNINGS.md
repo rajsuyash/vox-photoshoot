@@ -36,6 +36,19 @@ explicitly.
 shot's own framing means "extreme close up of the hand" and "her whole figure" in the same
 prompt. Never emit both — see `composition.custom_framing`.
 
+**Describe the light, never the rig.** A cast brief asked for "a large softbox key just
+above the lens with a silver reflector below" and got a portrait with the softbox and the
+reflector both in shot. Equipment named in a prompt is equipment in the frame. Say what
+the light does to the face — catchlights, shadow under the cheekbone — and forbid the
+hardware in the negative.
+
+**Asking for realism gets you the DMV.** "Natural skin texture with visible pores and no
+heavy retouching" under even lighting was meant to avoid plastic AI skin. It produced
+twenty-eight documentary headshots that read as ID card scans, and a customer picking a
+face for a jewellery campaign rejected six outright. A campaign face needs the word MODEL
+in the first line, professional makeup, styled hair and campaign-standard retouching;
+distinctive bone structure is what keeps it from looking generic, not a bare face.
+
 **`num_images` produces near-duplicates.** A "shoot" of three has to vary framing
 explicitly and give each frame its own seed. A fixed seed per framing also meant a paid
 reshoot returned a byte-identical image; `seed_for` adds the attempt.

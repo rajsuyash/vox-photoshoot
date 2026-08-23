@@ -27,18 +27,97 @@ async function loadSession() {
   return session.me;
 }
 
-// The header chip: workspace, credit balance, and a way out. Rendered from one place so
-// every page gets the same thing without duplicating markup.
+// Line icons, 18px, stroked in currentColor so they take the nav item's state without a
+// second rule. Kept as path data rather than an icon font or a sprite sheet: five glyphs
+// do not justify a request, and inline SVG inherits colour for free.
+const ICONS = {
+  camera: 'M3 8.5A2.5 2.5 0 0 1 5.5 6h1.2l1-1.6a1 1 0 0 1 .85-.4h4.9a1 1 0 0 1 .85.4'
+        + 'l1 1.6h1.2A2.5 2.5 0 0 1 19 8.5v7A2.5 2.5 0 0 1 16.5 18h-11A2.5 2.5 0 0 1 3'
+        + ' 15.5zM11 8.5a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4z',
+  clock: 'M11 3.2a7.8 7.8 0 1 0 0 15.6 7.8 7.8 0 0 0 0-15.6zM11 6.8V11l3 1.8',
+  brand: 'M3.6 11.4 10 5h6.4v6.4L10 17.8zM13.4 8.6h.01',
+  card: 'M3 7.5A2.5 2.5 0 0 1 5.5 5h11A2.5 2.5 0 0 1 19 7.5v7a2.5 2.5 0 0 1-2.5 2.5h-11'
+      + 'A2.5 2.5 0 0 1 3 14.5zM3 9.5h16M6.5 13.8h3',
+  shield: 'M11 3.4 4.8 6v4.9c0 3.4 2.5 6.5 6.2 7.7 3.7-1.2 6.2-4.3 6.2-7.7V6z',
+  plus: 'M11 5.5v11M5.5 11h11',
+};
+
+function icon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '18');
+  svg.setAttribute('height', '18');
+  svg.setAttribute('viewBox', '0 0 22 22');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', ICONS[name]);
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-width', '1.6');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  svg.appendChild(path);
+  return svg;
+}
+
+// The generator is served at both / and /index.html, so an equality test against one of
+// them leaves the first nav item unhighlighted on whichever URL the person actually used.
+function isCurrent(href) {
+  const here = location.pathname;
+  if (href === '/') return here === '/' || here === '/index.html';
+  return here === href;
+}
+
+// The whole sidebar below the logo: navigation, then credits and the account pinned to
+// the bottom. Rendered from one place so a new screen appears in every page's nav at
+// once, and so no page carries its own copy of the route list.
 function renderAccount() {
   const host = $('account');
   if (!host || !session.me) return;
   const { workspace, workspaces, email, is_admin: isAdmin } = session.me;
 
-  const parts = [];
+  const nav = document.createElement('nav');
+  const routes = [
+    ['/', 'New photoshoot', 'camera', true],
+    ['/history.html', 'History', 'clock'],
+    ['/settings.html', 'Branding', 'brand'],
+    ['/billing.html', 'Billing', 'card'],
+  ];
+  if (isAdmin) routes.push(['/admin.html', 'Admin', 'shield']);
+
+  routes.forEach(([href, label, glyph, primary]) => {
+    const link = Object.assign(document.createElement('a'), { href });
+    // The primary action reads as a button, so it takes the + rather than the camera —
+    // and it never shows the current-page state, which would make a button look inert.
+    link.append(icon(primary ? 'plus' : glyph), label);
+    if (primary) link.className = 'new';
+    else if (isCurrent(href)) link.setAttribute('aria-current', 'page');
+    nav.appendChild(link);
+  });
+
+  const foot = document.createElement('div');
+  foot.className = 'foot';
+
+  if (session.balance !== undefined && session.balance !== null) {
+    const card = document.createElement('div');
+    card.className = 'credits' + (session.balance <= 0 ? ' empty' : '');
+    card.append(
+      Object.assign(document.createElement('b'), { textContent: session.balance }),
+      Object.assign(document.createElement('span'),
+                    { textContent: session.balance === 1 ? 'credit left' : 'credits left' }),
+    );
+    // No point linking to Billing from Billing.
+    if (!isCurrent('/billing.html')) {
+      card.appendChild(Object.assign(document.createElement('a'),
+                                     { href: '/billing.html', textContent: 'Buy credits →' }));
+    }
+    card.title = 'One credit is one generated image';
+    foot.appendChild(card);
+  }
 
   if (workspaces.length > 1) {
     const select = document.createElement('select');
     select.className = 'ws';
+    select.setAttribute('aria-label', 'Workspace');
     workspaces.forEach((w) => select.appendChild(Object.assign(
       document.createElement('option'),
       { value: w.id, textContent: w.name, selected: workspace && w.id === workspace.id })));
@@ -48,41 +127,30 @@ function renderAccount() {
       await api('/api/me/workspace', { method: 'POST', body });
       location.reload();   // balances, history and jobs are all workspace-scoped
     });
-    parts.push(select);
+    foot.appendChild(select);
   } else if (workspace) {
-    parts.push(Object.assign(document.createElement('span'),
-                             { className: 'ws-name', textContent: workspace.name }));
+    foot.appendChild(Object.assign(document.createElement('span'),
+                                   { className: 'ws-name', textContent: workspace.name }));
   }
 
-  if (session.balance !== undefined && session.balance !== null) {
-    const chip = document.createElement('span');
-    chip.className = 'credits' + (session.balance <= 0 ? ' empty' : '');
-    chip.textContent = `${session.balance} credit${session.balance === 1 ? '' : 's'}`;
-    chip.title = 'One credit is one generated image';
-    parts.push(chip);
-  }
-
-  const menu = document.createElement('div');
-  menu.className = 'acct';
-  menu.title = email;
-  const links = [['History', '/history.html'], ['Branding', '/settings.html'],
-                 ['Billing', '/billing.html']];
-  if (isAdmin) links.push(['Admin', '/admin.html']);
-  links.forEach(([label, href]) => {
-    if (location.pathname === href) return;
-    menu.appendChild(Object.assign(document.createElement('a'),
-                                   { href, textContent: label }));
-  });
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.append(
+    Object.assign(document.createElement('span'),
+                  { className: 'avatar', textContent: (email || '?').charAt(0) }),
+    Object.assign(document.createElement('span'),
+                  { className: 'email', textContent: email, title: email }),
+  );
   const out = Object.assign(document.createElement('button'),
                             { type: 'button', textContent: 'Sign out' });
   out.addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' });
     location.href = '/login.html';
   });
-  menu.appendChild(out);
-  parts.push(menu);
+  who.appendChild(out);
+  foot.appendChild(who);
 
-  host.replaceChildren(...parts);
+  host.replaceChildren(nav, foot);
 }
 
 // Credits live on the session object so any page can show them after one fetch.

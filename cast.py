@@ -106,100 +106,123 @@ CAST = [
 # yellow gold reads completely differently on deep brown skin than on fair skin, and a
 # jeweller needs to see their piece on the customer they are selling to.
 #
+# WHAT THE FIRST VERSION OF THIS LIST GOT WRONG:
+#
+# Distinct was read as ordinary. Entries asked for "bare clean skin with minimal makeup",
+# "matte skin with a bare face", "a small gap between her front teeth", "visible fine
+# lines at the eyes" — and the brief below asked for no retouching under flat even light.
+# That is a passport photo, and the whole set came back looking like ID card scans of
+# passers-by rather than the cast of a jewellery campaign. Six were unusable.
+#
+# So: every entry says MODEL, the face keeps its own bone structure and skin tone, and
+# nothing in here asks for a bare face or an unstyled head. Distinctive bone structure
+# is what makes a model photograph well; a bare face is just an unfinished one.
+#
 # Expressions here are soft and closed-mouth on purpose. These portraits are the identity
 # reference for every shoot, and composition.EXPRESSIONS now lets a client ask for a
 # serious campaign — a reference image grinning broadly fights that request.
 EDITORIAL = [
     ('laila',
-     'a 26 year old Kashmiri woman, very fair skin with cool pink undertones and a light '
+     'a 26 year old Kashmiri model, very fair skin with cool pink undertones and a fine '
      'scatter of freckles across her nose, pale green-hazel eyes, a fine straight nose, '
-     'sharp high cheekbones and a narrow jaw, dark chestnut brown hair falling straight '
-     'past her shoulders with a centre parting, bare clean skin with minimal makeup'),
-    ('rukmini',
-     'a 24 year old Tamil woman, deep rich brown skin with warm red undertones, very '
-     'large dark almond eyes, a broad softly rounded nose, full lips and a strong square '
-     'jaw, thick black tightly curled hair worn in a high natural halo, glowing skin with '
-     'bare lips and defined brows'),
+     'sharp high cheekbones and a narrow sculpted jaw, long dark chestnut hair blow-dried '
+     'straight past her shoulders with a centre parting and a high gloss finish'),
     ('zoya',
-     'a 29 year old Hyderabadi woman, olive skin with neutral undertones, heavy lidded '
-     'dark eyes under strong straight brows, a long aquiline nose, sculpted cheekbones '
-     'and a sharp chin, jet black hair pulled back tight and flat to the head, matte skin '
-     'with a bare face'),
+     'a 29 year old Hyderabadi model, olive skin with neutral undertones and a luminous '
+     'finish, heavy lidded dark eyes under strong straight brows, a long elegant aquiline '
+     'nose, sculpted cheekbones and a sharp chin, jet black hair pulled back into a '
+     'polished low knot'),
     ('mercy',
-     'a 23 year old woman from Nagaland in northeast India, light golden skin with cool '
-     'undertones, softly hooded monolid eyes set wide apart, high flat cheekbones, a small '
-     'straight nose and a delicate jaw, glossy black hair in a blunt chin length bob, '
-     'clean skin with a sheer wash of colour'),
+     'a 23 year old model from Nagaland in northeast India, light golden skin with cool '
+     'undertones and a soft glow, striking hooded monolid eyes set wide apart, high flat '
+     'cheekbones, a small straight nose and a delicate jaw, glossy black hair in a sharp '
+     'blunt chin length bob'),
     ('paromita',
-     'a 27 year old Bengali woman, warm wheatish skin, a soft round face with a small '
-     'pointed chin, wide set dark doe eyes with a gentle downturn, a small rounded nose, '
-     'very long wavy black hair worn loose, soft dewy skin and bare lips'),
+     'a 27 year old Bengali model, warm wheatish skin with a dewy finish, a soft oval '
+     'face with a small pointed chin, wide set dark doe eyes, a small rounded nose, very '
+     'long thick wavy black hair worn loose and glossy'),
     ('gurleen',
-     'a 25 year old Punjabi woman, fair skin with golden undertones, a strong square jaw '
-     'and broad forehead, thick full brows over deep set brown eyes, a straight nose with '
-     'a slightly rounded tip, dark brown hair worn in a long straight sleek fall, healthy '
-     'skin with a clean brushed brow'),
-    ('devika',
-     'a 31 year old Malayali woman, dusky brown skin with olive undertones, a long oval '
-     'face and unusually long neck, calm heavy lidded eyes, a straight narrow nose and '
-     'wide full mouth, black curly hair scraped back into a low tight knot, bare glowing '
-     'skin'),
+     'a 25 year old Punjabi model, fair skin with golden undertones, a strong square jaw '
+     'and broad forehead, full groomed brows over deep set brown eyes, a straight nose '
+     'with a slightly rounded tip, long dark brown hair in a sleek high shine straight '
+     'fall'),
     ('ira',
-     'a 22 year old Marathi woman, medium wheatish skin, a heart shaped face with a wide '
-     'forehead narrowing to a small chin, bright round dark eyes, a short upturned nose '
-     'and a small gap between her front teeth, dark hair in a messy shoulder length shag '
-     'with a full fringe'),
-    ('naina',
-     'a 28 year old Rajasthani woman, warm sand toned skin, a long narrow face with '
-     'prominent high cheekbones and a strong straight nose, deep set dark eyes, thin '
-     'elegant lips, very long black hair in a single thick plait over one shoulder, '
-     'bare skin and a strong natural brow'),
+     'a 22 year old Marathi model, medium wheatish skin, a heart shaped face with a wide '
+     'forehead narrowing to a small chin, bright round dark eyes, a short neatly upturned '
+     'nose, dark hair in a textured shoulder length shag with a soft full fringe'),
     ('sarayu',
-     'a 26 year old Telugu woman, rich medium brown skin with golden undertones, a broad '
-     'open face with wide cheekbones, large expressive dark eyes with a natural upward '
-     'tilt, a softly flared nose, black hair in a loose low bun with wisps at the temple'),
+     'a 26 year old Telugu model, rich medium brown skin with golden undertones and a '
+     'radiant sheen, a broad open face with wide high cheekbones, large expressive dark '
+     'eyes with a natural upward tilt, a softly flared nose, black hair in a polished '
+     'low bun'),
     ('tenzin',
-     'a 24 year old Ladakhi woman, fair skin with cool rose undertones and wind flushed '
-     'cheeks, warm dark brown eyes with a soft epicanthic fold, broad flat cheekbones, a '
-     'small nose and a wide gentle mouth, straight black hair worn in two low plaits'),
+     'a 24 year old Ladakhi model, fair skin with cool rose undertones, warm dark brown '
+     'eyes with a soft epicanthic fold, broad flat cheekbones, a small nose and a wide '
+     'gentle mouth, straight jet black hair worn in two sleek low plaits'),
     ('ayesha',
-     'a 30 year old Lucknawi woman, pale wheatish skin with cool undertones, an oval face '
+     'a 30 year old Lucknawi model, pale wheatish skin with cool undertones, an oval face '
      'with a high smooth forehead, long dark lashes over grey-brown eyes, a fine narrow '
      'nose and a small full mouth, dark hair in a sleek middle parted low chignon'),
-    ('kiran',
-     'a 33 year old Indian woman, deep brown skin with cool undertones, an angular '
-     'striking face with very sharp cheekbones and a square jaw, close cropped natural '
-     'black hair worn very short, long neck, strong straight brows and a wide full mouth, '
-     'entirely bare face'),
     ('meher',
-     'a 25 year old Parsi woman from Mumbai, light olive skin, a delicate narrow face '
-     'with a prominent straight nose and a pointed chin, large light brown eyes set '
-     'close, arched brows, dark wavy hair worn in a loose side parted style'),
+     'a 25 year old Parsi model from Mumbai, light olive skin, a delicate narrow face '
+     'with a prominent straight nose and a pointed chin, large light brown eyes, high '
+     'arched brows, dark wavy hair in a glossy side parted fall'),
     ('shreya',
-     'a 21 year old Indian woman, medium wheatish skin, a youthful round face with full '
-     'cheeks, wide innocent dark eyes, a small button nose and a rosebud mouth, long '
-     'glossy dark brown hair with a blunt cut and a centre parting'),
+     'a 21 year old Indian model, medium wheatish skin, a youthful oval face with full '
+     'cheeks, wide dark eyes, a small neat nose and a rosebud mouth, long glossy dark '
+     'brown hair with a blunt cut and a centre parting'),
     ('nandini',
-     'a 34 year old Indian woman, warm honey toned skin with visible fine lines at the '
-     'eyes, a mature composed face with defined cheekbones and a firm jaw, calm dark '
-     'eyes, a straight nose, silver strands threaded through dark hair worn in a low '
-     'sleek twist, elegant and self possessed'),
-    ('amara',
-     'a 27 year old woman of mixed Indian and East African heritage, deep warm brown skin, '
-     'a broad symmetrical face with very high cheekbones, long almond eyes, a full wide '
-     'mouth and a softly broad nose, black hair in long fine braids gathered back'),
-    ('yasmin',
-     'a 29 year old Indian woman, medium olive skin, a strong androgynous face with a '
-     'wide square jaw, straight heavy brows, narrow watchful dark eyes and a long '
-     'straight nose, black hair slicked back wet-look off the face, editorial and severe'),
+     'a 34 year old Indian model, warm honey toned skin, a composed mature face with high '
+     'defined cheekbones and a firm jaw, calm dark eyes, a straight nose, a few silver '
+     'strands threaded through dark hair worn in a low sleek twist, elegant and self '
+     'possessed'),
     ('leela',
-     'a 23 year old Indian woman, fair wheatish skin, a soft oval face with a gentle jaw, '
-     'unusually large round dark eyes, a small straight nose, dark brown hair in loose '
-     'natural ringlet curls falling around her face'),
+     'a 23 year old Indian model, fair wheatish skin, a soft oval face with a gentle jaw, '
+     'unusually large round dark eyes, a small straight nose, dark brown hair in defined '
+     'glossy ringlet curls falling around her face'),
     ('anouk',
-     'a 28 year old woman of mixed Indian and French heritage, light golden skin, a fine '
+     'a 28 year old model of mixed Indian and French heritage, light golden skin, a fine '
      'boned face with a sharp narrow nose and hollow cheeks, pale grey-green eyes, thin '
-     'arched brows, light brown hair with sun lightened ends worn in a low ponytail'),
+     'arched brows, light brown hair with sun lightened ends in a sleek low ponytail'),
+
+    # Added after the first six were cut. Same rule: a face a casting director would
+    # book, written as bone structure rather than as a mood.
+    ('ishani',
+     'a 24 year old Odia model, deep golden brown skin with a radiant sheen, an '
+     'exceptionally long neck and elegant sloping shoulders, wide almond eyes under '
+     'arched brows, razor sharp cheekbones and a narrow tapered jaw, jet black hair '
+     'pulled into a high sleek ponytail'),
+    ('tanvi',
+     'a 23 year old Gujarati model, warm fair skin with a honey glow, upturned feline '
+     'eyes with a natural lift at the outer corner, a fine straight nose, high wide '
+     'cheekbones and a small pointed chin, dark hair in a glossy deep side parted '
+     'blow-dry'),
+    ('aaliya',
+     'a 26 year old model from Delhi, light wheatish skin with neutral undertones, a tall '
+     'angular face with a long straight nose and a defined square jaw, deep set dark eyes '
+     'under thick straight brows, dark hair scraped into a clean centre parted low bun'),
+    ('nyra',
+     'a 22 year old Goan model of mixed Indian and Portuguese heritage, sun warmed light '
+     'bronze skin, hazel-brown eyes, a fine upturned nose, softly hollowed cheeks and a '
+     'wide full mouth, dark honey brown hair falling in loose beachy waves'),
+    ('sanaya',
+     'a 27 year old Sindhi model, warm honey toned skin with a luminous finish, a heart '
+     'shaped face with high round cheekbones, large dark eyes with a heavy lash line, a '
+     'small straight nose and full lips, thick dark hair in a voluminous middle parted '
+     'blow-out'),
+    ('vedika',
+     'a 25 year old Mangalorean model, deep bronze skin with warm red undertones and a '
+     'polished glow, an oval face with strong high cheekbones, long tilted dark eyes, a '
+     'straight narrow nose, black hair in a sleek wet-look middle parting'),
+    ('mahika',
+     'a 21 year old Assamese model, light golden skin with cool undertones, a small '
+     'delicately boned face with a pointed chin, wide round dark eyes with a soft fold, a '
+     'small straight nose, glossy black hair cut to a blunt collarbone length'),
+    ('rhea',
+     'a 28 year old model from Chennai, rich dark brown skin with cool undertones and a '
+     'luminous sheen, an elongated sculpted face with very high cheekbones and a long '
+     'neck, large deep set dark eyes, a softly broad nose and a full wide mouth, black '
+     'hair in a close cropped tapered crop'),
 ]
 
 # The soft, closed-mouth expression these portraits carry. Deliberately not the wide
@@ -216,17 +239,37 @@ EDITORIAL_EXPRESSION = (
 # and the pilot came back grinning. That was right for the original eight and is wrong
 # now: composition.EXPRESSIONS lets a client ask for a serious campaign, and a reference
 # portrait laughing at the camera argues with the request.
+# The word MODEL and the words JEWELLERY BRAND have to be in the first line. This model
+# weights early tokens heavily — the same reason lighting and expression had to move to
+# the front of BASE_BRIEF — and the previous version buried the casting context behind
+# "editorial beauty portrait of a 26 year old Kashmiri woman", which it read as a request
+# for a photograph of a person rather than a booked model on a paid shoot.
+#
+# "natural skin texture with visible pores and no heavy retouching" is gone on purpose.
+# It was there to avoid plastic AI skin and it worked, but combined with flat even light
+# it produced twenty-eight documentary headshots. Professional retouching and a beauty
+# key light are what separate a campaign face from a photo of someone at the DMV; the
+# skin still reads real because the description asks for a finish, not for porcelain.
 EDITORIAL_BRIEF = (
-    'Photorealistic editorial beauty portrait of {description} '
-    'Even soft studio lighting from a large softbox with gentle fill, pale neutral '
-    'background, clean and modern. '
+    'Photorealistic beauty campaign portrait of a professional fashion model, booked '
+    'and paid for a luxury Indian jewellery brand advertising shoot, signed to a top '
+    'modelling agency. The model is {description} '
+    # Describing the rig put the rig in the picture: the first pilot came back with the
+    # softbox and the reflector both in frame, above and below the model. Light is
+    # described by what it does to the face now, never by the equipment that makes it.
+    'Polished beauty campaign lighting, soft and directional from just above the lens '
+    'with bright clean catchlights in the eyes and gentle sculpting shadows under the '
+    'cheekbones, on a pale neutral seamless background. '
+    'Full professional editorial makeup by a beauty team, sculpted groomed brows, '
+    'defined lashes, subtle contour, highlighted cheekbones and a polished lip. Hair '
+    'styled and finished by a professional hair stylist. '
     'She wears a plain pale blush silk top with a high round neckline and elbow length '
     'sleeves that fully cover both shoulders and upper arms. '
     'Her earlobes are completely bare and empty, her neck is bare, and she wears '
     'absolutely nothing on her ears, neck, nose or hair. '
-    'Sharp focus, natural skin texture with visible pores and no heavy retouching, '
-    'shot on an 85mm lens at f/2, head and shoulders, high end fashion magazine '
-    'editorial portrait.'
+    'Sharp focus, flawless luminous skin retouched to campaign standard while keeping '
+    'natural texture, shot on an 85mm lens at f/2, tightly cropped head and shoulders '
+    'filling the frame, high end jewellery brand advertising campaign.'
 )
 
 # A brand mark appeared bottom-right on a pilot face — the model inventing a logo for
@@ -236,7 +279,11 @@ EDITORIAL_BRIEF = (
 EDITORIAL_NEGATIVE = (
     ' No text, no watermark, no logo, no brand name, no signature and no lettering '
     'anywhere in the frame. No jewellery of any kind. No heavy bronzer, no oily sheen, '
-    'no bare shoulders, no strapless top.'
+    'no bare shoulders, no strapless top. Not a passport photo, not an ID card photo, '
+    'not a casting polaroid, not a candid snapshot of an ordinary person, no flat '
+    'lifeless lighting, no tired or blank expression. No studio equipment anywhere in '
+    'the frame: no softbox, no reflector, no light stand, no umbrella, no camera, no '
+    'table, no desk and no furniture.'
 )
 
 CAST = CAST + [
