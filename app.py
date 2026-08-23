@@ -81,11 +81,17 @@ PUBLIC_PATHS = {'/login.html', '/healthz', '/api/auth/login',
                 '/api/webhooks/razorpay',
                 '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png'}
 
+# /showcase is the login page's own imagery, so it has to be readable without a
+# session or the page renders as sixteen redirects to itself. It is a closed set of
+# files committed by tools/build_showcase.py — not a media route, and not a way into
+# anyone's work: nothing a customer uploads or generates is ever written there.
+PUBLIC_PREFIXES = ('/api/', '/showcase/')
+
 
 @app.middleware('http')
 async def require_login(request: Request, call_next):
     path = request.url.path
-    if path in PUBLIC_PATHS or path.startswith('/api/'):
+    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
     if auth.lookup(request.cookies.get(auth.COOKIE)) is None:
         # Carry the original path so a deep link survives the detour through login.
