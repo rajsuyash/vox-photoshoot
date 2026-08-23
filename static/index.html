@@ -21,7 +21,13 @@
   @media (max-width: 720px) { main { padding-bottom: 170px; } }
 
   section { margin-bottom: 56px; }
-  .step { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .step { display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+    flex-wrap: wrap; }
+  /* On a phone the note beside the heading squeezed it into two words a line. It gets
+     its own line instead, indented past the step number so the column still reads. */
+  @media (max-width: 720px) {
+    .step em { flex: 1 0 100%; margin-left: 39px; }
+  }
   .num {
     width: 27px; height: 27px; border-radius: 999px; flex: none;
     display: grid; place-items: center; font-size: 13px; font-weight: 600;
@@ -31,8 +37,11 @@
   section[data-done="true"] .num {
     background: var(--copper); color: var(--bg); border-color: var(--copper);
   }
-  .step h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
-  .step em { color: var(--muted); font-style: normal; font-size: 14px; }
+  /* 20px against 13px body is a 1.54 step. The page previously ran 11/12/13/13.5/14/15/17
+     — seven sizes inside one and a half octaves, which is a gradient, not a hierarchy.
+     Weight and colour carry the rest. */
+  .step h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
+  .step em { color: var(--faint); font-style: normal; font-size: 13px; }
 
   .drop {
     border: 1px dashed var(--line); border-radius: var(--radius); background: var(--surface);
@@ -56,6 +65,33 @@
     font-weight: 600;
   }
 
+  /* Search plus one row of chips per picker. */
+  .picker { margin-bottom: 16px; }
+  .picker-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .picker-bar input[type="search"] {
+    font: inherit; font-size: 14px; color: var(--ink); width: 260px; flex: none;
+    padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--raised); -webkit-appearance: none; appearance: none;
+  }
+  .picker-bar input::placeholder { color: var(--faint); }
+  .picker-bar input:focus { outline: 1px solid var(--copper); outline-offset: -1px;
+    border-color: var(--copper); }
+  .picker-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  /* Skin tone and hair are two questions, not one row of seven peers. The rule is what
+     keeps each of them inside the four-options-at-a-glance a person can actually hold. */
+  .picker-chips + .picker-chips { padding-left: 14px; border-left: 1px solid var(--line); }
+  .picker-chips button {
+    font: inherit; font-size: 13px; font-weight: 500; color: var(--muted);
+    padding: 6px 13px; border-radius: 999px; cursor: pointer;
+    background: transparent; border: 1px solid var(--line);
+    transition: color .15s, background .15s, border-color .15s;
+  }
+  .picker-chips button:hover { color: var(--ink); border-color: rgba(255,255,255,.16); }
+  .picker-chips button[aria-pressed="true"] {
+    color: var(--copper-light); background: var(--copper-soft);
+    border-color: var(--copper-line);
+  }
+
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .card {
     border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
@@ -67,14 +103,21 @@
   .card[aria-pressed="true"] {
     border-color: var(--copper); box-shadow: 0 0 0 3px var(--copper-soft);
   }
+  /* The tray a photograph sits on is neutral, not black. A #0a0a0c field makes every
+     image beside it read brighter and more contrasted than it is, and the one judgement
+     this product exists to support is whether gold looks right on skin. The shell stays
+     dark; the surface immediately under an image does not. */
   .card img { display: block; width: 100%; aspect-ratio: 3/4; object-fit: cover;
-    background: var(--raised); }
-  .card b { display: block; padding: 10px 12px 12px; font-size: 13.5px; font-weight: 500; }
-  /* The cast descriptions are prompt text, not copy — full sentences that run long.
-     Clamped to two lines so the grid stays even. */
-  .card b small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-    overflow: hidden; color: var(--muted); font-weight: 400; font-size: 12px;
-    margin-top: 3px; line-height: 1.4; }
+    background: #e8e6e3; }
+  .card b { display: block; padding: 10px 12px 12px; font-size: 14px; font-weight: 600;
+    letter-spacing: -.01em; }
+  /* One line: age, where she is from, her hair. Everything a jeweller casts on, and
+     nothing they don't — this used to print the first clause of the prompt. */
+  .card b small { display: block; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--muted); font-weight: 400; font-size: 12px;
+    margin-top: 2px; line-height: 1.4; letter-spacing: 0; }
+  .card b small.note { color: var(--faint); margin-top: 0; }
+  .card[hidden] { display: none; }
 
   .group-label {
     font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600;
@@ -184,28 +227,15 @@
     color: var(--copper-light); padding: 12px 16px; border-radius: var(--radius); }
   .detected.warn b { color: var(--copper-light); }
 
-  /* Header account area: workspace, credit balance, and the way out. */
-  .account { display: flex; align-items: center; gap: 14px; margin-left: auto;
-    font-size: 13px; }
-  .account .ws-name { color: var(--ink); font-weight: 500; }
-  .account select.ws { font: inherit; font-size: 13px; color: var(--ink);
-    background: var(--raised); border: 1px solid var(--line); border-radius: 8px;
-    padding: 5px 9px; }
-  .account .credits { color: var(--copper-light); font-weight: 600;
-    background: var(--copper-soft); border: 1px solid var(--copper-line);
-    padding: 4px 11px; border-radius: 999px; white-space: nowrap; }
-  .account .credits.empty { color: var(--error); background: rgba(229,115,115,.10);
-    border-color: rgba(229,115,115,.28); }
-  .account .acct { display: flex; align-items: center; gap: 12px; }
-  .account .acct a, .account .acct button { color: var(--muted); font: inherit;
-    font-size: 13px; text-decoration: none; background: none; border: 0;
-    padding: 0; cursor: pointer; }
-  .account .acct a:hover, .account .acct button:hover { color: var(--ink); }
-  @media (max-width: 900px) { .account .acct a { display: none; } }
+  /* The sidebar lives in theme.css. A second copy of .account used to sit here, from
+     when this page carried its own inline duplicate of the whole design system; it
+     survived the extraction and quietly overrode the sidebar's own rules. */
 
-  /* Centred above step 1. inline-flex inside a text-align:center wrapper is what keeps
-     the pill hugging its buttons instead of stretching the width of main. */
+  /* The mode switch, above step 1. inline-flex inside a text-align:center wrapper is
+     what keeps the pill hugging its buttons instead of stretching the width of main. */
   .tools-row { text-align: center; margin: 0 0 40px; }
+  .tools-row h1.page { font-size: 30px; margin-bottom: 4px; }
+  .tools-row p.lede { margin-bottom: 20px; }
   .tools { display: inline-flex; gap: 4px;
     background: var(--surface); border: 1px solid var(--line);
     padding: 4px; border-radius: 999px; }
@@ -270,7 +300,12 @@
   <!-- Which of the two tools you are using. It lived in the header beside the account
        chip, where it read as navigation and got missed — it is the first decision on
        the page, so it sits above the first step and is centred to be seen. -->
+  <!-- The page had no <h1> at all, so its document outline started at the step headings
+       and the screen was, to a screen reader, called nothing. -->
   <div class="tools-row">
+    <h1 class="page" id="pageTitle">New photoshoot</h1>
+    <p class="lede" id="pageLede">Four steps. Three campaign images from one product
+      photo.</p>
     <nav class="tools" id="tools" aria-label="Tool">
       <button type="button" data-tool="shoot" aria-pressed="true">Photoshoot</button>
       <button type="button" data-tool="retouch" aria-pressed="false">Retouch</button>
@@ -330,13 +365,20 @@
   </section>
 
   <section id="s2">
-    <div class="step"><span class="num">2</span><h2>Choose your model</h2></div>
+    <div class="step"><span class="num">2</span><h2>Choose your model</h2>
+      <em id="modelCount"></em></div>
+    <!-- Thirty faces is past the point where scrolling is choosing. -->
+    <div class="picker" id="modelPicker"></div>
     <div class="grid" id="models"></div>
+    <p class="empty-state hidden" id="modelsEmpty">No model matches that.</p>
   </section>
 
   <section id="s3">
-    <div class="step"><span class="num">3</span><h2>Choose the location</h2></div>
+    <div class="step"><span class="num">3</span><h2>Choose the location</h2>
+      <em id="locationCount"></em></div>
+    <div class="picker" id="locationPicker"></div>
     <div id="locations"></div>
+    <p class="empty-state hidden" id="locationsEmpty">No location matches that.</p>
   </section>
 
   <!-- Composition. Optional: every control has a default that reproduces what the app
@@ -345,7 +387,12 @@
     <div class="step"><span class="num">4</span><h2>Composition</h2>
       <em>optional &middot; sensible defaults already set</em></div>
 
-    <div class="comp">
+    <!-- Every chip row below is filled from /api/composition, which needs to know what
+         the piece is. Before an upload this card rendered as six labelled rows with
+         nothing beside them, which reads as broken rather than as not-yet. -->
+    <p class="empty-state" id="compWaiting">Available once we have read your piece.</p>
+
+    <div class="comp hidden" id="compBody">
       <div class="comp-row">
         <span class="comp-label">Shape</span>
         <div class="chips" id="cAspect"></div>
@@ -647,15 +694,20 @@ $('pieceCategory').addEventListener('change', async (event) => {
   loadComposition(key);
 });
 
-function cardButton({ key, image, title, subtitle, onPick, group }) {
+function cardButton({ key, image, title, subtitle, note, onPick, group, tags = {} }) {
   const button = document.createElement('button');
   button.className = 'card';
   button.type = 'button';
   button.setAttribute('aria-pressed', 'false');
   button.dataset.group = group;
+  // Everything the search box reads, lowercased once here rather than on every keystroke.
+  button.dataset.search =
+    [title, subtitle, note, ...Object.values(tags)].join(' ').toLowerCase();
+  Object.entries(tags).forEach(([field, value]) => { button.dataset[field] = value; });
   button.innerHTML =
     `<img src="${image || ''}" alt="" loading="lazy">` +
-    `<b>${title}${subtitle ? `<small>${subtitle}</small>` : ''}</b>`;
+    `<b>${title}${subtitle ? `<small>${subtitle}</small>` : ''}` +
+    `${note ? `<small class="note">${note}</small>` : ''}</b>`;
   button.addEventListener('click', () => {
     document.querySelectorAll(`.card[data-group="${group}"]`)
       .forEach((other) => other.setAttribute('aria-pressed', 'false'));
@@ -663,6 +715,66 @@ function cardButton({ key, image, title, subtitle, onPick, group }) {
     onPick(key);
   });
   return button;
+}
+
+// A search box and one row of chips per picker. Both narrow the same set of cards by
+// toggling .hidden, so a filtered-out card keeps its selected state — narrowing the
+// list must never silently change what you picked.
+function pickerControls({ host, group, placeholder, filters, counter, empty }) {
+  const state = { query: '', chosen: {} };
+  const bar = document.createElement('div');
+  bar.className = 'picker-bar';
+
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.placeholder = placeholder;
+  search.setAttribute('aria-label', placeholder);
+  search.addEventListener('input', () => { state.query = search.value.trim().toLowerCase(); apply(); });
+  bar.appendChild(search);
+
+  filters.forEach(({ field, options }) => {
+    const row = document.createElement('div');
+    row.className = 'picker-chips';
+    options.forEach(({ key, label }) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.textContent = label;
+      chip.setAttribute('aria-pressed', 'false');
+      chip.addEventListener('click', () => {
+        // Second click on the same chip clears it: a filter you cannot turn off is a trap.
+        const on = state.chosen[field] === key;
+        state.chosen[field] = on ? undefined : key;
+        row.querySelectorAll('button').forEach((other) => other.setAttribute(
+          'aria-pressed', String(other === chip && !on)));
+        apply();
+      });
+      row.appendChild(chip);
+    });
+    bar.appendChild(row);
+  });
+
+  host.replaceChildren(bar);
+
+  function apply() {
+    let shown = 0;
+    document.querySelectorAll(`.card[data-group="${group}"]`).forEach((card) => {
+      const matches = (!state.query || card.dataset.search.includes(state.query))
+        && Object.entries(state.chosen).every(([field, value]) =>
+          value === undefined || card.dataset[field] === value);
+      card.hidden = !matches;
+      if (matches) shown += 1;
+    });
+    // Region headings would otherwise hang over an empty grid.
+    document.querySelectorAll(`.group-label[data-group="${group}"]`).forEach((label) => {
+      const grid = label.nextElementSibling;
+      label.hidden = !grid || ![...grid.children].some((card) => !card.hidden);
+    });
+    if (counter) counter.textContent = `${shown} of ${counter.dataset.total}`;
+    if (empty) empty.classList.toggle('hidden', shown > 0);
+  }
+
+  apply();
+  return apply;
 }
 
 async function load() {
@@ -686,7 +798,7 @@ async function load() {
     $('outNote').textContent = 'loading…';
     poll(deepLink).catch(() => fail('that shoot could not be opened'));
   }
-  const [models, places, categories, retouchOptions] = await Promise.all([
+  const [cast, places, categories, retouchOptions] = await Promise.all([
     fetch('/api/models').then((r) => r.json()),
     fetch('/api/locations').then((r) => r.json()),
     fetch('/api/categories').then((r) => r.json()),
@@ -709,17 +821,32 @@ async function load() {
   $('rBackground').options[0].textContent = 'Keep the original';
 
   const modelGrid = $('models');
-  models.forEach((model) => modelGrid.appendChild(cardButton({
+  cast.models.forEach((model) => modelGrid.appendChild(cardButton({
     key: model.key, image: model.image, group: 'model',
-    title: titleCase(model.key),
-    subtitle: model.description.split(',')[0],
+    title: model.name || titleCase(model.key),
+    // The three things a jeweller actually chooses between, on two lines because all
+    // three on one truncated a third of the cast mid-word — which is the exact fault
+    // this replaced. The prompt is not on the card at all; it is not a shopping label.
+    subtitle: [model.age, model.origin].filter(Boolean).join(' · '),
+    note: model.hair,
+    tags: { skin: model.skin, hairGroup: model.hair_group },
     onPick: (key) => { state.model = key; $('s2').dataset.done = 'true'; refresh(); },
   })));
+  $('modelCount').dataset.total = cast.models.length;
+  pickerControls({
+    host: $('modelPicker'), group: 'model', placeholder: 'Search by name, look or region',
+    counter: $('modelCount'), empty: $('modelsEmpty'),
+    filters: [
+      { field: 'skin', options: cast.skin_tones },
+      { field: 'hairGroup', options: cast.hair_groups },
+    ],
+  });
 
   const wrap = $('locations');
   for (const region of ['India', 'International']) {
     const label = document.createElement('div');
     label.className = 'group-label';
+    label.dataset.group = 'location';
     label.textContent = region;
     wrap.appendChild(label);
 
@@ -729,11 +856,20 @@ async function load() {
       grid.appendChild(cardButton({
         key: place.key, image: place.image, group: 'location',
         title: place.label,
+        tags: { region: place.region },
         onPick: (key) => { state.location = key; $('s3').dataset.done = 'true'; refresh(); },
       }));
     });
     wrap.appendChild(grid);
   }
+  $('locationCount').dataset.total = places.length;
+  pickerControls({
+    host: $('locationPicker'), group: 'location', placeholder: 'Search locations',
+    counter: $('locationCount'), empty: $('locationsEmpty'),
+    filters: [{ field: 'region', options: [
+      { key: 'India', label: 'India' }, { key: 'International', label: 'International' },
+    ] }],
+  });
 }
 
 function refresh() {
@@ -835,6 +971,9 @@ async function loadComposition(category) {
     if (!state.comp[field]) state.comp[field] = value;
   });
   drawComposition();
+  // Only now are the chip rows populated, so only now is the card worth showing.
+  $('compWaiting').classList.add('hidden');
+  $('compBody').classList.remove('hidden');
   refresh();
 }
 

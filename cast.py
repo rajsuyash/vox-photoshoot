@@ -290,6 +290,69 @@ CAST = CAST + [
     (name, f'{look}. {EDITORIAL_EXPRESSION}') for name, look in EDITORIAL
 ]
 
+# What the picker card shows, and what the filters run on.
+#
+# The card used to print the first clause of the prompt — "a 24 year old Indian woman.
+# She is a…" truncated mid-word, thirty times over. That is prompt text on display: it
+# tells a jeweller nothing they can choose on, and it makes the product look unfinished.
+#
+# These are declared rather than parsed back out of the prose. Reading structure out of
+# a prompt string has been a bug in this codebase three separate times (see LEARNINGS,
+# "Substring traps") and there is no reason to make it four. `hair` is what the card
+# reads; `hair_group` is what the filter matches, because "Blow-dried bob" and "Chin
+# length bob" are the same choice to a customer and different strings to a computer.
+LOOKS = {
+    # The original eight share one look and differ only in hair — see MODEL_LOOK.
+    'aditi':    ('Indian', 24, 'fair', 'Loose waves', 'long'),
+    'meera':    ('Indian', 25, 'fair', 'High bun', 'tied'),
+    'kavya':    ('Indian', 23, 'fair', 'High ponytail', 'tied'),
+    'priya':    ('Indian', 26, 'fair', 'Bob', 'short'),
+    'simran':   ('Indian', 25, 'fair', 'Straight', 'long'),
+    'tara':     ('Indian', 24, 'fair', 'Low chignon', 'tied'),
+    'ananya':   ('Indian', 27, 'fair', 'Loose curls', 'long'),
+    'nisha':    ('Indian', 23, 'fair', 'Half-up, fringe', 'long'),
+
+    'laila':    ('Kashmiri', 26, 'fair', 'Straight', 'long'),
+    'zoya':     ('Hyderabadi', 29, 'wheatish', 'Low knot', 'tied'),
+    'mercy':    ('Naga', 23, 'fair', 'Chin-length bob', 'short'),
+    'paromita': ('Bengali', 27, 'wheatish', 'Loose waves', 'long'),
+    'gurleen':  ('Punjabi', 25, 'fair', 'Sleek', 'long'),
+    'ira':      ('Marathi', 22, 'wheatish', 'Shoulder shag', 'short'),
+    'sarayu':   ('Telugu', 26, 'medium', 'Low bun', 'tied'),
+    'tenzin':   ('Ladakhi', 24, 'fair', 'Twin plaits', 'tied'),
+    'ayesha':   ('Lucknawi', 30, 'wheatish', 'Low chignon', 'tied'),
+    'meher':    ('Parsi', 25, 'wheatish', 'Side-parted', 'long'),
+    'shreya':   ('Indian', 21, 'wheatish', 'Blunt cut', 'long'),
+    'nandini':  ('Indian', 34, 'wheatish', 'Silver low twist', 'tied'),
+    'leela':    ('Indian', 23, 'fair', 'Ringlet curls', 'long'),
+    'anouk':    ('Indian and French', 28, 'fair', 'Low ponytail', 'tied'),
+    'ishani':   ('Odia', 24, 'medium', 'High ponytail', 'tied'),
+    'tanvi':    ('Gujarati', 23, 'fair', 'Side-parted', 'long'),
+    'aaliya':   ('Delhi', 26, 'wheatish', 'Low bun', 'tied'),
+    'nyra':     ('Goan', 22, 'medium', 'Beachy waves', 'long'),
+    'sanaya':   ('Sindhi', 27, 'wheatish', 'Blow-out', 'long'),
+    'vedika':   ('Mangalorean', 25, 'deep', 'Wet-look', 'long'),
+    'mahika':   ('Assamese', 21, 'fair', 'Blunt collarbone', 'short'),
+    'rhea':     ('Chennai', 28, 'deep', 'Cropped', 'short'),
+}
+
+# Four buckets, because gold reads differently on each and four is what a person can
+# hold in their head at one decision point.
+SKIN_TONES = [('fair', 'Fair'), ('wheatish', 'Wheatish'),
+              ('medium', 'Medium'), ('deep', 'Deep')]
+HAIR_GROUPS = [('long', 'Long'), ('short', 'Short'), ('tied', 'Tied back')]
+
+
+def card(key: str) -> dict:
+    """What /api/models sends the picker for one face. Empty dict for an unknown key."""
+    look = LOOKS.get(key)
+    if look is None:
+        return {}
+    origin, age, skin, hair, hair_group = look
+    return {'name': key.title(), 'origin': origin, 'age': age,
+            'skin': skin, 'hair': hair, 'hair_group': hair_group}
+
+
 ARGUMENTS = {'aspect_ratio': '3:4'}
 
 
@@ -335,7 +398,31 @@ def generate(entries) -> dict:
     return manifest
 
 
+def _check_looks() -> None:
+    """Every generated face has a card, every card's tags are ones the picker offers.
+
+    A face without a LOOKS entry renders as a nameless tile with no filters matching it,
+    which is a silent hole in the picker rather than a crash — so it gets an assertion.
+
+        .venv/bin/python cast.py --check
+    """
+    manifest = json.loads(MANIFEST.read_text()) if MANIFEST.exists() else {}
+    tones = {tone for tone, _ in SKIN_TONES}
+    groups = {group for group, _ in HAIR_GROUPS}
+
+    assert not [k for k in manifest if k not in LOOKS], 'generated face with no LOOKS entry'
+    assert not [k for k in LOOKS if k not in {n for n, _ in CAST}], 'LOOKS names no one'
+    for name, (_origin, age, skin, _hair, group) in LOOKS.items():
+        assert skin in tones, f'{name}: unknown skin tone {skin!r}'
+        assert group in groups, f'{name}: unknown hair group {group!r}'
+        assert 18 <= age <= 60, f'{name}: implausible age {age}'
+    assert card('nobody') == {}, 'an unknown key must not fabricate a card'
+    print(f'{len(LOOKS)} faces tagged, {len(manifest)} generated, all consistent')
+
+
 def main() -> None:
+    if '--check' in sys.argv:
+        return _check_looks()
     entries = CAST[:2] if '--pilot' in sys.argv else CAST
     manifest = json.loads(MANIFEST.read_text()) if MANIFEST.exists() else {}
     pending = [e for e in entries if e[0] not in manifest]

@@ -10,8 +10,11 @@
   --raised: rgba(255, 255, 255, .04);
   --line: rgba(255, 255, 255, .08);
   --ink: #f5f5f7;                             /* off-white, never pure white */
-  --muted: rgba(245, 245, 247, .6);
-  --faint: rgba(245, 245, 247, .4);
+  --muted: rgba(245, 245, 247, .6);           /* 6.8:1 on --bg */
+  /* Was .4, which composites to 3.56:1 and fails WCAG AA. It carried the hints — the
+     most useful sentences on the generator were set in the least legible colour in the
+     system. .58 measures 6.4:1. Nothing a person has to read may go below --faint. */
+  --faint: rgba(245, 245, 247, .58);
   --copper: #c17f59;
   --copper-light: #d4a574;
   --copper-soft: rgba(193, 127, 89, .12);

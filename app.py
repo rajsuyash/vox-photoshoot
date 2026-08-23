@@ -26,6 +26,7 @@ import admin
 import auth
 import billing
 import branding
+import cast
 import composition
 import credits
 import db
@@ -86,6 +87,30 @@ PUBLIC_PATHS = {'/login.html', '/healthz', '/api/auth/login',
 # files committed by tools/build_showcase.py — not a media route, and not a way into
 # anyone's work: nothing a customer uploads or generates is ever written there.
 PUBLIC_PREFIXES = ('/api/', '/showcase/')
+
+
+# The markup, the script and the stylesheet, which change on every deploy.
+REVALIDATE = ('.html', '.js', '.css')
+
+
+@app.middleware('http')
+async def revalidate_shell(request: Request, call_next):
+    """Make the browser check before reusing a cached page, script or stylesheet.
+
+    StaticFiles sends an ETag and a Last-Modified but no Cache-Control, which leaves the
+    browser free to heuristically cache and never ask again. A shipped UI change then
+    reaches new visitors and nobody else — which is exactly what happened: a deploy that
+    rewrote both app.js and theme.css showed up as the new stylesheet applied to the old
+    script's markup, because only one of the two had been fetched before.
+
+    `no-cache` is not `no-store`: the file stays in the cache and the revalidation is a
+    304 with no body. Images are deliberately not included — they are content-addressed
+    by name and never rewritten in place.
+    """
+    response = await call_next(request)
+    if request.url.path.endswith(REVALIDATE) or request.url.path == '/':
+        response.headers['Cache-Control'] = 'no-cache'
+    return response
 
 
 @app.middleware('http')
@@ -232,12 +257,23 @@ def healthz():
 
 @app.get('/api/models')
 def list_models(session: dict = Depends(auth.current_session)):
-    cast = shoot.load_cast()
-    return [
-        {'key': key, 'description': entry['description'],
-         'image': f'/media/{entry["file"]}'}
-        for key, entry in cast.items()
-    ]
+    """The cast, plus the vocabularies the picker filters on.
+
+    `description` is still here because it is what the shoot conditions on, but the card
+    is built from the structured fields — printing the prompt on the tile was thirty
+    truncated sentences a customer could not choose between. Vocabularies ship with the
+    list so the frontend never keeps its own copy of them to drift from.
+    """
+    entries = shoot.load_cast()
+    return {
+        'models': [
+            {'key': key, 'description': entry['description'],
+             'image': f'/media/{entry["file"]}', **cast.card(key)}
+            for key, entry in entries.items()
+        ],
+        'skin_tones': [{'key': k, 'label': l} for k, l in cast.SKIN_TONES],
+        'hair_groups': [{'key': k, 'label': l} for k, l in cast.HAIR_GROUPS],
+    }
 
 
 @app.get('/api/locations')
