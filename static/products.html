@@ -55,6 +55,16 @@
     border-color: var(--copper); }
   .toolbar .count { color: var(--faint); font-size: 13px; }
   .toolbar .new { margin-left: auto; }
+
+  @media (max-width: 720px) {
+    /* Full width, and 16px so iOS does not zoom the page on focus. */
+    .toolbar input[type="search"] { width: 100%; font-size: 16px; }
+    /* A 190px minimum leaves a 390px phone two columns of nothing much; one column
+       shows the piece at a size you can actually identify it from. */
+    .products { grid-template-columns: 1fr; }
+    .product .shot, .product .noshot { aspect-ratio: 16 / 10; }
+    .product .row a, .product .row button { min-height: 44px; }
+  }
 </style>
 </head>
 <body>

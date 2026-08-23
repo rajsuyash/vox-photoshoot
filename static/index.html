@@ -26,7 +26,17 @@
   /* On a phone the note beside the heading squeezed it into two words a line. It gets
      its own line instead, indented past the step number so the column still reads. */
   @media (max-width: 720px) {
-    .step em { flex: 1 0 100%; margin-left: 39px; }
+    /* calc, not 100%: a 100% basis plus a 39px margin is 39px wider than the row, which
+       is enough to make the whole page scroll sideways on a phone. */
+    .step em { flex: 1 0 calc(100% - 39px); margin-left: 39px; }
+    /* 16px or iOS Safari zooms the page the moment the field takes focus, and does not
+       zoom back out. Applies to the pickers' own search boxes too. */
+    .picker-bar input[type="search"] { font-size: 16px; }
+    /* Download and Reshoot are the payoff of the whole flow and were 19px tall text
+       links. They get a thumb-sized row of their own rather than sharing one. */
+    .results figcaption { gap: 10px; padding-top: 4px; }
+    .results figcaption a, .results figcaption button.link {
+      display: inline-flex; align-items: center; min-height: 44px; }
   }
   .num {
     width: 27px; height: 27px; border-radius: 999px; flex: none;
@@ -247,27 +257,11 @@
   .tools button[aria-pressed="true"] { background: var(--copper); color: var(--bg); }
 
   .piece { margin-top: 18px; }
-  .fields { display: grid; gap: 16px 20px; margin-top: 14px;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
-  .fields .wide { grid-column: 1 / -1; }
-  .fields label, .fields > div { display: flex; flex-direction: column; gap: 6px;
-    font-size: 13px; color: var(--muted); }
-  .fields label em, .hint { font-style: normal; color: var(--faint); }
-  .fields .lbl { font-size: 13px; }
-  .fields input, .fields select { font: inherit; font-size: 15px; color: var(--ink);
-    padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
-    background: var(--raised); width: 100%; }
-  .fields select { appearance: none; -webkit-appearance: none;
-    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
-                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-    background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
-    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
-    padding-right: 34px; }
-  .fields option { background: #17171a; color: var(--ink); }
-  .fields input::placeholder { color: var(--faint); }
-  .fields input:focus, .fields select:focus { outline: 1px solid var(--copper);
-    outline-offset: -1px; border-color: var(--copper); }
-  .hint { font-size: 12px; margin: 2px 0 0; line-height: 1.4; }
+  /* .fields itself lives in theme.css. A third verbatim copy of it sat here — after the
+     base rules and after .account — and it is why the mobile rule that lifts inputs to
+     16px had to be fought for: a local duplicate at equal specificity, loaded later,
+     silently wins over the shared file. */
+  .fields { margin-top: 14px; }
   .seg { display: flex; border: 1px solid var(--line); border-radius: 10px;
     overflow: hidden; background: var(--raised); }
   .seg button { flex: 1; font: inherit; font-size: 13px; padding: 9px 0;
@@ -654,9 +648,17 @@ $('tools').addEventListener('click', (event) => {
   $('tools').querySelectorAll('button').forEach((other) =>
     other.setAttribute('aria-pressed', String(other === button)));
   const shooting = state.tool === 'shoot';
-  ['s1', 's2', 's3'].forEach((id) => $(id).classList.toggle('hidden', !shooting));
+  // s4 was missing from this list, so Composition — added after the tool switch was
+  // written — stayed on screen under Retouch, which has no model, no location and no
+  // composition to choose. It read as step 4 of a two-step tool.
+  ['s1', 's2', 's3', 's4'].forEach((id) => $(id).classList.toggle('hidden', !shooting));
   $('r1').classList.toggle('hidden', shooting);
   $('out').classList.add('hidden');
+  // The heading belongs to whichever tool is showing.
+  $('pageTitle').textContent = shooting ? 'New photoshoot' : 'Retouch a photo';
+  $('pageLede').textContent = shooting
+    ? 'Four steps. Three campaign images from one product photo.'
+    : 'One photo in, the same piece back without the desk, the dust and the colour cast.';
   refresh();
 });
 

@@ -181,7 +181,11 @@ table.data a:hover { color: var(--copper-light); }
    375px screen leaves no page, and a hamburger is a tap in front of every navigation on
    a five item app. The nav scrolls sideways instead; the account details move into it. */
 @media (max-width: 900px) {
-  body { grid-template-columns: minmax(0, 1fr); }
+  /* Two rows, and the second one takes the slack. Without the explicit rows the grid
+     stretched both to share the 100vh minimum, which put a 67px band of nothing between
+     the top bar and the page — header keeps its natural height because it is
+     align-self: start, so all the stretch landed in the gap. */
+  body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   header {
     grid-column: 1; height: auto; padding: 12px 20px;
     /* flex-start, not center: the account block is two rows tall here, and centring
@@ -220,4 +224,24 @@ table.data a:hover { color: var(--copper-light); }
 @media (max-width: 720px) {
   .logo { font-size: 16px; padding: 0; }
   .logo span { display: none; }   /* "Donna" + the mark carry it on a phone */
+
+  /* iOS Safari zooms the whole page the moment a field under 16px takes focus, and it
+     does not zoom back out afterwards — the customer is left on a page 1.3x too wide
+     with the layout broken, and the only way back is a pinch. Every text field in the
+     app was 14 or 15px. This is the single most-felt mobile fault in the build. */
+  input, select, textarea,
+  .fields input, .fields select, .fields textarea { font-size: 16px; }
+
+  /* A table cannot shrink below its content, so history, the ledger and the admin
+     listings each pushed the page 16-75px wider than the phone and took the fixed
+     action bar and the sidebar with them. The table scrolls inside its own box now;
+     the page does not. nowrap because a six-column table wrapped into four lines a row
+     is not more readable than a swipe. */
+  table.data { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.data th, table.data td { white-space: nowrap; }
+
+  /* 44px is the smallest thing a thumb hits reliably. The nav rows were 36 and the way
+     out of the account was 19px tall. */
+  .account nav a { min-height: 44px; }
+  .account .who button { min-height: 44px; padding: 0 4px; }
 }
