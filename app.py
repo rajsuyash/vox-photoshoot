@@ -814,6 +814,15 @@ async def create_retouch(
             'balance': credits.balance(workspace_id)}
 
 
+# One reshoot per frame. Not a margin defence — a delivered reshoot is charged a credit
+# like any other image. It bounds the reroll loop: a frame still wrong on the second go
+# is a prompt problem, not a dice problem, and the customer who keeps rolling is paying
+# to not get the fix. It also caps the one case that genuinely loses money — a reshoot
+# that fails is refunded (settle delivered=0) while the provider was still paid for the
+# attempt, so unbounded rerolling of a frame the model keeps refusing bleeds real cost.
+MAX_RESHOOTS_PER_FRAMING = 1
+
+
 @app.post('/api/shoots/{job_id}/reshoot')
 def reshoot(job_id: str, background: BackgroundTasks, framing: str,
             idempotency_key: str = '',
@@ -840,11 +849,20 @@ def reshoot(job_id: str, background: BackgroundTasks, framing: str,
     options = product.Options(**(params.get('options') or {}))
     product_path = piece_path(parent['piece_id'])
 
+    # ponytail: checked outside the transaction, so two clicks landing in the same
+    # millisecond with different keys can both pass. Upgrade path if that ever shows up
+    # in the ledger: a partial unique index on (parent_job_id, params->>'framing') where
+    # kind = 'reshoot' AND status <> 'failed', and turn the UniqueViolation into this
+    # same 409.
+    key = idempotency_key or f'reshoot:{uuid.uuid4()}'
+    if jobs.reshoots_used(job_id, framing, key) >= MAX_RESHOOTS_PER_FRAMING:
+        raise HTTPException(409, f'the {framing} frame has already been reshot — '
+                                 'one reshoot per frame')
+
     cost = credits.COST['reshoot']
     try:
         with db.tx() as conn:
-            job = jobs.create(workspace_id, session['user_id'], 'reshoot',
-                              idempotency_key or f'reshoot:{uuid.uuid4()}',
+            job = jobs.create(workspace_id, session['user_id'], 'reshoot', key,
                               {**params, 'framing': framing},
                               piece_id=parent['piece_id'], reserved_credits=cost,
                               # Inherited, never re-asked: a reshoot is another frame of

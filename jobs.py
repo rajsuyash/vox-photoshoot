@@ -102,6 +102,25 @@ def next_attempt(shoot_id: str, framing: str) -> int:
     return int(row['n'])
 
 
+def reshoots_used(shoot_id: str, framing: str, ignore_key: str) -> int:
+    """How many reshoots of one framing this shoot has already been charged for.
+
+    Counts jobs, not images: a reshoot still running has produced no image yet, so
+    job_images would read zero for a frame that has already been paid for. Failed
+    reshoots are excluded because they were refunded — a customer whose reshoot died at
+    the provider has not spent their allowance on it.
+
+    ignore_key is the caller's own idempotency key, so a double-clicked Reshoot returns
+    the job it already created instead of being refused as a second one.
+    """
+    row = db.query(
+        """SELECT count(*) AS n FROM jobs
+            WHERE parent_job_id = %s AND kind = 'reshoot' AND status <> 'failed'
+              AND params->>'framing' = %s AND idempotency_key <> %s""",
+        (shoot_id, framing, ignore_key), one=True)
+    return int(row['n'])
+
+
 def add_image(job_id: str, shoot_id: str, framing: str, attempt: int,
               s3_key: str, seed: int | None) -> None:
     """Record one delivered image. Called the moment it lands, not at the end."""
@@ -248,6 +267,21 @@ def demo() -> None:
     assert len(gallery) == 1 and gallery[0]['attempt'] == 2, gallery
     assert db.query('SELECT count(*) AS n FROM job_images WHERE shoot_id = %s',
                     (jid,), one=True)['n'] == 2, 'the earlier attempt was destroyed'
+
+    # One reshoot per frame. The count is of jobs, not images, so a reshoot that has not
+    # delivered yet still spends the allowance — otherwise two fast clicks both pass.
+    assert reshoots_used(jid, 'hero', 'mine') == 0
+    kid = create(ws, user, 'reshoot', 'idem-re-1', {'framing': 'hero'},
+                 parent_job_id=jid)['id']
+    assert reshoots_used(jid, 'hero', 'mine') == 1
+    assert reshoots_used(jid, 'profile', 'mine') == 0, 'framings must cap independently'
+    # A repeat of the caller's own key is a double-click, not a second reshoot.
+    assert reshoots_used(jid, 'hero', 'idem-re-1') == 0
+
+    # A refunded reshoot did not spend the allowance: the customer got nothing for it.
+    assert claim(str(kid)) is True
+    assert finish(str(kid), 'failed') is True
+    assert reshoots_used(jid, 'hero', 'mine') == 0, 'a failed reshoot must not count'
 
     assert finish(jid, 'succeeded', settled_credits=2) is True
     assert finish(jid, 'succeeded') is False, 'a finished job must not finish twice'

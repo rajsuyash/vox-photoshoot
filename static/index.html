@@ -1222,11 +1222,16 @@ async function poll(jobId) {
   // Branded downloads go through /api/images, which composites the logo on the way out.
   // The stored file is never touched, so both versions stay available forever.
   const wantsBrand = canBrand && $('brandOn').checked;
-  $('results').innerHTML = job.images.map(({ framing, url }) =>
+  // attempt 1 is the original, so anything past it has already had its one reshoot. The
+  // server refuses a second either way; hiding the button is so the customer finds that
+  // out before the click rather than as an error.
+  $('results').innerHTML = job.images.map(({ framing, url, attempt }) =>
     `<figure><img src="${url}" alt="${framing}">
       <figcaption><span>${titleCase(framing)}</span><span>
-      <button class="link" data-${framing === 'retouch' ? 'shootable' : 'framing'}="${framing}">${
-        framing === 'retouch' ? 'Shoot this' : 'Reshoot'}</button>
+      ${framing !== 'retouch' && attempt > 1
+        ? '<span>reshot</span>'
+        : `<button class="link" data-${framing === 'retouch' ? 'shootable' : 'framing'}="${framing}">${
+            framing === 'retouch' ? 'Shoot this' : 'Reshoot'}</button>`}
       &nbsp;<a href="${wantsBrand
         ? `/api/images/${jobId}/${encodeURIComponent(framing)}?branded=1`
         : url}" download>Download${wantsBrand ? ' + logo' : ''}</a>
