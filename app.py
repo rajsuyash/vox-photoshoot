@@ -7,7 +7,6 @@ Everything a photographer would decide is preset in locations.py.
 """
 
 import dataclasses
-import hashlib
 import json
 import logging
 import os
@@ -1000,9 +999,6 @@ VIDEO_ASPECT_LABELS = {
 # unbounded rerolling of a clip the model keeps getting wrong bleeds real provider cost.
 MAX_VIDEO_REROLLS = 1
 
-MAX_HEADLINE_CHARS = 40
-MAX_CTA_CHARS = 30
-
 
 def _motion_label(key: str) -> str:
     """A human label from a motion/mood key, since motion.py stores prose, not a label."""
@@ -1080,8 +1076,6 @@ def video_options(category: str = 'ring', session: dict = Depends(auth.current_s
         'prices': {str(d): video.credits_for(d, provider) for d in video.VIDEO_DURATIONS},
         'reframe_credits': 1,
         'reframe_note': '+1 credit — this still needs to be reframed to that size first',
-        'max_headline_chars': MAX_HEADLINE_CHARS,
-        'max_cta_chars': MAX_CTA_CHARS,
     }
 
 
@@ -1112,8 +1106,6 @@ def create_video(
     motion_key: str = Form('', alias='motion'),
     mood: str = Form(''),
     note: str = Form(''),
-    headline: str = Form(''),
-    cta: str = Form(''),
     idempotency_key: str = Form(''),
     session: dict = Depends(auth.current_session),
 ):
@@ -1124,13 +1116,6 @@ def create_video(
     """
     workspace_id = auth.current_workspace(session)
     import video
-
-    headline = headline.strip()[:MAX_HEADLINE_CHARS]
-    cta = cta.strip()[:MAX_CTA_CHARS]
-    bad = branding.unsupported(headline + cta)
-    if bad:
-        raise HTTPException(400, f'the headline/CTA use characters we cannot print: '
-                                 f'{"".join(bad)}')
 
     parent, still = _resolve_video_source(video, workspace_id, job_id, framing, attempt,
                                           aspect, duration)
@@ -1148,7 +1133,6 @@ def create_video(
         'source_attempt': int(still['attempt']), 'still_key': still['s3_key'],
         'aspect': aspect, 'duration': duration, 'motion': motion_key.strip(),
         'mood': mood.strip(), 'note': note.strip()[:140],
-        'headline': headline, 'cta': cta,
         'needs_reframe': needs_reframe, 'reframed': needs_reframe,
         'provider_backend': provider.backend, 'provider_model': provider.model,
         'category': category.key, 'description': description, 'location': location_key,
@@ -1297,74 +1281,22 @@ def get_video(job_id: str, session: dict = Depends(auth.current_session)):
     }
 
 
-VIDEO_BRAND_CACHE = VIDEO_OUT / 'branded'
-
-
 @app.get('/api/videos/{job_id}/download')
-def download_video(job_id: str, branded: str = '',
-                   session: dict = Depends(auth.current_session)):
-    """One rendered video, optionally stamped with the workspace's branding.
-
-    Same design as /api/images/{job_id}/{framing}: branding is a view applied at
-    download time, never baked into the stored master, so a rebrand or an unbranded
-    file for a magazine costs nothing to produce.
-    """
+def download_video(job_id: str, session: dict = Depends(auth.current_session)):
+    """The clean, unbranded master for one rendered video."""
     workspace_id = auth.current_workspace(session)
     job = db.query(
-        """SELECT id, params FROM jobs
+        """SELECT id FROM jobs
              WHERE id = %s AND workspace_id = %s AND kind = 'video'""",
         (job_id, workspace_id), one=True)
     if job is None:
         raise HTTPException(404, 'no such video')
-    row = db.query('SELECT key, width, height FROM job_videos WHERE job_id = %s',
+    row = db.query('SELECT key FROM job_videos WHERE job_id = %s',
                    (job_id,), one=True)
     if row is None:
         raise HTTPException(404, 'this video has not finished yet')
 
-    if not branded:
-        return RedirectResponse(storage.presign(row['key']), status_code=307)
-
-    params = job['params'] or {}
-    headline = (params.get('headline') or '')[:MAX_HEADLINE_CHARS]
-    cta = (params.get('cta') or '')[:MAX_CTA_CHARS]
-    brand = db.query(
-        'SELECT brand_logo_key, brand_text, brand_position, brand_opacity '
-        'FROM workspaces WHERE id = %s', (workspace_id,), one=True) or {}
-    if not (brand.get('brand_logo_key') or brand.get('brand_text') or headline or cta):
-        # Nothing to stamp — the clean master IS the branded one here.
-        return RedirectResponse(storage.presign(row['key']), status_code=307)
-
-    fingerprint = hashlib.sha1(json.dumps(
-        {'logo': brand.get('brand_logo_key'), 'text': brand.get('brand_text'),
-         'position': brand.get('brand_position'), 'opacity': brand.get('brand_opacity'),
-         'headline': headline, 'cta': cta}, sort_keys=True).encode()).hexdigest()[:16]
-    cached = VIDEO_BRAND_CACHE / f'{job_id}-{fingerprint}.mp4'
-    if not cached.exists():
-        cached.parent.mkdir(parents=True, exist_ok=True)
-        scratch = VIDEO_OUT / 'brand-cache'
-        scratch.mkdir(parents=True, exist_ok=True)
-        try:
-            master = storage.fetch(row['key'], scratch / f'{job_id}.mp4')
-            logo_bytes = None
-            if brand.get('brand_logo_key'):
-                logo_bytes = storage.fetch(
-                    brand['brand_logo_key'],
-                    scratch / pathlib.Path(brand['brand_logo_key']).name).read_bytes()
-        except Exception as error:                # noqa: BLE001 - S3 is not the caller's fault
-            log.error('video branding fetch failed for job %s: %r', job_id, error)
-            raise HTTPException(
-                502, 'that video could not be branded just now — the plain download '
-                     'still works, and nothing has been charged')
-
-        overlay = branding.overlay_png(
-            row['width'] or 1080, row['height'] or 1920, logo_bytes,
-            brand.get('brand_text') or '',
-            brand.get('brand_position') or branding.DEFAULT_POSITION,
-            headline=headline, cta=cta)
-        branding.apply_video(master, cached, overlay)
-
-    return FileResponse(cached, media_type='video/mp4',
-                        filename=f'{storage.safe_name(job_id)}-branded.mp4')
+    return RedirectResponse(storage.presign(row['key']), status_code=307)
 
 
 @app.post('/api/videos/{job_id}/reroll')

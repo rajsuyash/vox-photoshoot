@@ -1327,8 +1327,6 @@ async function initVideoPanel(details, jobId, category) {
       `<div class="error">${String(error.message || error)}</div>`);
     return;
   }
-  const maxHeadline = options.max_headline_chars || 40;
-  const maxCta = options.max_cta_chars || 30;
   details.insertAdjacentHTML('beforeend', `
     <div class="video-body">
       <div class="fields">
@@ -1348,13 +1346,6 @@ async function initVideoPanel(details, jobId, category) {
           <select class="vMood">${options.moods.map((m) =>
             `<option value="${m.key}">${m.label}</option>`).join('')}</select>
         </label>
-        <label class="wide"><span class="lbl">Headline <em class="vHeadCount">0/${maxHeadline}</em></span>
-          <input class="vHeadline" maxlength="${maxHeadline}"
-                 placeholder="e.g. Diwali Collection — 20% off">
-        </label>
-        <label class="wide"><span class="lbl">CTA <em class="vCtaCount">0/${maxCta}</em></span>
-          <input class="vCta" maxlength="${maxCta}" placeholder="e.g. Visit our store">
-        </label>
         <label class="wide"><span class="lbl">Note <em class="vCount">0/140</em></span>
           <textarea class="vNote" maxlength="140" placeholder="optional, for the director only"></textarea>
         </label>
@@ -1371,14 +1362,6 @@ async function initVideoPanel(details, jobId, category) {
   const note = details.querySelector('.vNote');
   note.addEventListener('input', () => {
     details.querySelector('.vCount').textContent = `${note.value.length}/140`;
-  });
-  const headline = details.querySelector('.vHeadline');
-  headline.addEventListener('input', () => {
-    details.querySelector('.vHeadCount').textContent = `${headline.value.length}/${maxHeadline}`;
-  });
-  const cta = details.querySelector('.vCta');
-  cta.addEventListener('input', () => {
-    details.querySelector('.vCtaCount').textContent = `${cta.value.length}/${maxCta}`;
   });
   recompute();
 
@@ -1398,8 +1381,6 @@ async function submitVideo(details, jobId, framing, attempt) {
   body.append('motion', details.querySelector('.vMotion').value);
   body.append('mood', details.querySelector('.vMood').value);
   body.append('note', details.querySelector('.vNote').value);
-  body.append('headline', details.querySelector('.vHeadline').value);
-  body.append('cta', details.querySelector('.vCta').value);
   body.append('idempotency_key', details.dataset.idem);
   const result = details.querySelector('.video-result');
   result.classList.remove('hidden');
@@ -1441,7 +1422,6 @@ async function pollVideo(details, videoJobId) {
     <video src="${job.video.url}" controls playsinline muted loop></video>
     <div class="row">
       <a href="/api/videos/${videoJobId}/download" download>Download</a>
-      <a href="/api/videos/${videoJobId}/download?branded=1" download>Download branded</a>
       ${job.can_reroll ? '<button class="link vReroll">Try again</button>' : ''}
     </div>`;
   const reroll = result.querySelector('.vReroll');

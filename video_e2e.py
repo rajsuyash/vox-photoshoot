@@ -124,7 +124,6 @@ def main() -> None:
         resp = client.post('/api/videos', data={
             'job_id': shoot_id, 'framing': 'hero', 'attempt': '1', 'aspect': '9:16',
             'duration': '5', 'motion': '', 'mood': '', 'note': '',
-            'headline': 'Festive Edit', 'cta': 'Shop now',
             'idempotency_key': f'e2e-video-{uuid.uuid4()}'})
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -183,22 +182,11 @@ def main() -> None:
         print(f'fidelity verdicts: {job_row["params"].get("fidelity")}')
         print(f'prompt: {job_row["params"].get("prompt")!r}')
 
-        branded_resp = client.get(f'/api/videos/{video_job_id}/download?branded=1',
-                                  follow_redirects=True)
-        assert branded_resp.status_code == 200, branded_resp.status_code
-        branded_path = E2E_OUT / 'branded.mp4'
-        branded_path.write_bytes(branded_resp.content)
-        branded_info = video._probe(branded_path)
-        assert (branded_info['width'], branded_info['height']) == \
-            (info['width'], info['height']), (branded_info, info)
-        print(f'branded mp4: {branded_info} — same dims as clean')
-
         items = []
-        for label_prefix, path in (('clean', clean_path), ('branded', branded_path)):
-            for pct in (0, 50, 95):
-                frame_path = E2E_OUT / f'{label_prefix}-{pct}.jpg'
-                _extract_frame(path, pct / 100, frame_path)
-                items.append((f'{label_prefix} {pct}%', frame_path))
+        for pct in (0, 50, 95):
+            frame_path = E2E_OUT / f'clean-{pct}.jpg'
+            _extract_frame(clean_path, pct / 100, frame_path)
+            items.append((f'clean {pct}%', frame_path))
         sheet = montage.build(items, E2E_OUT / 'contact-sheet.jpg', columns=3)
         print(f'contact sheet: {sheet}')
 

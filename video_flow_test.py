@@ -346,53 +346,28 @@ def main() -> None:
             'idempotency_key': f'vid-foreign-{uuid.uuid4()}'})
         assert foreign.status_code == 404, foreign.text
 
-        # --- 7) headline/cta: validated server-side, and persisted on the job -----------
-        bad_text = client.post('/api/videos', data={
+        # --- 7) download: clean master only ------------------------------------------------
+        extra = client.post('/api/videos', data={
             'job_id': shoot_id, 'framing': 'profile', 'attempt': '1', 'aspect': '9:16',
             'duration': '5', 'motion': '', 'mood': '', 'note': '',
-            'headline': 'கல்யாண் ஜூவல்லர்ஸ்', 'cta': '',      # Tamil: not bundled
-            'idempotency_key': f'vid-badtext-{uuid.uuid4()}'})
-        assert bad_text.status_code == 400, bad_text.text
+            'idempotency_key': f'vid-extra-{uuid.uuid4()}'}).json()
+        extra_video_job_id = extra['job_id']
+        extra_detail = _await_terminal(client, extra_video_job_id)
+        assert extra_detail['status'] == 'succeeded', extra_detail
 
-        good_text = client.post('/api/videos', data={
-            'job_id': shoot_id, 'framing': 'profile', 'attempt': '1', 'aspect': '9:16',
-            'duration': '5', 'motion': '', 'mood': '', 'note': '',
-            'headline': 'Diwali Collection — 20% off', 'cta': 'Shop now',
-            'idempotency_key': f'vid-goodtext-{uuid.uuid4()}'}).json()
-        good_video_job_id = good_text['job_id']
-        good_detail = _await_terminal(client, good_video_job_id)
-        assert good_detail['status'] == 'succeeded', good_detail
-        stored_params = db.query('SELECT params FROM jobs WHERE id = %s',
-                                (good_video_job_id,), one=True)['params']
-        assert stored_params['headline'] == 'Diwali Collection — 20% off', stored_params
-        assert stored_params['cta'] == 'Shop now', stored_params
-
-        # --- 8) download: clean vs branded ------------------------------------------------
-        clean_dl = client.get(f'/api/videos/{good_video_job_id}/download',
+        clean_dl = client.get(f'/api/videos/{extra_video_job_id}/download',
                               follow_redirects=True)
         assert clean_dl.status_code == 200, clean_dl.status_code
 
-        client.post('/api/brand', data={'text': 'Kalyan Jewellers · kalyan.com',
-                                        'position': 'bottom-right', 'opacity': '80'})
-        branded_dl = client.get(f'/api/videos/{good_video_job_id}/download?branded=1',
-                                follow_redirects=True)
-        assert branded_dl.status_code == 200, branded_dl.status_code
-        assert branded_dl.content != clean_dl.content, \
-            'a branded download with a headline+CTA must differ from the clean master'
-        # Cached the second time, not re-encoded — same bytes back.
-        branded_dl_again = client.get(f'/api/videos/{good_video_job_id}/download?branded=1',
-                                      follow_redirects=True)
-        assert branded_dl_again.content == branded_dl.content, 'the branding cache missed'
-
-        # --- 9) history and the shoot's own gallery both surface every video ------------
+        # --- 8) history and the shoot's own gallery both surface every video ------------
         history = client.get('/api/history').json()
         assert any(row['kind'] == 'video' for row in history), 'no video in /api/history'
         gallery = client.get(f'/api/shoots/{shoot_id}').json()
         # hero, detail, idempotent-profile, failed-hero, fidelity-profile, hero-reroll,
-        # detail-reroll, good-text-profile — every job above but the two 400s/404.
+        # detail-reroll, extra-profile — every job above but the one 404.
         assert len(gallery['videos']) >= 8, gallery['videos']
 
-        # --- 10) the ledger is clean ------------------------------------------------------
+        # --- 9) the ledger is clean ------------------------------------------------------
         total, tail = credits.reconcile(ws_id)
         assert total == tail, (total, tail)
 
