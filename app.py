@@ -7,6 +7,7 @@ Everything a photographer would decide is preset in locations.py.
 """
 
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -955,6 +956,7 @@ def get_shoot(job_id: str, session: dict = Depends(auth.current_session)):
         'warnings': [f'{name} could not be generated ({reason})'
                      for name, reason in (job['failures'] or [])],
         'options': (job['params'] or {}).get('options'),
+        'category': (job['params'] or {}).get('category'),
         'sku': job.get('sku') or '',
         # Minted here, on every read, from the stored key. The client never sees a key
         # and never holds a URL long enough for it to go stale. The download name is
@@ -966,7 +968,450 @@ def get_shoot(job_id: str, session: dict = Depends(auth.current_session)):
                                       image['attempt'], image['s3_key']))}
                    for image in job['images']],
         'balance': credits.balance(workspace_id),
+        'videos': [
+            {'job_id': str(v['id']), 'status': v['status'], 'error': v['error'],
+             'aspect': (v['params'] or {}).get('aspect'),
+             'duration': (v['params'] or {}).get('duration'),
+             'url': storage.presign(v['key']) if v['key'] else None,
+             'width': v['width'], 'height': v['height']}
+            for v in db.query(
+                """SELECT j.id, j.status, j.error, j.params, vd.key, vd.width, vd.height
+                     FROM jobs j LEFT JOIN job_videos vd ON vd.job_id = j.id
+                    WHERE j.kind = 'video' AND j.workspace_id = %s
+                      AND j.params ->> 'source_job_id' = %s
+                    ORDER BY j.created_at""", (workspace_id, job_id))
+        ],
     })
+
+
+# --- video ads: one delivered still, animated -----------------------------------------
+
+VIDEO_OUT = pathlib.Path('out/videos')
+
+# Platform-facing copy for the aspect choice. video.py owns the generation-side meaning
+# of an aspect (its width:height and whatever needs_reframe/reframe judge); this is
+# purely what the picker shows next to it, which is a UI concern, not a video.py one.
+VIDEO_ASPECT_LABELS = {
+    '9:16': 'Reels / Stories', '4:5': 'IG feed', '1:1': 'Square', '16:9': 'YouTube / web',
+}
+
+# One re-roll per video, ever — including a re-roll of a re-roll. Mirrors
+# MAX_RESHOOTS_PER_FRAMING: a second try that is still wrong is a prompt problem, and
+# unbounded rerolling of a clip the model keeps getting wrong bleeds real provider cost.
+MAX_VIDEO_REROLLS = 1
+
+MAX_HEADLINE_CHARS = 40
+MAX_CTA_CHARS = 30
+
+
+def _motion_label(key: str) -> str:
+    """A human label from a motion/mood key, since motion.py stores prose, not a label."""
+    return key.replace('-', ' ').replace('_', ' ').capitalize()
+
+
+def _reframe_framing(aspect: str, source_framing: str, source_attempt: int) -> str:
+    """The job_images.framing a reframe of one particular still is stored under.
+
+    Keyed on the exact still (aspect + source framing + attempt), not just the aspect —
+    two stills from one shoot (hero vs detail) both reframed to 9:16 are different
+    photographs and must not collide on one row or one file.
+    """
+    return f"reframe-{aspect.replace(':', 'x')}-{source_framing}-{source_attempt}"
+
+
+def _reframe_key(source_job_id: str, aspect: str, source_framing: str,
+                 source_attempt: int) -> str:
+    """Deterministic, so a re-roll can reuse a reframe without re-doing or re-charging
+    for it: the same source still + the same aspect always names the same object."""
+    return f"shoots/{source_job_id}/{_reframe_framing(aspect, source_framing, source_attempt)}.png"
+
+
+def _video_quote(video, still: dict, aspect: str, duration: int, provider) -> tuple[bool, int]:
+    """Whether `still` needs a reframe to `aspect`, and the exact price for `duration` at
+    that aspect — the one place this is computed, so the UI's quote (GET
+    /api/videos/quote) and the real charge (POST /api/videos) can never disagree."""
+    still_path = VIDEO_OUT / 'stills' / pathlib.Path(still['s3_key']).name
+    still_path.parent.mkdir(parents=True, exist_ok=True)
+    storage.fetch(still['s3_key'], still_path)
+    needs_reframe = video.needs_reframe(still_path, aspect)
+    price = video.credits_for(duration, provider) + (1 if needs_reframe else 0)
+    return needs_reframe, price
+
+
+def _resolve_video_source(video, workspace_id: str, source_job_id: str, framing: str,
+                          attempt: str, aspect: str, duration: int):
+    """Shared validation for the quote endpoint and the real POST: the parent shoot, the
+    still it points at, and the provider — every input a price or a charge needs."""
+    parent = jobs.get(source_job_id, workspace_id)
+    if parent is None:
+        raise HTTPException(404, 'no such shoot')
+    if duration not in set(video.VIDEO_DURATIONS):
+        raise HTTPException(400, f'unsupported duration {duration}; '
+                                 f'have {sorted(video.VIDEO_DURATIONS)}')
+    if aspect not in video.VIDEO_ASPECTS:
+        raise HTTPException(400, f'unknown size {aspect}; have {sorted(video.VIDEO_ASPECTS)}')
+
+    attempt_int = int(attempt) if attempt.strip().isdigit() else None
+    still = jobs.image_at(source_job_id, framing, attempt_int)
+    if still is None:
+        raise HTTPException(404, 'no such delivered image')
+    return parent, still
+
+
+@app.get('/api/video-options')
+def video_options(category: str = 'ring', session: dict = Depends(auth.current_session)):
+    auth.current_workspace(session)
+    if category not in product.CATEGORIES:
+        raise HTTPException(400, f'unknown category {category}')
+    import motion as motion_module
+    import video
+
+    provider = video.get()
+    motions = motion_module.MOTIONS.get(category,
+                                        motion_module.MOTIONS[motion_module.FALLBACK_CATEGORY])
+    return {
+        'sizes': [{'key': key, 'label': VIDEO_ASPECT_LABELS.get(key, key)}
+                 for key in video.VIDEO_ASPECTS],
+        'durations': list(video.VIDEO_DURATIONS),
+        'motions': [{'key': '', 'label': 'Let us choose'}] + [
+            {'key': key, 'label': _motion_label(key)} for key in motions],
+        'moods': [{'key': '', 'label': 'Auto'}] + [
+            {'key': key, 'label': _motion_label(key)} for key in motion_module.MOODS],
+        'prices': {str(d): video.credits_for(d, provider) for d in video.VIDEO_DURATIONS},
+        'reframe_credits': 1,
+        'reframe_note': '+1 credit — this still needs to be reframed to that size first',
+        'max_headline_chars': MAX_HEADLINE_CHARS,
+        'max_cta_chars': MAX_CTA_CHARS,
+    }
+
+
+@app.get('/api/videos/quote')
+def video_quote(source_job_id: str, framing: str, aspect: str, duration: int,
+               attempt: str = '', session: dict = Depends(auth.current_session)):
+    """The exact price for one specific still at one specific aspect/duration, computed
+    server-side against the real stored file — the UI must never guess this from the
+    rendered <img>'s own dimensions, which is what a CSS-scaled thumbnail lies about."""
+    workspace_id = auth.current_workspace(session)
+    import video
+
+    _parent, still = _resolve_video_source(video, workspace_id, source_job_id, framing,
+                                           attempt, aspect, duration)
+    provider = video.get()
+    needs_reframe, price = _video_quote(video, still, aspect, duration, provider)
+    return {'price': price, 'needs_reframe': needs_reframe}
+
+
+@app.post('/api/videos')
+def create_video(
+    background: BackgroundTasks,
+    job_id: str = Form(...),
+    framing: str = Form(...),
+    attempt: str = Form(''),
+    aspect: str = Form(...),
+    duration: int = Form(...),
+    motion_key: str = Form('', alias='motion'),
+    mood: str = Form(''),
+    note: str = Form(''),
+    headline: str = Form(''),
+    cta: str = Form(''),
+    idempotency_key: str = Form(''),
+    session: dict = Depends(auth.current_session),
+):
+    """Turn one delivered shoot still into a video ad.
+
+    Everything about the piece (category, description, location, framing) comes from
+    the source shoot's own params — the client picks only the video-specific controls.
+    """
+    workspace_id = auth.current_workspace(session)
+    import video
+
+    headline = headline.strip()[:MAX_HEADLINE_CHARS]
+    cta = cta.strip()[:MAX_CTA_CHARS]
+    bad = branding.unsupported(headline + cta)
+    if bad:
+        raise HTTPException(400, f'the headline/CTA use characters we cannot print: '
+                                 f'{"".join(bad)}')
+
+    parent, still = _resolve_video_source(video, workspace_id, job_id, framing, attempt,
+                                          aspect, duration)
+    src_params = parent['params'] or {}
+    category = product.CATEGORIES.get(src_params.get('category'), product.DEFAULT_CATEGORY)
+    description = src_params.get('description') or product.DEFAULT_PRODUCT
+    location_key = src_params.get('location')
+
+    provider = video.get()
+    needs_reframe, price = _video_quote(video, still, aspect, duration, provider)
+    still_path = VIDEO_OUT / 'stills' / pathlib.Path(still['s3_key']).name
+
+    params = {
+        'source_job_id': job_id, 'source_framing': framing,
+        'source_attempt': int(still['attempt']), 'still_key': still['s3_key'],
+        'aspect': aspect, 'duration': duration, 'motion': motion_key.strip(),
+        'mood': mood.strip(), 'note': note.strip()[:140],
+        'headline': headline, 'cta': cta,
+        'needs_reframe': needs_reframe, 'reframed': needs_reframe,
+        'provider_backend': provider.backend, 'provider_model': provider.model,
+        'category': category.key, 'description': description, 'location': location_key,
+    }
+    try:
+        with db.tx() as conn:
+            job = jobs.create(workspace_id, session['user_id'], 'video',
+                              idempotency_key or f'video:{uuid.uuid4()}', params,
+                              piece_id=parent.get('piece_id'), reserved_credits=price,
+                              conn=conn)
+            if job['created']:
+                credits.reserve(conn, workspace_id, str(job['id']), price)
+    except credits.Insufficient as short:
+        raise HTTPException(402, f'not enough credits — {short}')
+
+    new_job_id = str(job['id'])
+    if job['created']:
+        background.add_task(run_video, new_job_id, params, still_path)
+    return {'job_id': new_job_id, 'status': 'running', 'expected': price,
+            'needs_reframe': needs_reframe, 'balance': credits.balance(workspace_id)}
+
+
+def run_video(job_id: str, params: dict, still_path: pathlib.Path) -> None:
+    """Reframe (if needed), animate, verify fidelity (one free retry), store, settle."""
+    if not jobs.claim(job_id):
+        return
+    import video
+
+    provider = video.get(params.get('provider_backend'), params.get('provider_model'))
+    out_dir = VIDEO_OUT / job_id
+    row = db.query('SELECT workspace_id, reserved_credits FROM jobs WHERE id = %s',
+                   (job_id,), one=True)
+    workspace_id, reserved = str(row['workspace_id']), int(row['reserved_credits'])
+
+    reframe_key = _reframe_key(params['source_job_id'], params['aspect'],
+                               params['source_framing'], params['source_attempt'])
+    reframe_framing = _reframe_framing(params['aspect'], params['source_framing'],
+                                       params['source_attempt'])
+
+    reframe_delivered = False
+    try:
+        working_still = still_path
+        # The still_key a video is actually generated from and stored against — the
+        # ORIGINAL source key by default, replaced below when a reframe is involved.
+        # Always a storage key, never a local path: the local file is gone the moment
+        # this container recycles, but the key still resolves on any container.
+        working_still_key = params['still_key']
+        if params.get('needs_reframe'):
+            reframed_path = video.reframe(still_path, params['aspect'], out_dir)
+            reframed_key = storage.put(reframed_path, reframe_key)
+            jobs.add_image(job_id, params['source_job_id'], reframe_framing, 1,
+                          reframed_key, None)
+            jobs.heartbeat(job_id)
+            working_still = reframed_path
+            working_still_key = reframed_key
+            reframe_delivered = True
+        elif params.get('reframed'):
+            # A re-roll: the reframe already happened and was charged for once.
+            working_still = out_dir / 'reframe-reused.png'
+            storage.fetch(reframe_key, working_still)
+            working_still_key = reframe_key
+
+        def progress(*_args, **_kwargs):
+            jobs.heartbeat(job_id)
+
+        def one_attempt():
+            return video.run(
+                working_still, params['category'], params['description'],
+                params['location'], params['source_framing'], params['duration'],
+                params['aspect'], motion=params.get('motion') or '',
+                mood=params.get('mood') or '', note=params.get('note') or '',
+                provider=provider, out_dir=out_dir, on_progress=progress)
+
+        result = one_attempt()
+        fidelity = []
+        ok, reason = video.check_fidelity(working_still, result['path'],
+                                          params['description'])
+        fidelity.append({'ok': ok, 'reason': reason})
+        if not ok:
+            jobs.heartbeat(job_id)
+            result = one_attempt()                          # one free retry
+            ok2, reason2 = video.check_fidelity(working_still, result['path'],
+                                                params['description'])
+            fidelity.append({'ok': ok2, 'reason': reason2})
+            # The second result is kept regardless of its own verdict — there is no
+            # third try, and something is better than nothing for a paid attempt.
+
+        key = f'videos/{job_id}.mp4'
+        storage.put(result['path'], key)
+        db.query(
+            """INSERT INTO job_videos (job_id, workspace_id, source_job_id, source_framing,
+                                       source_attempt, still_key, key, duration, width,
+                                       height, aspect, provider)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (job_id, workspace_id, params['source_job_id'], params['source_framing'],
+             params['source_attempt'], working_still_key, key, result.get('duration'),
+             result.get('width'), result.get('height'), params['aspect'],
+             result.get('provider')))
+
+        # Debug detail for a bad ad, kept structured rather than folded into `failures`
+        # by matching substrings in the verdict text — an `ok` flag from check_fidelity
+        # is what decides pass/fail, never what its sentence happens to say.
+        jobs.update_params(job_id, {
+            'prompt': result.get('prompt'), 'negative': result.get('negative'),
+            'plan': result.get('plan'), 'provider': result.get('provider'),
+            'fidelity': fidelity,
+        })
+
+        credits.settle(job_id, delivered=reserved)
+        jobs.finish(job_id, 'succeeded',
+                   failures=[['fidelity', f['reason']] for f in fidelity if not f['ok']],
+                   settled_credits=reserved)
+    except Exception as error:
+        delivered = 1 if reframe_delivered else 0
+        credits.settle(job_id, delivered=delivered)
+        jobs.finish(job_id, 'failed', error=str(error), settled_credits=delivered)
+
+
+@app.get('/api/videos/{job_id}')
+def get_video(job_id: str, session: dict = Depends(auth.current_session)):
+    workspace_id = auth.current_workspace(session)
+    job = db.query(
+        """SELECT id, status, params, reserved_credits, error, parent_job_id
+             FROM jobs WHERE id = %s AND workspace_id = %s AND kind = 'video'""",
+        (job_id, workspace_id), one=True)
+    if job is None:
+        raise HTTPException(404, 'no such video')
+
+    row = db.query(
+        """SELECT key, duration, width, height, aspect, provider
+             FROM job_videos WHERE job_id = %s""", (job_id,), one=True)
+    params = job['params'] or {}
+    root_id = str(job['parent_job_id'] or job['id'])
+    already_rerolled = jobs.video_rerolls_used(root_id, '') >= MAX_VIDEO_REROLLS
+
+    return {
+        'job_id': job_id, 'status': job['status'], 'error': job['error'],
+        'aspect': params.get('aspect'), 'duration': params.get('duration'),
+        'price': int(job['reserved_credits']),
+        'needs_reframe': bool(params.get('needs_reframe')),
+        'can_reroll': job['status'] in ('succeeded', 'failed') and not already_rerolled,
+        'video': ({'url': storage.presign(row['key']), 'width': row['width'],
+                  'height': row['height'],
+                  'duration': float(row['duration']) if row['duration'] else None}
+                 if row else None),
+    }
+
+
+VIDEO_BRAND_CACHE = VIDEO_OUT / 'branded'
+
+
+@app.get('/api/videos/{job_id}/download')
+def download_video(job_id: str, branded: str = '',
+                   session: dict = Depends(auth.current_session)):
+    """One rendered video, optionally stamped with the workspace's branding.
+
+    Same design as /api/images/{job_id}/{framing}: branding is a view applied at
+    download time, never baked into the stored master, so a rebrand or an unbranded
+    file for a magazine costs nothing to produce.
+    """
+    workspace_id = auth.current_workspace(session)
+    job = db.query(
+        """SELECT id, params FROM jobs
+             WHERE id = %s AND workspace_id = %s AND kind = 'video'""",
+        (job_id, workspace_id), one=True)
+    if job is None:
+        raise HTTPException(404, 'no such video')
+    row = db.query('SELECT key, width, height FROM job_videos WHERE job_id = %s',
+                   (job_id,), one=True)
+    if row is None:
+        raise HTTPException(404, 'this video has not finished yet')
+
+    if not branded:
+        return RedirectResponse(storage.presign(row['key']), status_code=307)
+
+    params = job['params'] or {}
+    headline = (params.get('headline') or '')[:MAX_HEADLINE_CHARS]
+    cta = (params.get('cta') or '')[:MAX_CTA_CHARS]
+    brand = db.query(
+        'SELECT brand_logo_key, brand_text, brand_position, brand_opacity '
+        'FROM workspaces WHERE id = %s', (workspace_id,), one=True) or {}
+    if not (brand.get('brand_logo_key') or brand.get('brand_text') or headline or cta):
+        # Nothing to stamp — the clean master IS the branded one here.
+        return RedirectResponse(storage.presign(row['key']), status_code=307)
+
+    fingerprint = hashlib.sha1(json.dumps(
+        {'logo': brand.get('brand_logo_key'), 'text': brand.get('brand_text'),
+         'position': brand.get('brand_position'), 'opacity': brand.get('brand_opacity'),
+         'headline': headline, 'cta': cta}, sort_keys=True).encode()).hexdigest()[:16]
+    cached = VIDEO_BRAND_CACHE / f'{job_id}-{fingerprint}.mp4'
+    if not cached.exists():
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        scratch = VIDEO_OUT / 'brand-cache'
+        scratch.mkdir(parents=True, exist_ok=True)
+        try:
+            master = storage.fetch(row['key'], scratch / f'{job_id}.mp4')
+            logo_bytes = None
+            if brand.get('brand_logo_key'):
+                logo_bytes = storage.fetch(
+                    brand['brand_logo_key'],
+                    scratch / pathlib.Path(brand['brand_logo_key']).name).read_bytes()
+        except Exception as error:                # noqa: BLE001 - S3 is not the caller's fault
+            log.error('video branding fetch failed for job %s: %r', job_id, error)
+            raise HTTPException(
+                502, 'that video could not be branded just now — the plain download '
+                     'still works, and nothing has been charged')
+
+        overlay = branding.overlay_png(
+            row['width'] or 1080, row['height'] or 1920, logo_bytes,
+            brand.get('brand_text') or '',
+            brand.get('brand_position') or branding.DEFAULT_POSITION,
+            headline=headline, cta=cta)
+        branding.apply_video(master, cached, overlay)
+
+    return FileResponse(cached, media_type='video/mp4',
+                        filename=f'{storage.safe_name(job_id)}-branded.mp4')
+
+
+@app.post('/api/videos/{job_id}/reroll')
+def reroll_video(job_id: str, background: BackgroundTasks,
+                 idempotency_key: str = Form(''),
+                 session: dict = Depends(auth.current_session)):
+    """Regenerate a video once. Reuses the reframed still (if one exists) at no extra
+    charge — only the video generation itself is billed again."""
+    workspace_id = auth.current_workspace(session)
+    original = db.query(
+        """SELECT id, params, parent_job_id, piece_id FROM jobs
+            WHERE id = %s AND workspace_id = %s AND kind = 'video'""",
+        (job_id, workspace_id), one=True)
+    if original is None:
+        raise HTTPException(404, 'no such video')
+
+    root_id = str(original['parent_job_id'] or original['id'])
+    key = idempotency_key or f'video-reroll:{uuid.uuid4()}'
+    if jobs.video_rerolls_used(root_id, key) >= MAX_VIDEO_REROLLS:
+        raise HTTPException(409, 'this video has already been re-rolled once')
+
+    params = {**(original['params'] or {}), 'needs_reframe': False}
+    import video
+
+    provider = video.get(params.get('provider_backend'), params.get('provider_model'))
+    price = video.credits_for(params['duration'], provider)   # no reframe charge — reused
+
+    try:
+        with db.tx() as conn:
+            job = jobs.create(workspace_id, session['user_id'], 'video', key, params,
+                              piece_id=original.get('piece_id'), reserved_credits=price,
+                              parent_job_id=root_id, conn=conn)
+            if job['created']:
+                credits.reserve(conn, workspace_id, str(job['id']), price)
+    except credits.Insufficient as short:
+        raise HTTPException(402, f'not enough credits — {short}')
+
+    new_job_id = str(job['id'])
+    if job['created']:
+        still_path = VIDEO_OUT / 'stills' / f'reroll-{new_job_id}.png'
+        source_key = (_reframe_key(params['source_job_id'], params['aspect'],
+                                   params['source_framing'], params['source_attempt'])
+                     if params.get('reframed') else params['still_key'])
+        storage.fetch(source_key, still_path)
+        background.add_task(run_video, new_job_id, params, still_path)
+    return {'job_id': new_job_id, 'status': 'running', 'expected': price,
+            'balance': credits.balance(workspace_id)}
 
 
 # The only two trees /media may serve. Confining to the project directory was not

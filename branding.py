@@ -109,6 +109,75 @@ def _ink(font: ImageFont.FreeTypeFont, char: str) -> int:
     return sum(canvas.tobytes())
 
 
+def _prepare_logo(logo_bytes: bytes | None, width: int) -> Image.Image | None:
+    """Load and scale a logo to LOGO_WIDTH_FRACTION of `width`. None if there is none."""
+    if not logo_bytes:
+        return None
+    logo = Image.open(io.BytesIO(logo_bytes)).convert('RGBA')
+    target_width = max(1, int(width * LOGO_WIDTH_FRACTION))
+    scale = target_width / logo.width
+    return logo.resize((target_width, max(1, int(logo.height * scale))), Image.LANCZOS)
+
+
+def _fit_text(text: str, width: int, height: int, pad: int):
+    """The largest font that still fits TEXT_MAX_WIDTH_FRACTION, and its box.
+
+    Shrink to fit. A long contact line — and Indian ones are long, with a name, a +91
+    number and a domain — otherwise runs to the padding edge or past it, which is the
+    difference between branding and damage.
+    """
+    size = max(MIN_TEXT_PX, int(height * TEXT_HEIGHT_FRACTION))
+    font = font_for(text, size)
+    usable = min(width - 2 * pad, int(width * TEXT_MAX_WIDTH_FRACTION))
+    while size > MIN_TEXT_PX and font.getlength(text) > usable:
+        size -= 1
+        font = font_for(text, size)
+    box = font.getbbox(text)
+    return font, box[2] - box[0], box[3] - box[1]
+
+
+def _draw_logo_block(layer: Image.Image, logo: Image.Image, left: int, block_width: int,
+                     top: int, gap: int) -> int:
+    """Paste `logo`, centred in `block_width` at `top`, with its own contrast halo.
+
+    The halo contrasts the LOGO, not the backdrop. We cannot recolour a client's mark, so
+    the only way to keep a white wordmark visible on cream — or a black one on a dark
+    saree — is to outline it in its own opposite.
+
+    Returns the y cursor after the logo (top + logo.height + gap).
+    """
+    spot = (left + (block_width - logo.width) // 2, top)
+    logo_halo = (0, 0, 0, 190) if _is_light(logo) else (255, 255, 255, 200)
+    halo = Image.new('RGBA', layer.size, (0, 0, 0, 0))
+    halo.paste(Image.new('RGBA', logo.size, logo_halo), spot, logo.getchannel('A'))
+    # Composited twice. A single pass at 190 alpha survives the opacity multiply below
+    # as ~133, which is not enough separation for a white mark on cream.
+    blurred = halo.filter(ImageFilter.GaussianBlur(max(3, logo.width // 28)))
+    layer.alpha_composite(blurred)
+    layer.alpha_composite(blurred)
+    layer.alpha_composite(logo, spot)
+    return top + logo.height + gap
+
+
+def _draw_text_block(layer: Image.Image, text: str, font: ImageFont.FreeTypeFont,
+                     left: int, block_width: int, text_width: int, top: int,
+                     ink: tuple, halo_colour: tuple) -> None:
+    """Draw `text` centred in `block_width` at `top`, with a blurred contrast halo.
+
+    A BLURRED shadow, not a hard offset. Two-pixel hard shadows are invisible against a
+    bright backdrop — white type on a sunlit wall simply disappears, which is the one
+    thing this must never do on a delivered image.
+    """
+    x = left + (block_width - text_width) // 2
+    offset = font.getbbox(text)[1]
+    halo = Image.new('RGBA', layer.size, (0, 0, 0, 0))
+    ImageDraw.Draw(halo).text((x, top - offset), text, font=font, fill=halo_colour)
+    halo = halo.filter(ImageFilter.GaussianBlur(max(2, font.size // 6)))
+    layer.alpha_composite(halo)
+    layer.alpha_composite(halo)
+    ImageDraw.Draw(layer).text((x, top - offset), text, font=font, fill=ink)
+
+
 def apply(image_bytes: bytes, logo_bytes: bytes | None = None, text: str = '',
           position: str = DEFAULT_POSITION, opacity: int = DEFAULT_OPACITY) -> bytes:
     """Return a new PNG with the branding stamped on. The input is never modified."""
@@ -125,31 +194,13 @@ def apply(image_bytes: bytes, logo_bytes: bytes | None = None, text: str = '',
     # single opacity and neither can darken the other where they overlap.
     layer = Image.new('RGBA', base.size, (0, 0, 0, 0))
 
-    block_width = 0
-    block_height = 0
-    logo = None
-    if logo_bytes:
-        logo = Image.open(io.BytesIO(logo_bytes)).convert('RGBA')
-        target_width = max(1, int(width * LOGO_WIDTH_FRACTION))
-        scale = target_width / logo.width
-        logo = logo.resize((target_width, max(1, int(logo.height * scale))),
-                           Image.LANCZOS)
-        block_width, block_height = logo.width, logo.height
+    logo = _prepare_logo(logo_bytes, width)
+    block_width, block_height = (logo.width, logo.height) if logo else (0, 0)
 
     font = None
     text_width = text_height = 0
     if text:
-        size = max(MIN_TEXT_PX, int(height * TEXT_HEIGHT_FRACTION))
-        font = font_for(text, size)
-        # Shrink to fit. A long contact line — and Indian ones are long, with a name, a
-        # +91 number and a domain — otherwise runs to the padding edge or past it, which
-        # is the difference between branding and damage.
-        usable = min(width - 2 * pad, int(width * TEXT_MAX_WIDTH_FRACTION))
-        while size > MIN_TEXT_PX and font.getlength(text) > usable:
-            size -= 1
-            font = font_for(text, size)
-        box = font.getbbox(text)
-        text_width, text_height = box[2] - box[0], box[3] - box[1]
+        font, text_width, text_height = _fit_text(text, width, height, pad)
         block_width = max(block_width, text_width)
         block_height += (gap if logo else 0) + text_height
 
@@ -170,45 +221,10 @@ def apply(image_bytes: bytes, logo_bytes: bytes | None = None, text: str = '',
 
     cursor = top
     if logo is not None:
-        # Centred within the block so a wide contact line does not leave the mark
-        # hanging off to one side.
-        spot = (left + (block_width - logo.width) // 2, cursor)
-        # The same soft halo the text gets, built from the logo's own alpha so it traces
-        # the mark rather than boxing it. A white wordmark on a cream marble floor is
-        # otherwise as invisible as white type on the same floor.
-        # The logo's halo contrasts the LOGO, not the backdrop. We cannot recolour a
-        # client's mark, so the only way to keep a white wordmark visible on cream — or
-        # a black one on a dark saree — is to outline it in its own opposite. Judging
-        # this by the backdrop instead is what left a white logo ghosted on a light
-        # floor while its own contact line underneath read perfectly.
-        logo_halo = (0, 0, 0, 190) if _is_light(logo) else (255, 255, 255, 200)
-        halo = Image.new('RGBA', base.size, (0, 0, 0, 0))
-        halo.paste(Image.new('RGBA', logo.size, logo_halo), spot,
-                   logo.getchannel('A'))
-        # Composited twice. A single pass at 190 alpha survives the opacity multiply
-        # below as ~133, which is not enough separation for a white mark on cream —
-        # the case that sent it invisible in testing.
-        blurred = halo.filter(ImageFilter.GaussianBlur(max(3, logo.width // 28)))
-        layer.alpha_composite(blurred)
-        layer.alpha_composite(blurred)
-        layer.alpha_composite(logo, spot)
-        cursor += logo.height + gap
-
+        cursor = _draw_logo_block(layer, logo, left, block_width, cursor, gap)
     if text and font is not None:
-        x = left + (block_width - text_width) // 2
-        offset = font.getbbox(text)[1]
-        # A BLURRED shadow, not a hard offset. Two-pixel hard shadows are invisible
-        # against a bright backdrop — white type on a sunlit wall simply disappears,
-        # which is the one thing this must never do on a delivered image. A soft dark
-        # halo works on both a dark saree and a cream marble floor without a scrim
-        # heavy enough to look like a stock-photo watermark.
-        halo = Image.new('RGBA', base.size, (0, 0, 0, 0))
-        ImageDraw.Draw(halo).text((x, cursor - offset), text, font=font,
-                                  fill=halo_colour)
-        halo = halo.filter(ImageFilter.GaussianBlur(max(2, font.size // 6)))
-        layer.alpha_composite(halo)
-        layer.alpha_composite(halo)
-        ImageDraw.Draw(layer).text((x, cursor - offset), text, font=font, fill=ink)
+        _draw_text_block(layer, text, font, left, block_width, text_width, cursor,
+                         ink, halo_colour)
 
     if opacity < 100:
         alpha = layer.getchannel('A').point(lambda v: int(v * opacity / 100))
@@ -245,6 +261,167 @@ def _anchor(position: str, width: int, height: int,
     else:
         left = width - block_width - pad
     return max(0, left), max(0, top)
+
+
+# --- video overlays: a transparent PNG, composited onto every frame by ffmpeg ----------
+#
+# A video ad gets the same logo + contact line apply() puts on a still (same corner,
+# same halo, same scale-with-width), plus two things a still doesn't need: a headline
+# band across the top and a CTA pill at the bottom — the two things an ad actually needs
+# to sell, which a jeweller's own contact line does not say.
+
+HEADLINE_HEIGHT_FRACTION = 0.09
+HEADLINE_BAND_ALPHA = 140
+CTA_HEIGHT_FRACTION = 0.06
+CTA_PAD_FRACTION = 0.03
+CTA_FILL = (210, 160, 60, 235)
+CTA_INK = (20, 16, 12, 255)
+
+
+def _draw_headline_band(layer: Image.Image, headline: str, width: int, height: int) -> None:
+    """A translucent bar across the top, with the headline centred in it."""
+    band_h = max(1, int(height * HEADLINE_HEIGHT_FRACTION))
+    band = Image.new('RGBA', (width, band_h), (0, 0, 0, HEADLINE_BAND_ALPHA))
+    layer.alpha_composite(band, (0, 0))
+
+    size = max(MIN_TEXT_PX, int(band_h * 0.5))
+    font = font_for(headline, size)
+    usable = int(width * 0.9)
+    while size > MIN_TEXT_PX and font.getlength(headline) > usable:
+        size -= 1
+        font = font_for(headline, size)
+    box = font.getbbox(headline)
+    text_w, text_h = box[2] - box[0], box[3] - box[1]
+    x = (width - text_w) // 2
+    y = (band_h - text_h) // 2 - box[1]
+    ImageDraw.Draw(layer).text((x, y), headline, font=font, fill=(255, 255, 255, 255))
+
+
+def _draw_cta_pill(layer: Image.Image, cta: str, width: int, height: int,
+                   bottom_clearance: int = 0) -> None:
+    """A filled rounded-rectangle button, bottom-centred, with the CTA inside it.
+
+    `bottom_clearance` lifts the pill above a bottom-anchored logo/text corner badge —
+    without it a bottom-centre CTA and a bottom-right contact line sit at the same
+    height and print on top of each other.
+    """
+    size = max(MIN_TEXT_PX, int(height * CTA_HEIGHT_FRACTION * 0.5))
+    font = font_for(cta, size)
+    usable = int(width * 0.6)
+    while size > MIN_TEXT_PX and font.getlength(cta) > usable:
+        size -= 1
+        font = font_for(cta, size)
+    box = font.getbbox(cta)
+    text_w, text_h = box[2] - box[0], box[3] - box[1]
+
+    pad_x, pad_y = int(width * CTA_PAD_FRACTION), max(4, int(text_h * 0.6))
+    pill_w, pill_h = text_w + pad_x * 2, text_h + pad_y * 2
+    left = (width - pill_w) // 2
+    top = height - pill_h - int(height * PADDING_FRACTION) - bottom_clearance
+
+    pill = Image.new('RGBA', (pill_w, pill_h), (0, 0, 0, 0))
+    ImageDraw.Draw(pill).rounded_rectangle(
+        (0, 0, pill_w - 1, pill_h - 1), radius=pill_h // 2, fill=CTA_FILL)
+    layer.alpha_composite(pill, (left, top))
+    ImageDraw.Draw(layer).text((left + pad_x, top + pad_y - box[1]), cta, font=font,
+                               fill=CTA_INK)
+
+
+def overlay_png(width: int, height: int, logo_bytes: bytes | None = None, text: str = '',
+                position: str = DEFAULT_POSITION, headline: str = '',
+                cta: str = '') -> bytes:
+    """A transparent RGBA PNG at `width`x`height`: the logo + contact line placed exactly
+    as apply() places them on a still, plus a headline band and a CTA pill for a video ad.
+
+    Unlike apply(), there is no photograph here to sample a backdrop from — a video's
+    background changes every frame — so the logo/text corner badge always uses light ink
+    on a dark halo rather than apply()'s backdrop-sampled colour choice.
+    # ponytail: fixed contrast instead of apply()'s per-pixel backdrop read. Good enough
+    # for the halo strength already in play; revisit with a sampled first-frame read if a
+    # very light, low-contrast source video ever needs it.
+    """
+    if position not in POSITIONS:
+        position = DEFAULT_POSITION
+    layer = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    pad = int(width * PADDING_FRACTION)
+    gap = int(width * GAP_FRACTION)
+    ink, halo_colour = (255, 255, 255, 255), (0, 0, 0, 190)
+
+    logo = _prepare_logo(logo_bytes, width)
+    block_width, block_height = (logo.width, logo.height) if logo else (0, 0)
+
+    font = None
+    text_width = text_height = 0
+    if text:
+        font, text_width, text_height = _fit_text(text, width, height, pad)
+        block_width = max(block_width, text_width)
+        block_height += (gap if logo else 0) + text_height
+
+    if block_width:
+        left, top = _anchor(position, width, height, block_width, block_height, pad)
+        cursor = top
+        if logo is not None:
+            cursor = _draw_logo_block(layer, logo, left, block_width, cursor, gap)
+        if text and font is not None:
+            _draw_text_block(layer, text, font, left, block_width, text_width, cursor,
+                             ink, halo_colour)
+
+    if headline:
+        _draw_headline_band(layer, headline, width, height)
+    if cta:
+        # A bottom-anchored corner badge (logo/text) and a bottom-centre CTA pill would
+        # otherwise print on top of each other — lift the pill clear of it.
+        bottom_clearance = block_height + gap if block_width and position.startswith('bottom') else 0
+        _draw_cta_pill(layer, cta, width, height, bottom_clearance)
+
+    out = io.BytesIO()
+    layer.save(out, format='PNG')
+    return out.getvalue()
+
+
+def _has_audio(mp4_path) -> bool:
+    import subprocess
+
+    import video as video_module
+
+    out = subprocess.run(
+        [video_module.FFPROBE, '-v', 'error', '-select_streams', 'a',
+         '-show_entries', 'stream=index', '-of', 'csv=p=0', str(mp4_path)],
+        capture_output=True, text=True)
+    return bool(out.stdout.strip())
+
+
+def apply_video(mp4_path, out_path, overlay_png_bytes: bytes) -> pathlib.Path:
+    """Composite `overlay_png_bytes` over every frame of `mp4_path`, writing `out_path`.
+
+    ffmpeg, not Pillow-per-frame: re-encoding once through libx264 is how every frame of
+    a clip gets stamped without decoding it frame-by-frame in Python. Audio is copied
+    through untouched when the source has any, dropped (-an) when it doesn't — asking
+    ffmpeg to copy a stream that is not there is a hard failure, not a silent no-op.
+    """
+    import subprocess
+    import tempfile
+
+    import video as video_module
+
+    mp4_path = pathlib.Path(mp4_path)
+    out_path = pathlib.Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+        tmp.write(overlay_png_bytes)
+        overlay_path = pathlib.Path(tmp.name)
+    try:
+        audio_args = ['-c:a', 'aac'] if _has_audio(mp4_path) else ['-an']
+        subprocess.run(
+            [video_module.FFMPEG, '-y', '-i', str(mp4_path), '-i', str(overlay_path),
+             '-filter_complex', 'overlay=0:0', '-c:v', 'libx264', '-crf', '18',
+             '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+             *audio_args, str(out_path)],
+            capture_output=True, check=True)
+    finally:
+        overlay_path.unlink(missing_ok=True)
+    return out_path
 
 
 def demo() -> None:
@@ -306,6 +483,55 @@ def demo() -> None:
     assert tamil, 'Tamil is not bundled and must be reported, not silently boxed'
 
     assert LATIN_FONT.exists() and DEVANAGARI_FONT.exists(), 'a font is missing'
+
+    # --- overlay_png: right size, and ink where the headline actually goes -------------
+    overlay = overlay_png(1080, 1920, logo_bytes, line, headline='Diwali Collection',
+                          cta='Shop now')
+    ov_image = Image.open(io.BytesIO(overlay))
+    assert ov_image.size == (1080, 1920), ov_image.size
+    assert ov_image.mode == 'RGBA'
+    band_h = max(1, int(1920 * HEADLINE_HEIGHT_FRACTION))
+    band = ov_image.crop((0, 0, 1080, band_h))
+    assert any(px[3] > 0 for px in band.getdata()), 'the headline band is fully transparent'
+    # A CTA pill is drawn bottom-centre — the whole point of a pill is that it is opaque
+    # where the button is, not just where the letters are.
+    pill_probe = ov_image.crop((1080 // 2 - 5, 1920 - 120, 1080 // 2 + 5, 1920 - 60))
+    assert any(px[3] > 200 for px in pill_probe.getdata()), 'the CTA pill did not draw'
+    # No headline/cta/logo/text at all is fully transparent — nothing to composite.
+    empty = Image.open(io.BytesIO(overlay_png(800, 800)))
+    assert empty.getbbox() is None, 'an overlay with nothing to draw must be blank'
+
+    # --- apply_video: dims and duration survive a real ffmpeg round-trip --------------
+    fixture = pathlib.Path(
+        'out/videos/812d3d2c-8f96-4af9-be01-710d7e9b5da9-hero-higgsfield-kling-5s.mp4')
+    if not fixture.exists():
+        print('branding: video fixture missing, skipping apply_video check')
+    else:
+        import subprocess
+        import tempfile
+
+        def _probe(path):
+            out = subprocess.run(
+                ['ffprobe', '-v', 'error', '-print_format', 'json', '-show_format',
+                 '-show_streams', str(path)], capture_output=True, text=True, check=True)
+            import json as _json
+            data = _json.loads(out.stdout)
+            stream = next(s for s in data['streams'] if s['codec_type'] == 'video')
+            return stream['width'], stream['height'], float(data['format']['duration'])
+
+        in_w, in_h, in_dur = _probe(fixture)
+        video_overlay = overlay_png(in_w, in_h, logo_bytes, line, headline='Diwali sale',
+                                    cta='Shop now')
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_path = pathlib.Path(tmp_dir) / 'branded.mp4'
+            result = apply_video(fixture, out_path, video_overlay)
+            assert result == out_path and out_path.exists()
+            out_w, out_h, out_dur = _probe(out_path)
+            assert (out_w, out_h) == (in_w, in_h), ((out_w, out_h), (in_w, in_h))
+            assert abs(out_dur - in_dur) <= 0.1, (out_dur, in_dur)
+        # TemporaryDirectory cleaned itself up; apply_video's own overlay temp file is
+        # removed in its own finally — nothing left on disk from this check.
+
     print('branding ok')
 
 

@@ -137,6 +137,56 @@ def image_count(job_id: str) -> int:
     return int(row['n'])
 
 
+def image_at(shoot_id: str, framing: str, attempt: int | None = None) -> dict | None:
+    """One delivered image, by framing and (optionally) a specific attempt.
+
+    Without an attempt, the latest — what the gallery shows. Used to resolve the still a
+    video is generated from: job_id + framing (+ optionally attempt) from the client.
+    """
+    if attempt is not None:
+        return db.query(
+            """SELECT framing, attempt, s3_key, seed FROM job_images
+                WHERE shoot_id = %s AND framing = %s AND attempt = %s""",
+            (shoot_id, framing, attempt), one=True)
+    return db.query(
+        """SELECT framing, attempt, s3_key, seed FROM job_images
+            WHERE shoot_id = %s AND framing = %s
+        ORDER BY attempt DESC LIMIT 1""",
+        (shoot_id, framing), one=True)
+
+
+def video_rerolls_used(root_job_id: str, ignore_key: str) -> int:
+    """How many re-rolls a video has already been charged for — mirrors reshoots_used.
+
+    Keyed on the ROOT video job's id: a re-roll's own row has parent_job_id = root, so
+    rerolling a reroll would otherwise reset the count to zero instead of capping the
+    whole family at one. Failed re-rolls are excluded — they were refunded, so the
+    customer has not spent their one allowance on a re-roll that produced nothing.
+    """
+    row = db.query(
+        """SELECT count(*) AS n FROM jobs
+            WHERE parent_job_id = %s AND kind = 'video' AND status <> 'failed'
+              AND idempotency_key <> %s""",
+        (root_job_id, ignore_key), one=True)
+    return int(row['n'])
+
+
+def update_params(job_id: str, patch: dict) -> bool:
+    """Merge `patch` into a job's params while we still own it (claimed_by = us).
+
+    For debugging detail that lands mid-job — a video's prompt, plan and fidelity
+    verdicts — which is not itself the close of the job (finish() is) but must not be
+    written by a container that has since been reaped and refunded; a stale write would
+    silently attach one job's debug detail to whatever now sits at that id.
+    """
+    row = db.query(
+        """UPDATE jobs SET params = params || %s::jsonb
+            WHERE id = %s AND claimed_by = %s
+        RETURNING id""",
+        (json.dumps(patch), job_id, INSTANCE), one=True)
+    return row is not None
+
+
 def finish(job_id: str, status: str, failures=None, error: str | None = None,
            settled_credits: int | None = None) -> bool:
     """Close a job we still own. False means we were reaped; discard the result."""
@@ -223,8 +273,24 @@ def sweep() -> list[dict]:
                         WHERE status = 'running'
                           AND heartbeat_at < now() - make_interval(mins => %s)
                     RETURNING id, workspace_id, reserved_credits,
-                              (SELECT count(*) FROM job_images i WHERE i.job_id = jobs.id)
-                                  AS delivered""",
+                              -- A video's job_images rows are not one-credit-each like a
+                              -- shoot's: the reframe is worth 1, the video is worth its
+                              -- whole reserved price. So a video counts as delivered by
+                              -- what actually landed (job_videos, the reframe image),
+                              -- not by row count — everything else keeps the old
+                              -- one-row-per-credit accounting.
+                              CASE WHEN kind = 'video' THEN
+                                  CASE
+                                    WHEN EXISTS (SELECT 1 FROM job_videos v
+                                                  WHERE v.job_id = jobs.id) THEN reserved_credits
+                                    WHEN EXISTS (SELECT 1 FROM job_images i
+                                                  WHERE i.job_id = jobs.id
+                                                    AND i.framing LIKE 'reframe-%%') THEN 1
+                                    ELSE 0
+                                  END
+                              ELSE (SELECT count(*) FROM job_images i
+                                     WHERE i.job_id = jobs.id)
+                              END AS delivered""",
                     (STALE_MINUTES,))
                 return cursor.fetchall()
         finally:

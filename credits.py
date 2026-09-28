@@ -22,6 +22,13 @@ import locations
 # What each action costs, in images. Computed server-side and pinned onto the job at
 # reserve time — never re-derived at settle, or a price change silently re-prices work
 # that is already in flight, and never taken from the client.
+#
+# 'video' is deliberately NOT here: unlike a shoot/reshoot/retouch, its cost depends on
+# provider, model AND duration (see video.credits_for), not just on which action it is.
+# Folding that into cost() would need credits.py to import video.py, which already
+# imports credits.py for USD_PER_CREDIT below — a cycle. video.credits_for() is the
+# cleaner home; it reuses USD_PER_CREDIT so a video credit and an image credit are
+# priced off the same basis.
 COST = {
     'shoot': len(locations.FRAMINGS),
     'reshoot': 1,
@@ -31,6 +38,13 @@ COST = {
     # customer who has not seen the result yet reads a bigger number as a bigger risk.
     'model': 1,
 }
+
+# One credit is priced against $0.15 of provider spend — fal's nano-banana-pro/edit @2K
+# rate, the same figure billing.py's MARGINAL_COST_RUPEES is derived from and the
+# README's Pricing table quotes. Named here (it was previously only a comment in
+# billing.py and a repeated literal in cast.py/gallery.py's cost estimates) so video
+# pricing can share the exact same basis instead of a second hardcoded 0.15.
+USD_PER_CREDIT = 0.15
 
 
 def cost(kind: str, images: int = 0, resolution: str = '') -> int:

@@ -328,6 +328,48 @@ def demo() -> None:
     breakeven = FIXED_RUPEES_MONTH / (RUPEES_PER_CREDIT / 1.5 - MARGINAL_COST_RUPEES)
     assert breakeven < PLANNED_CREDITS_MONTH, breakeven
 
+    # A video credit must clear the same per-credit cost basis an image credit does —
+    # otherwise a video costs the platform more than what a customer's credit buys.
+    # Pure and network-free: video.REGISTRY and video.credits_for are plain data/maths.
+    import video
+
+    def _worst_usd_per_credit() -> float:
+        return max(
+            (provider.usd_per_second * duration) / video.credits_for(duration, provider)
+            for provider in video.REGISTRY.values()
+            for duration in sorted(provider.durations)
+        )
+
+    assert _worst_usd_per_credit() <= credits.USD_PER_CREDIT, (
+        f'a video provider charges more per credit (${_worst_usd_per_credit():.4f}) '
+        f'than the ${credits.USD_PER_CREDIT} basis a credit is sold against')
+
+    # Red-before-green: prove the check can actually fail, not just pass vacuously.
+    # Bumping usd_per_second alone cannot do it — video.credits_for's ceil() is
+    # self-correcting by construction (ceil(x/c)*c >= x always), so any price rise
+    # just charges more credits and the ratio stays under the basis. A believable real
+    # bug instead: someone "rounds more kindly" and floors instead of ceils, silently
+    # undercharging a fractional credit — that DOES decouple credits from spend.
+    import math
+
+    original_credits_for = video.credits_for
+    video.credits_for = lambda seconds, provider: (
+        math.floor(provider.usd_per_second * seconds / credits.USD_PER_CREDIT) or 1)
+    try:
+        try:
+            assert _worst_usd_per_credit() <= credits.USD_PER_CREDIT
+        except AssertionError:
+            print(f'RED (expected): floor()-ing the credit count fails the margin '
+                 f'check -> ${_worst_usd_per_credit():.4f}/credit')
+        else:
+            raise AssertionError('a floored credit count should have failed the '
+                                 'margin check')
+    finally:
+        video.credits_for = original_credits_for
+
+    print(f'GREEN: real video pricing (ceil) clears the basis -> '
+         f'${_worst_usd_per_credit():.4f}/credit <= ${credits.USD_PER_CREDIT}/credit')
+
     if os.environ.get('DATABASE_URL'):
         import uuid
 

@@ -224,6 +224,29 @@
   }
   .results button.link:hover { color: var(--copper-light); }
 
+  /* A <details> per delivered image rather than a modal: free accordion behaviour, no
+     custom open/close JS, and it never blocks the rest of the page on a phone. Lives
+     inside its own figure — not a grid item itself, so it is exactly that card's width. */
+  .video-panel { margin-top: 6px; }
+  .video-panel > summary { cursor: pointer; color: var(--copper); font-size: 13px;
+    font-weight: 600; list-style: none; padding: 4px 0; }
+  .video-panel > summary::-webkit-details-marker { display: none; }
+  .video-panel > summary::before { content: '+ '; }
+  .video-panel[open] > summary::before { content: '– '; }
+  .video-body { padding: 14px 0 4px; border-top: 1px solid var(--line); margin-top: 8px; }
+  .video-body textarea { min-height: 60px; resize: vertical; }
+  .video-price { font-size: 13px; margin: 10px 0; }
+  .video-result { margin-top: 12px; }
+  .video-result video { width: 100%; border-radius: var(--radius); display: block;
+    background: var(--raised); }
+  .video-result .row { display: flex; align-items: center; gap: 14px; padding-top: 8px;
+    font-size: 13px; flex-wrap: wrap; }
+  @media (max-width: 720px) {
+    .video-body .fields { grid-template-columns: 1fr 1fr; }
+    .video-result .row a, .video-result .row button.link {
+      display: inline-flex; align-items: center; min-height: 44px; }
+  }
+
   .shimmer { border-radius: var(--radius); aspect-ratio: 3/4;
     background: linear-gradient(100deg,
       rgba(255,255,255,.02) 30%, rgba(193,127,89,.10) 50%, rgba(255,255,255,.02) 70%);
@@ -1225,6 +1248,9 @@ async function poll(jobId) {
   // attempt 1 is the original, so anything past it has already had its one reshoot. The
   // server refuses a second either way; hiding the button is so the customer finds that
   // out before the click rather than as an error.
+  // A video ad animates one delivered still, so the reframe artefact a video job leaves
+  // behind (framing 'reframe-<aspect>') and a retouch's own single image do not get one.
+  const canVideo = (framing) => framing !== 'retouch' && !framing.startsWith('reframe-');
   $('results').innerHTML = job.images.map(({ framing, url, attempt }) =>
     `<figure><img src="${url}" alt="${framing}">
       <figcaption><span>${titleCase(framing)}</span><span>
@@ -1235,7 +1261,13 @@ async function poll(jobId) {
       &nbsp;<a href="${wantsBrand
         ? `/api/images/${jobId}/${encodeURIComponent(framing)}?branded=1`
         : url}" download>Download${wantsBrand ? ' + logo' : ''}</a>
-      </span></figcaption></figure>`
+      </span></figcaption>
+      ${canVideo(framing)
+        ? `<details class="video-panel" data-framing="${framing}" data-attempt="${attempt}">
+             <summary>Make video ad</summary>
+           </details>`
+        : ''}
+      </figure>`
   ).join('');
   document.querySelectorAll('#results button.link[data-framing]').forEach((button) => {
     button.addEventListener('click', () => reshoot(jobId, button.dataset.framing));
@@ -1243,7 +1275,191 @@ async function poll(jobId) {
   document.querySelectorAll('#results button.link[data-shootable]').forEach((button) => {
     button.addEventListener('click', () => shootRetouched(button));
   });
+  document.querySelectorAll('#results .video-panel').forEach((details) => {
+    details.addEventListener('toggle', () => {
+      if (details.open && !details.dataset.loaded) {
+        details.dataset.loaded = '1';
+        initVideoPanel(details, jobId, job.category || 'ring');
+      }
+    });
+  });
   $('go').disabled = false;
+}
+
+// --- video ads: animate one delivered still --------------------------------------------
+
+async function videoOptionsFor(category) {
+  state.videoOptions = state.videoOptions || {};
+  if (!state.videoOptions[category]) {
+    state.videoOptions[category] = await api(
+      `/api/video-options?category=${encodeURIComponent(category)}`);
+  }
+  return state.videoOptions[category];
+}
+
+// The price shown before submit always comes from the server: it is the only thing
+// that has actually looked at the stored file and knows whether a reframe is needed.
+async function updateVideoPrice(details, jobId) {
+  const priceEl = details.querySelector('.video-price');
+  const aspect = details.querySelector('.vSize').value;
+  const duration = details.querySelector('.vDuration').value;
+  priceEl.textContent = '…';
+  try {
+    const quote = await api(`/api/videos/quote?source_job_id=${encodeURIComponent(jobId)}` +
+      `&framing=${encodeURIComponent(details.dataset.framing)}` +
+      `&attempt=${encodeURIComponent(details.dataset.attempt)}` +
+      `&aspect=${encodeURIComponent(aspect)}&duration=${encodeURIComponent(duration)}`);
+    priceEl.textContent = `${quote.price} credit${quote.price === 1 ? '' : 's'}` +
+      (quote.needs_reframe ? ' (includes +1 to reframe)' : '');
+  } catch (error) {
+    priceEl.textContent = '';
+  }
+}
+
+async function initVideoPanel(details, jobId, category) {
+  const framing = details.dataset.framing;
+  const attempt = details.dataset.attempt;
+  let options;
+  try {
+    options = await videoOptionsFor(category);
+  } catch (error) {
+    details.insertAdjacentHTML('beforeend',
+      `<div class="error">${String(error.message || error)}</div>`);
+    return;
+  }
+  const maxHeadline = options.max_headline_chars || 40;
+  const maxCta = options.max_cta_chars || 30;
+  details.insertAdjacentHTML('beforeend', `
+    <div class="video-body">
+      <div class="fields">
+        <label><span class="lbl">Size</span>
+          <select class="vSize">${options.sizes.map((s) =>
+            `<option value="${s.key}">${s.label} (${s.key})</option>`).join('')}</select>
+        </label>
+        <label><span class="lbl">Length</span>
+          <select class="vDuration">${options.durations.map((d) =>
+            `<option value="${d}">${d}s</option>`).join('')}</select>
+        </label>
+        <label><span class="lbl">Motion</span>
+          <select class="vMotion">${options.motions.map((m) =>
+            `<option value="${m.key}">${m.label}</option>`).join('')}</select>
+        </label>
+        <label><span class="lbl">Mood</span>
+          <select class="vMood">${options.moods.map((m) =>
+            `<option value="${m.key}">${m.label}</option>`).join('')}</select>
+        </label>
+        <label class="wide"><span class="lbl">Headline <em class="vHeadCount">0/${maxHeadline}</em></span>
+          <input class="vHeadline" maxlength="${maxHeadline}"
+                 placeholder="e.g. Diwali Collection — 20% off">
+        </label>
+        <label class="wide"><span class="lbl">CTA <em class="vCtaCount">0/${maxCta}</em></span>
+          <input class="vCta" maxlength="${maxCta}" placeholder="e.g. Visit our store">
+        </label>
+        <label class="wide"><span class="lbl">Note <em class="vCount">0/140</em></span>
+          <textarea class="vNote" maxlength="140" placeholder="optional, for the director only"></textarea>
+        </label>
+      </div>
+      <div class="video-price muted"></div>
+      <button class="go vSubmit">Make video</button>
+      <div class="video-result hidden"></div>
+    </div>`);
+
+  details.dataset.idem = details.dataset.idem || crypto.randomUUID();
+  const recompute = () => updateVideoPrice(details, jobId);
+  details.querySelector('.vSize').addEventListener('change', recompute);
+  details.querySelector('.vDuration').addEventListener('change', recompute);
+  const note = details.querySelector('.vNote');
+  note.addEventListener('input', () => {
+    details.querySelector('.vCount').textContent = `${note.value.length}/140`;
+  });
+  const headline = details.querySelector('.vHeadline');
+  headline.addEventListener('input', () => {
+    details.querySelector('.vHeadCount').textContent = `${headline.value.length}/${maxHeadline}`;
+  });
+  const cta = details.querySelector('.vCta');
+  cta.addEventListener('input', () => {
+    details.querySelector('.vCtaCount').textContent = `${cta.value.length}/${maxCta}`;
+  });
+  recompute();
+
+  details.querySelector('.vSubmit').addEventListener(
+    'click', () => submitVideo(details, jobId, framing, attempt));
+}
+
+async function submitVideo(details, jobId, framing, attempt) {
+  const button = details.querySelector('.vSubmit');
+  button.disabled = true;
+  const body = new FormData();
+  body.append('job_id', jobId);
+  body.append('framing', framing);
+  body.append('attempt', attempt);
+  body.append('aspect', details.querySelector('.vSize').value);
+  body.append('duration', details.querySelector('.vDuration').value);
+  body.append('motion', details.querySelector('.vMotion').value);
+  body.append('mood', details.querySelector('.vMood').value);
+  body.append('note', details.querySelector('.vNote').value);
+  body.append('headline', details.querySelector('.vHeadline').value);
+  body.append('cta', details.querySelector('.vCta').value);
+  body.append('idempotency_key', details.dataset.idem);
+  const result = details.querySelector('.video-result');
+  result.classList.remove('hidden');
+  result.innerHTML = '<div class="shimmer"></div>';
+  try {
+    const started = await fetch('/api/videos', { method: 'POST', body }).then(async (r) => {
+      if (!r.ok) throw new Error((await r.json()).detail || `failed (${r.status})`);
+      return r.json();
+    });
+    details.dataset.idem = crypto.randomUUID();          // spent — mint the next one
+    if (started.balance !== undefined) { session.balance = started.balance; renderAccount(); }
+    pollVideo(details, started.job_id);
+  } catch (error) {
+    result.innerHTML = `<div class="error">${String(error.message || error)}</div>`;
+    button.disabled = false;
+  }
+}
+
+async function pollVideo(details, videoJobId) {
+  const result = details.querySelector('.video-result');
+  const button = details.querySelector('.vSubmit');
+  let job;
+  try {
+    job = await api(`/api/videos/${videoJobId}`);
+  } catch (error) {
+    result.innerHTML = `<div class="error">${String(error.message || error)}</div>`;
+    button.disabled = false;
+    return;
+  }
+  if (job.status === 'running' || job.status === 'queued') {
+    return setTimeout(() => pollVideo(details, videoJobId), 3000);
+  }
+  button.disabled = false;
+  if (job.status !== 'succeeded' || !job.video) {
+    result.innerHTML = `<div class="error">${job.error || 'video generation failed'}</div>`;
+    return;
+  }
+  result.innerHTML = `
+    <video src="${job.video.url}" controls playsinline muted loop></video>
+    <div class="row">
+      <a href="/api/videos/${videoJobId}/download" download>Download</a>
+      <a href="/api/videos/${videoJobId}/download?branded=1" download>Download branded</a>
+      ${job.can_reroll ? '<button class="link vReroll">Try again</button>' : ''}
+    </div>`;
+  const reroll = result.querySelector('.vReroll');
+  if (reroll) {
+    reroll.addEventListener('click', async () => {
+      reroll.disabled = true;
+      try {
+        const again = await api(`/api/videos/${videoJobId}/reroll`, { method: 'POST' });
+        if (again.balance !== undefined) { session.balance = again.balance; renderAccount(); }
+        result.innerHTML = '<div class="shimmer"></div>';
+        pollVideo(details, again.job_id);
+      } catch (error) {
+        result.insertAdjacentHTML('beforeend',
+          `<div class="error">${String(error.message || error)}</div>`);
+        reroll.disabled = false;
+      }
+    });
+  }
 }
 
 // Hands the retouched image straight into the shoot as its product reference. The
