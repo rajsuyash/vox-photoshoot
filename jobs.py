@@ -21,7 +21,9 @@ Three rules hold everything together:
 import json
 import os
 import socket
+import time
 import uuid
+from datetime import datetime, timezone
 
 import db
 
@@ -38,23 +40,31 @@ STALE_MINUTES = 10
 
 def create(workspace_id: str, user_id: str, kind: str, idempotency_key: str,
            params: dict, piece_id: str | None = None, reserved_credits: int = 0,
-           parent_job_id: str | None = None, sku: str = '', conn=None) -> dict:
+           parent_job_id: str | None = None, sku: str = '', conn=None,
+           storyboard_version_id: str | None = None,
+           storyboard_shot_id: str | None = None) -> dict:
     """Insert a job, or return the existing one for a repeated idempotency key.
 
     The repeat is not an error: it is a double-clicked Generate, a retried request, or a
     second tab. Returning the original job means the customer sees their shoot and is
     charged once. Pass conn to enrol this in a caller's transaction — the credit reserve
     must commit with the job or not at all.
+
+    storyboard_version_id/storyboard_shot_id point an ad_* job at what it's working on,
+    so a page refresh recovers by asking "what's running for this version" (see
+    active_for_version) instead of re-deriving state from S3.
     """
     sql = """
         INSERT INTO jobs (workspace_id, user_id, kind, parent_job_id, params,
-                          piece_id, reserved_credits, idempotency_key, sku)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                          piece_id, reserved_credits, idempotency_key, sku,
+                          storyboard_version_id, storyboard_shot_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
         RETURNING id, kind, status, reserved_credits
     """
     args = (workspace_id, user_id, kind, parent_job_id, json.dumps(params),
-            piece_id, reserved_credits, idempotency_key, sku.strip() or None)
+            piece_id, reserved_credits, idempotency_key, sku.strip() or None,
+            storyboard_version_id, storyboard_shot_id)
 
     def run(cursor):
         cursor.execute(sql, args)
@@ -171,6 +181,40 @@ def video_rerolls_used(root_job_id: str, ignore_key: str) -> int:
     return int(row['n'])
 
 
+# One entry per job currently reporting progress, so a fast-streaming director call
+# doesn't write on every text delta — (last write's monotonic time, last stage written).
+# ponytail: process-local and unbounded; fine at this app's scale (one job's few stages,
+# entries never outlive the process) — a TTL sweep would be over-engineering for it.
+_last_progress: dict[str, tuple[float, str]] = {}
+PROGRESS_MIN_INTERVAL_S = 1.0
+
+
+def progress(job_id: str, stage: str, fraction: float | None = None, message: str = '',
+             force: bool = False) -> bool:
+    """Write params.progress = {stage, fraction, message, updated_at} and bump the
+    heartbeat, fenced through update_params (claimed_by = us) exactly like any other
+    mid-job write — a reaped job's progress must not keep changing under a customer who
+    is watching it as "still working".
+
+    Throttled to >=1s apart per job UNLESS the stage itself changed or `force` is set —
+    a stage transition (e.g. "writing" -> "checking rules") always lands immediately so
+    the UI never sits on a stale label, while a fast stream of fraction updates within
+    one stage collapses to at most one write per second.
+    """
+    now = time.monotonic()
+    last = _last_progress.get(job_id)
+    if not force and last is not None and last[1] == stage and now - last[0] < PROGRESS_MIN_INTERVAL_S:
+        return False
+    ok = update_params(job_id, {'progress': {
+        'stage': stage, 'fraction': fraction, 'message': message,
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    }})
+    if ok:
+        _last_progress[job_id] = (now, stage)
+        heartbeat(job_id)
+    return ok
+
+
 def update_params(job_id: str, patch: dict) -> bool:
     """Merge `patch` into a job's params while we still own it (claimed_by = us).
 
@@ -206,7 +250,8 @@ def get(job_id: str, workspace_id: str) -> dict | None:
     knowing a job id is enough to read, and to reshoot, someone else's paid work."""
     job = db.query(
         """SELECT id, kind, status, params, piece_id, parent_job_id, failures, error,
-                  reserved_credits, settled_credits, sku, created_at, finished_at
+                  reserved_credits, settled_credits, sku, created_at, started_at,
+                  heartbeat_at, finished_at
              FROM jobs WHERE id = %s AND workspace_id = %s""",
         (job_id, workspace_id), one=True)
     if job is None:
@@ -250,6 +295,19 @@ def history(workspace_id: str, limit: int = 50, search: str = '') -> list[dict]:
     return db.query(sql, tuple(args))
 
 
+def active_for_version(version_id: str) -> list[dict]:
+    """Running/queued jobs pointed at this storyboard version — how a page refresh
+    recovers what's in flight instead of re-deriving it from S3. The one place this is
+    queried; storyboard.active_jobs() calls straight through rather than repeating the
+    WHERE clause.
+    """
+    return db.query(
+        """SELECT id, kind, status, storyboard_shot_id, created_at
+             FROM jobs
+            WHERE storyboard_version_id = %s AND status IN ('queued', 'running')
+         ORDER BY created_at""", (version_id,))
+
+
 def sweep() -> list[dict]:
     """Fail every job whose container died, and report what to refund.
 
@@ -277,19 +335,27 @@ def sweep() -> list[dict]:
                               -- shoot's: the reframe is worth 1, the video is worth its
                               -- whole reserved price. So a video counts as delivered by
                               -- what actually landed (job_videos, the reframe image),
-                              -- not by row count — everything else keeps the old
-                              -- one-row-per-credit accounting.
-                              CASE WHEN kind = 'video' THEN
-                                  CASE
-                                    WHEN EXISTS (SELECT 1 FROM job_videos v
-                                                  WHERE v.job_id = jobs.id) THEN reserved_credits
-                                    WHEN EXISTS (SELECT 1 FROM job_images i
-                                                  WHERE i.job_id = jobs.id
-                                                    AND i.framing LIKE 'reframe-%%') THEN 1
-                                    ELSE 0
-                                  END
-                              ELSE (SELECT count(*) FROM job_images i
-                                     WHERE i.job_id = jobs.id)
+                              -- not by row count. ad_* kinds are priced per job the same
+                              -- way, but have no job_videos/job_images equivalent to
+                              -- check partial delivery against — a generated_assets row
+                              -- for the shot is only ever written right before the job's
+                              -- own finish(), so a job still 'running' when the sweeper
+                              -- catches it has delivered nothing and is refunded in
+                              -- full. Everything else keeps the old one-row-per-credit
+                              -- accounting.
+                              CASE
+                                  WHEN kind = 'video' THEN
+                                      CASE
+                                        WHEN EXISTS (SELECT 1 FROM job_videos v
+                                                      WHERE v.job_id = jobs.id) THEN reserved_credits
+                                        WHEN EXISTS (SELECT 1 FROM job_images i
+                                                      WHERE i.job_id = jobs.id
+                                                        AND i.framing LIKE 'reframe-%%') THEN 1
+                                        ELSE 0
+                                      END
+                                  WHEN kind LIKE 'ad_%%' THEN 0
+                                  ELSE (SELECT count(*) FROM job_images i
+                                         WHERE i.job_id = jobs.id)
                               END AS delivered""",
                     (STALE_MINUTES,))
                 return cursor.fetchall()
@@ -373,6 +439,58 @@ def demo() -> None:
              (sid,))
     assert any(str(r['id']) == sid for r in sweep()), 'did not reap a dead job'
 
+    # An ad_* job is priced per job like 'video', but has no job_videos/job_images
+    # equivalent to show partial delivery — a stale one must be refunded in full.
+    import credits
+    credits.grant(ws, 10, 'welcome')
+    balance_before = credits.balance(ws)
+    with db.tx() as conn:
+        ad_job = create(ws, user, 'ad_frame', 'idem-ad-1', {}, reserved_credits=4,
+                        conn=conn)
+        credits.reserve(conn, ws, str(ad_job['id']), 4)
+    assert credits.balance(ws) == balance_before - 4
+    aid = str(ad_job['id'])
+    assert claim(aid) is True
+    db.query("UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id=%s",
+             (aid,))
+    swept = sweep()
+    orphan = next(r for r in swept if str(r['id']) == aid)
+    assert int(orphan['delivered']) == 0, 'an ad job must show nothing delivered'
+    credits.settle(aid, delivered=int(orphan['delivered']))
+    assert credits.balance(ws) == balance_before, 'the ad job was not fully refunded'
+
+    # --- progress(): fenced write, stage-change bypasses throttling, fraction updates --
+    # --- within one stage are throttled to >=1s apart -----------------------------------
+    prog_job = create(ws, user, 'ad_board', 'idem-prog-1', {})
+    pid = str(prog_job['id'])
+    assert claim(pid) is True
+    assert progress(pid, 'thinking', None, 'thinking it through') is True
+    row = db.query('SELECT params FROM jobs WHERE id = %s', (pid,), one=True)
+    assert row['params']['progress']['stage'] == 'thinking', row['params']
+    # a second write in the SAME stage, immediately after, is throttled away
+    assert progress(pid, 'thinking', None, 'still thinking') is False
+    row = db.query('SELECT params FROM jobs WHERE id = %s', (pid,), one=True)
+    assert row['params']['progress']['message'] == 'thinking it through', \
+        'a throttled write must not have landed'
+    # a stage CHANGE always writes immediately, throttling notwithstanding
+    assert progress(pid, 'writing', 0.1, 'writing the storyboard') is True
+    row = db.query('SELECT params FROM jobs WHERE id = %s', (pid,), one=True)
+    assert row['params']['progress']['stage'] == 'writing', row['params']
+    # force=True bypasses the throttle even within the same stage
+    assert progress(pid, 'writing', 0.5, 'writing more', force=True) is True
+    row = db.query('SELECT params FROM jobs WHERE id = %s', (pid,), one=True)
+    assert row['params']['progress']['fraction'] == 0.5, row['params']
+
+    # fencing: a job claimed by someone else cannot have its progress written by us
+    other_prog_job = create(ws, user, 'ad_board', 'idem-prog-2', {})
+    opid = str(other_prog_job['id'])
+    db.query("UPDATE jobs SET status='running', claimed_by='someone-else' WHERE id=%s",
+             (opid,))
+    assert progress(opid, 'thinking', None, 'x', force=True) is False, \
+        'progress() must respect the same fencing token as update_params/finish'
+    print('jobs.progress ok')
+
+    db.query('DELETE FROM credit_ledger WHERE workspace_id = %s', (ws,))
     db.query('DELETE FROM workspaces WHERE id IN (%s, %s)', (ws, other))
     db.query('DELETE FROM users WHERE id = %s', (user,))
     db.close()

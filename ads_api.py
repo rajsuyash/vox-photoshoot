@@ -1,0 +1,730 @@
+"""The storyboard-driven video ad editor's HTTP surface.
+
+An `APIRouter` rather than more of app.py (already 1745 lines before this). Every route
+sits behind `ads_enabled`: this feature is site-admin-only until Phase 5 removes the
+gate (`ADS_PUBLIC=1` opens it for everyone, e.g. for a demo environment).
+
+This file is the ONLY place that turns storyboard.py's domain calls into HTTP — it knows
+about workspaces, sessions, jobs and idempotency; storyboard.py knows about none of that.
+Two background jobs live here (ad_concepts, ad_board) that call director.py and then
+persist through storyboard.py, exactly like run_video in app.py does for video.run —
+same claim/finish shape, plus jobs.progress() heartbeats through director.py's streaming
+callback so the "Directing…"/"Storyboarding…" buttons are not just a spinner (see
+director.generate_concepts/generate_storyboard's on_progress). Both are priced at 0
+credits (house LLM cost, per the plan), so neither reserves nor settles anything —
+jobs.create/claim/finish still runs, for the fencing and page-refresh recovery, not for
+the money.
+
+    .venv/bin/python -c "import ads_api"     # import-only sanity check
+"""
+
+import os
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Form, HTTPException
+
+import auth
+import credits
+import db
+import director
+import jobs
+import orchestrator
+import pieces
+import shoot
+import shot_state
+import storage
+import storyboard
+import talent
+
+router = APIRouter(prefix='/api')
+
+# Labelled "typical", never promised — see jobs.progress()/static/app.js's
+# progressComponent, which shows these next to real elapsed time, not instead of it.
+TYPICAL_SECONDS = {'ad_concepts': 30, 'ad_board': 75, 'ad_frame': 35, 'ad_video': 180}
+
+
+def ads_enabled(session: dict = Depends(auth.current_session)) -> dict:
+    """Gate the whole router. Phase 5 removes this once frames/video/render ship."""
+    if not (session.get('is_admin') or os.environ.get('ADS_PUBLIC') == '1'):
+        raise HTTPException(403, 'video ads are not available on this account yet')
+    return session
+
+
+def _not_found(error: storyboard.NotFound):
+    return HTTPException(404, str(error) or 'not found')
+
+
+# --- frames: enrich GET /versions/{id} with variants/selection/running-job per shot -----
+
+def _frame_variant(asset: dict) -> dict:
+    metadata = asset.get('metadata') or {}
+    return {'id': str(asset['id']), 'variant': asset['variant'],
+            'url': storage.presign(asset['key']), 'fidelity': metadata.get('fidelity'),
+            'created_at': asset['created_at']}
+
+
+def _video_variant(asset: dict) -> dict:
+    metadata = asset.get('metadata') or {}
+    settings = asset.get('settings') or {}
+    return {'id': str(asset['id']), 'variant': asset['variant'],
+            'url': storage.presign(asset['key']),
+            'poster_url': storage.presign(asset['thumb_key']) if asset.get('thumb_key') else None,
+            'fidelity': metadata.get('fidelity'), 'clip_seconds': settings.get('clip_seconds'),
+            'created_at': asset['created_at']}
+
+
+def _jobs_by_shot(version_id: str, kind: str) -> dict:
+    out = {}
+    for job in db.query(
+            """SELECT id, status, storyboard_shot_id, error, params, started_at,
+                      heartbeat_at FROM jobs
+                WHERE storyboard_version_id = %s AND kind = %s
+             ORDER BY created_at""", (version_id, kind)):
+        out[str(job['storyboard_shot_id'])] = job          # last one wins
+    return out
+
+
+def _job_progress_summary(job: dict | None, kind: str) -> dict | None:
+    """The running-job shape shot cards/the inspector need — progress + started_at +
+    typical_seconds, per the honest-progress-indicator brief. None once it's no longer
+    queued/running: `frame_error`/`video_error` (below) carry a FAILED job's message."""
+    if job is None or job['status'] not in ('queued', 'running'):
+        return None
+    params = job['params'] or {}
+    return {'id': str(job['id']), 'status': job['status'], 'progress': params.get('progress'),
+            'started_at': job['started_at'].isoformat() if job.get('started_at') else None,
+            'heartbeat_at': job['heartbeat_at'].isoformat() if job.get('heartbeat_at') else None,
+            'typical_seconds': TYPICAL_SECONDS.get(kind)}
+
+
+def _enrich_shots_with_frames(workspace_id: str, version_id: str, shots: list[dict]) -> None:
+    """Mutates each ordinary shot in place: every frame/video variant, each one's
+    selected url, its running ad_frame/ad_video job (if any) and the last job's error (if
+    the last one failed). One query per job kind, one list_assets call per shot per type
+    (a version rarely has more than ~10 shots, so this stays well clear of an N+1 that
+    would actually matter).
+    """
+    frame_jobs_by_shot = _jobs_by_shot(version_id, 'ad_frame')
+    video_jobs_by_shot = _jobs_by_shot(version_id, 'ad_video')
+
+    for shot in shots:
+        if shot['kind'] != 'shot':
+            continue
+        variants = [_frame_variant(a) for a in
+                    storyboard.list_assets(workspace_id, shot['shot_key'], 'storyboard_image')]
+        shot['frame_variants'] = variants
+        selected = shot.get('selected_frame_asset_id')
+        shot['selected_frame_url'] = next(
+            (v['url'] for v in variants if v['id'] == str(selected)), None) if selected else None
+        job = frame_jobs_by_shot.get(str(shot['id']))
+        shot['frame_job'] = _job_progress_summary(job, 'ad_frame')
+        shot['frame_error'] = job['error'] if job and job['status'] == 'failed' else None
+
+        video_variants = [_video_variant(a) for a in
+                          storyboard.list_assets(workspace_id, shot['shot_key'], 'video_clip')]
+        shot['video_variants'] = video_variants
+        selected_video = shot.get('selected_video_asset_id')
+        shot['selected_video_url'] = next(
+            (v['url'] for v in video_variants if v['id'] == str(selected_video)), None) \
+            if selected_video else None
+        video_job = video_jobs_by_shot.get(str(shot['id']))
+        shot['video_job'] = _job_progress_summary(video_job, 'ad_video')
+        shot['video_error'] = (video_job['error']
+                               if video_job and video_job['status'] == 'failed' else None)
+
+
+# --- director inputs: the same product/character shape for the API and the two jobs ---
+
+def _products_for_director(campaign_id: str) -> list[dict]:
+    rows = db.query(
+        """SELECT cp.id, cp.fidelity_instructions, p.category, p.description, p.sku
+             FROM campaign_products cp JOIN pieces p ON p.id = cp.piece_id
+            WHERE cp.campaign_id = %s ORDER BY cp.id""", (campaign_id,))
+    return [
+        {'id': str(r['id']), 'category': r['category'],
+         'name': (r['sku'] or r['description'] or r['category'] or '').strip(),
+         'fidelity_instructions': r['fidelity_instructions']}
+        for r in rows]
+
+
+def _characters_for_director(campaign_id: str, workspace_id: str) -> list[dict]:
+    rows = db.query('SELECT * FROM campaign_characters WHERE campaign_id = %s ORDER BY id',
+                    (campaign_id,))
+    cast_entries = shoot.load_cast()
+    out = []
+    for r in rows:
+        if r['talent_id']:
+            owned = talent.owned(r['talent_id'], workspace_id)
+            description = owned['description'] if owned else ''
+        elif r['cast_key']:
+            description = cast_entries.get(r['cast_key'], {}).get('description', '')
+        else:
+            description = (r['appearance'] or {}).get('description', '')
+        out.append({'id': str(r['id']), 'name': r['name'], 'description': description})
+    return out
+
+
+# --- background jobs: generate, then persist through storyboard.py --------------------
+
+def run_ad_concepts(job_id: str, workspace_id: str, campaign_id: str) -> None:
+    if not jobs.claim(job_id):
+        return
+    on_progress = lambda stage, fraction, message: jobs.progress(  # noqa: E731
+        job_id, stage, fraction, message)
+    try:
+        campaign = storyboard.get_campaign(workspace_id, campaign_id)
+        if campaign is None:
+            raise ValueError('campaign not found')
+        brief = campaign.get('brief') or {}
+        products = _products_for_director(campaign_id)
+        characters = _characters_for_director(campaign_id, workspace_id)
+        concepts = director.generate_concepts(brief, products, characters, on_progress)
+        on_progress('saving', 0.98, 'saving the concepts…')
+        storyboard.save_concepts(workspace_id, campaign_id, concepts)
+        jobs.finish(job_id, 'succeeded', settled_credits=0)
+    except Exception as error:              # noqa: BLE001 - report, don't crash the worker
+        jobs.finish(job_id, 'failed', error=str(error), settled_credits=0)
+
+
+def run_ad_board(job_id: str, workspace_id: str, campaign_id: str, concept_id: str,
+                 aspect: str, duration: float, platform: str) -> None:
+    if not jobs.claim(job_id):
+        return
+    on_progress = lambda stage, fraction, message: jobs.progress(  # noqa: E731
+        job_id, stage, fraction, message)
+    try:
+        campaign = storyboard.get_campaign(workspace_id, campaign_id)
+        if campaign is None:
+            raise ValueError('campaign not found')
+        base_brief = campaign.get('brief') or {}
+        concept_row = db.query(
+            'SELECT * FROM concepts WHERE id = %s AND campaign_id = %s',
+            (concept_id, campaign_id), one=True)
+        if concept_row is None:
+            raise ValueError('concept not found')
+        concept = concept_row          # concepts.mode is a real column (migration 012)
+        products = _products_for_director(campaign_id)
+        characters = _characters_for_director(campaign_id, workspace_id)
+        brief = {**base_brief, 'aspect': aspect, 'duration': duration, 'platform': platform}
+
+        board, warnings = director.generate_storyboard(brief, concept, products,
+                                                        characters, on_progress)
+        on_progress('saving', 0.98, 'saving the storyboard…')
+
+        fields = {
+            'concept_id': concept_id, 'title': board['title'], 'aspect_ratio': aspect,
+            'target_duration': duration, 'platform': platform,
+            'visual_style': board['visual_style'], 'emotional_arc': board['emotional_arc'],
+            'music_direction': board['music_direction'], 'palette': board['palette'],
+            'warnings': warnings,
+        }
+        created = storyboard.create_storyboard(workspace_id, campaign_id, fields,
+                                               board['shots'])
+        jobs.update_params(job_id, {'storyboard_id': created['storyboard_id'],
+                                    'version_id': created['version_id']})
+        jobs.finish(job_id, 'succeeded', settled_credits=0)
+    except director.DirectorError as error:
+        jobs.finish(job_id, 'failed', error='; '.join(error.errors), settled_credits=0)
+    except Exception as error:              # noqa: BLE001 - report, don't crash the worker
+        jobs.finish(job_id, 'failed', error=str(error), settled_credits=0)
+
+
+# --- campaigns --------------------------------------------------------------------------
+
+@router.post('/campaigns')
+def create_campaign(name: str = Form(...), brand: str = Form(''), goal: str = Form(''),
+                    audience: str = Form(''), platform: str = Form(''),
+                    duration: float = Form(25), aspect: str = Form('9:16'),
+                    mood: str = Form(''), session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    if not name.strip():
+        raise HTTPException(400, 'the campaign needs a name')
+    brief = {'brand': brand.strip(), 'goal': goal.strip(), 'audience': audience.strip(),
+             'platform': platform.strip(), 'duration': duration, 'aspect': aspect,
+             'mood': mood.strip()}
+    return storyboard.create_campaign(workspace_id, name.strip(), brief=brief)
+
+
+@router.get('/campaigns')
+def list_campaigns(session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    return storyboard.list_campaigns(workspace_id)
+
+
+@router.get('/campaigns/{campaign_id}')
+def get_campaign_detail(campaign_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    campaign = storyboard.get_campaign(workspace_id, campaign_id)
+    if campaign is None:
+        raise HTTPException(404, 'no such campaign')
+
+    products = db.query(
+        """SELECT cp.id, cp.piece_id, cp.fidelity_instructions, p.category,
+                  p.description, p.sku, p.s3_key
+             FROM campaign_products cp JOIN pieces p ON p.id = cp.piece_id
+            WHERE cp.campaign_id = %s ORDER BY cp.id""", (campaign_id,))
+    characters = db.query(
+        'SELECT * FROM campaign_characters WHERE campaign_id = %s ORDER BY id',
+        (campaign_id,))
+    concepts = db.query(
+        'SELECT * FROM concepts WHERE campaign_id = %s ORDER BY created_at',
+        (campaign_id,))
+    storyboards = db.query(
+        'SELECT * FROM storyboards WHERE campaign_id = %s ORDER BY created_at DESC',
+        (campaign_id,))
+    running_jobs = db.query(
+        """SELECT id, kind, status, params, started_at, heartbeat_at, created_at FROM jobs
+            WHERE workspace_id = %s AND kind IN ('ad_concepts', 'ad_board')
+              AND params->>'campaign_id' = %s AND status IN ('queued', 'running')
+         ORDER BY created_at""", (workspace_id, campaign_id))
+
+    return {
+        'campaign': campaign,
+        'products': [
+            {**p, 'id': str(p['id']), 's3_key': None,   # not the client's business
+             'name': (p['sku'] or p['description'] or p['category'] or '').strip(),
+             'image': storage.presign(p['s3_key']) if p['s3_key'] else None}
+            for p in products],
+        'characters': characters,
+        'concepts': concepts,          # concepts.mode is a real column (migration 012)
+        'storyboards': storyboards,
+        # Lets the page recover a "Directing…"/"Storyboarding…" progress component on
+        # reload — state comes from the server, never from something the tab remembered.
+        'running_jobs': [
+            {'id': str(j['id']), 'kind': j['kind'], 'status': j['status'],
+             'concept_id': (j['params'] or {}).get('concept_id'),
+             'progress': (j['params'] or {}).get('progress'),
+             'started_at': j['started_at'].isoformat() if j.get('started_at') else None,
+             'heartbeat_at': j['heartbeat_at'].isoformat() if j.get('heartbeat_at') else None,
+             'typical_seconds': TYPICAL_SECONDS.get(j['kind'])}
+            for j in running_jobs],
+    }
+
+
+@router.post('/campaigns/{campaign_id}/products')
+def add_product(campaign_id: str, piece_id: str = Form(...),
+                fidelity_instructions: str = Form(''),
+                session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    if pieces.owned(piece_id, workspace_id) is None:
+        raise HTTPException(404, 'that product is not in your library')
+    try:
+        return storyboard.add_product(workspace_id, campaign_id, piece_id,
+                                      fidelity_instructions.strip())
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+
+
+@router.delete('/campaigns/{campaign_id}/products/{product_id}')
+def remove_product(campaign_id: str, product_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        storyboard.remove_product(workspace_id, campaign_id, product_id)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except storyboard.Conflict as error:
+        raise HTTPException(409, str(error))
+    return {'product_id': product_id}
+
+
+@router.post('/campaigns/{campaign_id}/characters')
+def add_character(campaign_id: str, name: str = Form(...), role: str = Form(''),
+                  talent_id: str = Form(''), cast_key: str = Form(''),
+                  description: str = Form(''), session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    talent_id = talent_id.strip() or None
+    cast_key = cast_key.strip() or None
+    if talent_id and cast_key:
+        raise HTTPException(400, 'pick a talent model or a house cast key, not both')
+    if talent_id and talent.owned(talent_id, workspace_id) is None:
+        raise HTTPException(404, 'no such model in your workspace')
+    if cast_key and cast_key not in shoot.load_cast():
+        raise HTTPException(400, f'unknown cast key {cast_key!r}')
+
+    appearance = {} if (talent_id or cast_key) else {'description': description.strip()}
+    try:
+        return storyboard.add_character(workspace_id, campaign_id, name.strip() or 'Untitled',
+                                        role.strip(), appearance, talent_id, cast_key)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+
+
+@router.delete('/campaigns/{campaign_id}/characters/{character_id}')
+def remove_character(campaign_id: str, character_id: str,
+                     session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        storyboard.remove_character(workspace_id, campaign_id, character_id)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except storyboard.Conflict as error:
+        raise HTTPException(409, str(error))
+    return {'character_id': character_id}
+
+
+@router.post('/campaigns/{campaign_id}/concepts')
+def create_concepts_job(campaign_id: str, background: BackgroundTasks,
+                        idempotency_key: str = Form(''),
+                        session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    if storyboard.get_campaign(workspace_id, campaign_id) is None:
+        raise HTTPException(404, 'no such campaign')
+    if not _products_for_director(campaign_id):
+        raise HTTPException(422, 'add at least one product before generating concepts')
+
+    key = idempotency_key or f'ad-concepts:{uuid.uuid4()}'
+    job = jobs.create(workspace_id, session['user_id'], 'ad_concepts', key,
+                      {'campaign_id': campaign_id})
+    if job['created']:
+        background.add_task(run_ad_concepts, str(job['id']), workspace_id, campaign_id)
+    return {'job_id': str(job['id']), 'status': 'running'}
+
+
+@router.post('/campaigns/{campaign_id}/concepts/{concept_id}/choose')
+def choose_concept(campaign_id: str, concept_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        return {'concept_id': storyboard.choose_concept(workspace_id, campaign_id,
+                                                         concept_id)}
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+
+
+@router.post('/campaigns/{campaign_id}/storyboards')
+def create_storyboard_job(campaign_id: str, background: BackgroundTasks,
+                          concept_id: str = Form(...), aspect: str = Form('9:16'),
+                          duration: float = Form(25), platform: str = Form(''),
+                          idempotency_key: str = Form(''),
+                          session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    if storyboard.get_campaign(workspace_id, campaign_id) is None:
+        raise HTTPException(404, 'no such campaign')
+    if db.query('SELECT id FROM concepts WHERE id = %s AND campaign_id = %s',
+               (concept_id, campaign_id), one=True) is None:
+        raise HTTPException(404, 'no such concept')
+
+    key = idempotency_key or f'ad-board:{uuid.uuid4()}'
+    job = jobs.create(workspace_id, session['user_id'], 'ad_board', key,
+                      {'campaign_id': campaign_id, 'concept_id': concept_id})
+    if job['created']:
+        background.add_task(run_ad_board, str(job['id']), workspace_id, campaign_id,
+                            concept_id, aspect, duration, platform)
+    return {'job_id': str(job['id']), 'status': 'running'}
+
+
+@router.get('/jobs/{job_id}')
+def get_job(job_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    job = jobs.get(job_id, workspace_id)
+    if job is None:
+        raise HTTPException(404, 'no such job')
+    params = job['params'] or {}
+    return {'job_id': job_id, 'kind': job['kind'], 'status': job['status'],
+            'error': job['error'], 'storyboard_id': params.get('storyboard_id'),
+            'version_id': params.get('version_id'), 'shot_id': params.get('shot_id'),
+            'progress': params.get('progress'),
+            'started_at': job['started_at'].isoformat() if job.get('started_at') else None,
+            'heartbeat_at': job['heartbeat_at'].isoformat() if job.get('heartbeat_at') else None,
+            'typical_seconds': TYPICAL_SECONDS.get(job['kind'])}
+
+
+# --- versions -----------------------------------------------------------------------
+
+@router.get('/versions/{version_id}')
+def get_version_detail(version_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        state = storyboard.get_version(workspace_id, version_id)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    versions = db.query(
+        'SELECT id, version_number, status, created_at, approved_at '
+        'FROM storyboard_versions WHERE storyboard_id = %s ORDER BY version_number',
+        (state['storyboard']['id'],))
+    _enrich_shots_with_frames(workspace_id, version_id, state['shots'])
+    ordinary_shots = [s for s in state['shots'] if s['kind'] == 'shot']
+    ready_for_render = bool(ordinary_shots) and all(
+        s['state'] == 'video_approved' for s in ordinary_shots)
+    return {**state, 'versions': versions,
+            'active_jobs': storyboard.active_jobs(workspace_id, version_id),
+            'frame_estimate': orchestrator.estimate(workspace_id, version_id, 'frames'),
+            'video_estimate': orchestrator.estimate(workspace_id, version_id, 'videos'),
+            'ready_for_render': ready_for_render,
+            'warnings': state['version'].get('warnings') or []}
+
+
+@router.post('/versions/{version_id}/approve')
+def approve_version(version_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        return {'version_id': storyboard.approve_version(workspace_id, version_id)}
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+
+
+@router.post('/versions/{version_id}/fork')
+def fork_version(version_id: str, session: dict = Depends(ads_enabled)):
+    """Force an editable copy. A no-op (same id back) if it's already a draft — there is
+    nothing to fork FROM when the version being viewed is the editable one."""
+    workspace_id = auth.current_workspace(session)
+    try:
+        new_id = storyboard.ensure_editable(workspace_id, version_id)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    return {'version_id': new_id, 'forked': new_id != version_id}
+
+
+@router.post('/versions/{version_id}/shots')
+def add_shot(version_id: str, payload: dict = Body(...),
+            session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    shot_fields = {
+        'kind': payload.get('kind', 'shot'), 'duration': payload.get('duration', 2),
+        'spec': payload.get('spec') or {}, 'character_ids': payload.get('character_ids', []),
+        'product_ids': payload.get('product_ids', []),
+    }
+    try:
+        new_version_id, shot_id = storyboard.add_shot(
+            workspace_id, version_id, int(payload.get('after_position', -1)), shot_fields)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    return {'version_id': new_version_id, 'shot_id': shot_id}
+
+
+@router.post('/versions/{version_id}/reorder')
+def reorder_shots(version_id: str, shot_ids: list[str] = Body(...),
+                  session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        new_version_id = storyboard.reorder(workspace_id, version_id, shot_ids)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return {'version_id': new_version_id}
+
+
+# --- shots ----------------------------------------------------------------------------
+
+@router.patch('/shots/{shot_id}')
+def patch_shot(shot_id: str, patch: dict = Body(...), session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        version_id, effective_shot_id, state = storyboard.update_spec(
+            workspace_id, shot_id, patch)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return {'version_id': version_id, 'shot_id': effective_shot_id, 'state': state}
+
+
+@router.post('/shots/{shot_id}/duplicate')
+def duplicate_shot(shot_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        version_id, new_shot_id = storyboard.duplicate_shot(workspace_id, shot_id)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    return {'version_id': version_id, 'shot_id': new_shot_id}
+
+
+@router.post('/shots/{shot_id}/split')
+def split_shot(shot_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        version_id, shot_a, shot_b = storyboard.split_shot(workspace_id, shot_id)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    return {'version_id': version_id, 'shot_ids': [shot_a, shot_b]}
+
+
+@router.post('/shots/{shot_id}/delete')
+def delete_shot(shot_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        return {'version_id': storyboard.delete_shot(workspace_id, shot_id)}
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+
+
+@router.post('/shots/{shot_id}/approve-instructions')
+def approve_instructions(shot_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        version_id, effective_shot_id, state = storyboard.apply_event(
+            workspace_id, shot_id, 'approve_instructions')
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except (ValueError, shot_state.IllegalTransition) as error:
+        raise HTTPException(409, str(error))
+    return {'version_id': version_id, 'shot_id': effective_shot_id, 'state': state}
+
+
+# --- frames ------------------------------------------------------------------------------
+
+@router.post('/shots/{shot_id}/frames')
+def generate_frame(shot_id: str, background: BackgroundTasks,
+                   idempotency_key: str = Form(''), session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    key = idempotency_key or f'ad-frame:{uuid.uuid4()}'
+    try:
+        job_id = orchestrator.start_frame(workspace_id, shot_id, key, session['user_id'])
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except orchestrator.NotApproved as error:
+        raise HTTPException(409, str(error))
+    except shot_state.IllegalTransition as error:
+        raise HTTPException(409, str(error))
+    except credits.Insufficient as error:
+        raise HTTPException(402, f'not enough credits — {error}')
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    background.add_task(orchestrator.run_frame, job_id)
+    return {'job_id': job_id, 'status': 'running'}
+
+
+@router.get('/versions/{version_id}/estimate')
+def get_frame_estimate(version_id: str, stage: str = 'frames',
+                       session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        return orchestrator.estimate(workspace_id, version_id, stage)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+
+
+@router.post('/versions/{version_id}/frames')
+def generate_frames_batch(version_id: str, background: BackgroundTasks,
+                          confirm_credits: int = Form(...), idempotency_key: str = Form(''),
+                          session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    key = idempotency_key or f'ad-frames-batch:{uuid.uuid4()}'
+    try:
+        job_ids = orchestrator.start_frames(workspace_id, version_id, confirm_credits, key,
+                                            session['user_id'])
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except orchestrator.EstimateMismatch as mismatch:
+        raise HTTPException(409, f'the price changed to {mismatch.estimate["credits"]} '
+                                 'credits — refresh the estimate and confirm again')
+    except orchestrator.NotApproved as error:
+        raise HTTPException(409, str(error))
+    except credits.Insufficient as error:
+        raise HTTPException(402, f'not enough credits — {error}')
+    for job_id in job_ids:
+        background.add_task(orchestrator.run_frame, job_id)
+    return {'job_ids': job_ids, 'status': 'running'}
+
+
+@router.post('/shots/{shot_id}/select')
+def select_frame(shot_id: str, asset_id: str = Form(...), session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        storyboard.select_asset(workspace_id, shot_id, asset_id)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return {'shot_id': shot_id}
+
+
+@router.post('/shots/{shot_id}/approve-frame')
+def approve_frame(shot_id: str, asset_id: str = Form(''), session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        if asset_id:
+            storyboard.select_asset(workspace_id, shot_id, asset_id)
+        current = db.query(
+            """SELECT sh.selected_frame_asset_id FROM storyboard_shots sh
+                 JOIN storyboard_versions sv ON sv.id = sh.version_id
+                 JOIN storyboards sb ON sb.id = sv.storyboard_id
+                 JOIN campaigns c ON c.id = sb.campaign_id
+                WHERE sh.id = %s AND c.workspace_id = %s""", (shot_id, workspace_id), one=True)
+        approved_asset_id = asset_id or (
+            str(current['selected_frame_asset_id'])
+            if current and current['selected_frame_asset_id'] else None)
+        version_id, effective_shot_id, state = storyboard.apply_event(
+            workspace_id, shot_id, 'approve_frame', asset_id=approved_asset_id,
+            user_id=session['user_id'])
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except (ValueError, shot_state.IllegalTransition) as error:
+        raise HTTPException(409, str(error))
+    return {'version_id': version_id, 'shot_id': effective_shot_id, 'state': state}
+
+
+# --- videos ------------------------------------------------------------------------------
+# GET /versions/{id}?stage=videos already works — get_frame_estimate above takes `stage`
+# generically. /shots/{id}/select already handles a video_clip asset_id too —
+# storyboard.select_asset branches on the asset's own `type`, not on the caller's route.
+
+@router.post('/shots/{shot_id}/videos')
+def generate_video(shot_id: str, background: BackgroundTasks,
+                   idempotency_key: str = Form(''), session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    key = idempotency_key or f'ad-video:{uuid.uuid4()}'
+    try:
+        job_id = orchestrator.start_video(workspace_id, shot_id, key, session['user_id'])
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except orchestrator.NotApproved as error:
+        raise HTTPException(409, str(error))
+    except shot_state.IllegalTransition as error:
+        raise HTTPException(409, str(error))
+    except credits.Insufficient as error:
+        raise HTTPException(402, f'not enough credits — {error}')
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    background.add_task(orchestrator.run_video_shot, job_id)
+    return {'job_id': job_id, 'status': 'running'}
+
+
+@router.post('/versions/{version_id}/videos')
+def generate_videos_batch(version_id: str, background: BackgroundTasks,
+                          confirm_credits: int = Form(...), idempotency_key: str = Form(''),
+                          session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    key = idempotency_key or f'ad-videos-batch:{uuid.uuid4()}'
+    try:
+        job_ids = orchestrator.start_videos(workspace_id, version_id, confirm_credits, key,
+                                            session['user_id'])
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except orchestrator.EstimateMismatch as mismatch:
+        raise HTTPException(409, f'the price changed to {mismatch.estimate["credits"]} '
+                                 'credits — refresh the estimate and confirm again')
+    except orchestrator.NotApproved as error:
+        raise HTTPException(409, str(error))
+    except credits.Insufficient as error:
+        raise HTTPException(402, f'not enough credits — {error}')
+    for job_id in job_ids:
+        background.add_task(orchestrator.run_video_shot, job_id)
+    return {'job_ids': job_ids, 'status': 'running'}
+
+
+@router.post('/shots/{shot_id}/approve-video')
+def approve_video(shot_id: str, asset_id: str = Form(''), session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        if asset_id:
+            storyboard.select_asset(workspace_id, shot_id, asset_id)
+        current = db.query(
+            """SELECT sh.selected_video_asset_id FROM storyboard_shots sh
+                 JOIN storyboard_versions sv ON sv.id = sh.version_id
+                 JOIN storyboards sb ON sb.id = sv.storyboard_id
+                 JOIN campaigns c ON c.id = sb.campaign_id
+                WHERE sh.id = %s AND c.workspace_id = %s""", (shot_id, workspace_id), one=True)
+        approved_asset_id = asset_id or (
+            str(current['selected_video_asset_id'])
+            if current and current['selected_video_asset_id'] else None)
+        version_id, effective_shot_id, state = storyboard.apply_event(
+            workspace_id, shot_id, 'approve_video', asset_id=approved_asset_id,
+            user_id=session['user_id'])
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except (ValueError, shot_state.IllegalTransition) as error:
+        raise HTTPException(409, str(error))
+    return {'version_id': version_id, 'shot_id': effective_shot_id, 'state': state}

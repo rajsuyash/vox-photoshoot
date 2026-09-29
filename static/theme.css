@@ -24,9 +24,26 @@
   --radius: 12px;
   --radius-lg: 20px;
   --side: 248px;               /* the sidebar's width, read by anything that clears it */
+  color-scheme: dark;          /* native controls, scrollbars, select popups: dark, not the browser default */
 }
 
 * { box-sizing: border-box; }
+
+html { background: var(--bg); }
+
+/* Chrome autofill ignores the page's own background/color and paints its own light-blue
+   fill with dark text, breaking the dark theme on any autofilled input (e.g. Brand on
+   /ads.html). The only fix is the box-shadow trick: fill with the same colour inputs use
+   (--raised, composited over --bg like everywhere else it's used) and force the text
+   colour, since -webkit-text-fill-color overrides autofill's own text paint. */
+input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus,
+textarea:-webkit-autofill, select:-webkit-autofill {
+  -webkit-text-fill-color: var(--ink);
+  caret-color: var(--ink);
+  -webkit-box-shadow: 0 0 0 1000px var(--raised) inset;
+  box-shadow: 0 0 0 1000px var(--raised) inset;
+  transition: background-color 9999s ease-out 0s;
+}
 
 /* The shell is a two column grid: a full height sidebar, then the page. Every page's
    body is <header> + <main>, so both get their column without any page markup change. */

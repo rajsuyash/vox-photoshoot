@@ -32,11 +32,24 @@ FFPROBE = 'ffprobe'        # on PATH in both dev (Homebrew) and prod (apt) image
 FFMPEG = 'ffmpeg'          # on PATH in both dev (Homebrew) and prod (apt) images
 OUT_DIR = pathlib.Path('out/videos')
 
-DURATIONS = frozenset({5, 10})
+# Per-provider supported durations, measured live (2026-09-29, Phase 0/4): HF Kling 3.0
+# pro accepts any integer 3-15s (hf.estimate accepted 3/4/6/8/15, rejected 1/2/16/'abc'
+# with real schema errors — see the plan's Phase 0 findings). Seedance 2.5's minimum is
+# 4s, same 15s ceiling. fal Kling 3's own range is unverified against this account, so it
+# stays at the old conservative {5, 10} rather than guessing.
+HF_KLING_DURATIONS = frozenset(range(3, 16))
+HF_SEEDANCE_DURATIONS = frozenset(range(4, 16))
+FAL_KLING_DURATIONS = frozenset({5, 10})
 
 # The still-to-video contract exposed to the rest of the app (jobs.py/app.py):
 # supported output aspects and clip lengths, independent of any one provider's own
 # vocabulary (a provider's `durations` on VideoProvider may be a subset of this).
+#
+# VIDEO_DURATIONS stays {5, 10} on purpose: it is what the OLD single-clip flow's
+# /api/video-options offers and /api/videos validates against (app.py), which the plan
+# requires unchanged. The storyboard ad flow (orchestrator.py) picks a clip length from
+# each provider's own (now wider) `durations` frozenset instead of this constant — the
+# two are deliberately separate rather than one shared "the app's durations" value.
 VIDEO_ASPECTS = ('9:16', '4:5', '1:1', '16:9')
 VIDEO_DURATIONS = (5, 10)
 
@@ -131,19 +144,19 @@ REGISTRY: dict[tuple[str, str], VideoProvider] = {
     ('higgsfield', 'kling'): VideoProvider(
         backend='higgsfield', model='kling',
         model_path='kling-video/v3.0/pro/image-to-video',
-        usd_per_second=KLING_USD_PER_SECOND, durations=DURATIONS,
+        usd_per_second=KLING_USD_PER_SECOND, durations=HF_KLING_DURATIONS,
         build_args=_hf_kling_args, upload=hf.upload, submit=_hf_submit,
     ),
     ('higgsfield', 'seedance'): VideoProvider(
         backend='higgsfield', model='seedance',
         model_path='bytedance/seedance-2.5/image-to-video',
-        usd_per_second=SEEDANCE_USD_PER_SECOND, durations=DURATIONS,
+        usd_per_second=SEEDANCE_USD_PER_SECOND, durations=HF_SEEDANCE_DURATIONS,
         build_args=_hf_seedance_args, upload=hf.upload, submit=_hf_submit,
     ),
     ('fal', 'kling'): VideoProvider(
         backend='fal', model='kling',
         model_path='fal-ai/kling-video/v3/pro/image-to-video',
-        usd_per_second=KLING_USD_PER_SECOND, durations=DURATIONS,
+        usd_per_second=KLING_USD_PER_SECOND, durations=FAL_KLING_DURATIONS,
         build_args=_fal_kling_args, upload=_fal_upload, submit=_fal_submit,
     ),
 }
@@ -676,13 +689,32 @@ def demo() -> None:
     # A cheap-enough fractional case must still round UP, never down.
     assert credits_for(1, kling) == math.ceil(0.112 / credits.USD_PER_CREDIT)
 
-    # generate() must reject an unsupported duration before uploading anything.
-    try:
-        generate('nonexistent.png', 'p', 'n', 7, kling)
-    except ValueError as error:
-        assert '7' in str(error)
-    else:
-        raise AssertionError('an unsupported duration should be rejected')
+    # Per-provider durations, measured live (2026-09-29): HF Kling 3-15s, HF Seedance
+    # 4-15s, fal Kling still the old conservative {5, 10}.
+    seedance = get('higgsfield', 'seedance')
+    fal_kling = get('fal', 'kling')
+    assert kling.durations == frozenset(range(3, 16)), kling.durations
+    assert seedance.durations == frozenset(range(4, 16)), seedance.durations
+    assert fal_kling.durations == frozenset({5, 10}), fal_kling.durations
+    for duration in (3, 8, 15):
+        assert duration in kling.durations, duration
+    for duration in (1, 2, 16):
+        assert duration not in kling.durations, duration
+    assert 3 not in seedance.durations, 'Seedance minimum is 4s, not 3s'
+    assert 4 in seedance.durations
+    # The OLD single-clip flow's own offer/validation must stay exactly {5, 10} — widening
+    # a provider's own durations must never widen what /api/video-options offers.
+    assert VIDEO_DURATIONS == (5, 10), VIDEO_DURATIONS
+
+    # generate() must reject an unsupported duration before uploading anything — 16s is
+    # now out of range for every registered provider (widened Kling included).
+    for provider in (kling, seedance, fal_kling):
+        try:
+            generate('nonexistent.png', 'p', 'n', 16, provider)
+        except ValueError as error:
+            assert '16' in str(error)
+        else:
+            raise AssertionError(f'{provider.backend}/{provider.model} should reject 16s')
 
     # direct() must never raise, even when the director call is guaranteed to fail
     # (no ANTHROPIC_API_KEY reachable / a bogus path) — it must fall back to a Plan

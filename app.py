@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 import admin
+import ads_api
 import auth
 import billing
 import branding
@@ -59,6 +60,7 @@ MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 # Nothing needs them in production.
 app = FastAPI(title='Donna Photoshoot',
               docs_url=None, redoc_url=None, openapi_url=None)
+app.include_router(ads_api.router)
 
 
 @app.on_event('startup')

@@ -1,0 +1,1913 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Ads · Donna Photoshoot</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<style>
+  /* Only what's specific to the ad editor — the shell, tokens and form basics come from
+     theme.css. The workspace screen is deliberately NOT another vertical form: a shot
+     strip + an inspector rail + a timeline, the pattern the rest of the app is missing
+     (see .impeccable/critique — "there is no canvas"). */
+
+  .back { background: none; border: 0; color: var(--faint); font: inherit; font-size: 13px;
+    cursor: pointer; padding: 0 0 18px; display: block; }
+  .back:hover { color: var(--ink); }
+
+  /* --- campaign list ------------------------------------------------------------- */
+  .campaigns { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    margin-top: 20px; }
+  .campaign-card { border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); padding: 18px; cursor: pointer; text-align: left;
+    font: inherit; color: inherit; transition: border-color .15s, background .15s; }
+  .campaign-card:hover { border-color: var(--copper-line); background: var(--raised); }
+  .campaign-card b { display: block; font-size: 15px; margin-bottom: 4px; }
+  .campaign-card span { font-size: 12px; color: var(--faint); }
+  .campaign-card .badge { display: inline-block; margin-top: 10px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--copper-light);
+    background: var(--copper-soft); border: 1px solid var(--copper-line);
+    border-radius: 999px; padding: 3px 9px; }
+
+  /* --- setup screen: products + characters ---------------------------------------- */
+  .picker-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    margin: 14px 0 24px; }
+  .pick-tile { border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); overflow: hidden; text-align: left; font: inherit;
+    color: inherit; cursor: pointer; padding: 0; }
+  .pick-tile:hover { border-color: var(--copper-line); }
+  .pick-tile img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover;
+    background: #1c1c1f; }
+  .pick-tile .cap { padding: 8px 10px; font-size: 12px; }
+  .pick-tile .cap b { display: block; font-size: 13px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .pick-tile .cap span { color: var(--faint); }
+  .added-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 22px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+    padding: 5px 10px; border-radius: 999px; background: var(--raised);
+    border: 1px solid var(--line); color: var(--muted); }
+  .chip button { appearance: none; border: 0; background: none; color: var(--faint);
+    cursor: pointer; font: inherit; font-size: 13px; line-height: 1; padding: 0 0 0 2px; }
+  .chip button:hover { color: var(--error); }
+  /* Collapsed by default so 30+ cast tiles never push the primary action (Generate
+     concepts, now above these grids) below the fold — see bug report on the setup
+     screen scroll. picker-grid.capped also gets its own scrollbar as a second guard
+     for whichever grid is left open while very large. */
+  .picker-disclosure { margin: 0 0 16px; }
+  .picker-disclosure summary { cursor: pointer; font-size: 13px; color: var(--muted);
+    padding: 10px 2px; user-select: none; }
+  .picker-disclosure summary:hover { color: var(--ink); }
+  .picker-disclosure .picker-grid { margin-top: 10px; }
+  .picker-grid.capped { max-height: 420px; overflow-y: auto; padding-right: 4px; }
+  .pick-tile.cast-added { opacity: .5; }
+  .pick-tile.cast-added .cap span { color: var(--ok); }
+  .fidelity-row { display: flex; gap: 8px; margin-top: 8px; }
+  .fidelity-row input { flex: 1; }
+
+  /* --- product upload ------------------------------------------------------------- */
+  .upload-zone { border: 1px dashed var(--line); border-radius: var(--radius);
+    background: var(--surface); padding: 18px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s; margin: 0 0 12px; }
+  .upload-zone:hover, .upload-zone.over { border-color: var(--copper-line); background: var(--raised); }
+  .upload-zone:focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; }
+  .upload-zone strong { display: block; font-size: 14px; margin-bottom: 4px; }
+  .upload-zone p { margin: 0; font-size: 12px; color: var(--faint); }
+  .upload-tiles { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+  .upload-tile { width: 130px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); overflow: hidden; font-size: 11px; }
+  .upload-tile img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover;
+    background: #1c1c1f; }
+  .upload-tile .status { padding: 6px 8px; color: var(--faint); line-height: 1.4; }
+  .upload-tile.error .status { color: var(--error); }
+  .upload-tile.warn .status { color: var(--copper-light); }
+  .upload-tile button.retry { width: 100%; border: 0; border-top: 1px solid var(--line);
+    background: var(--raised); color: var(--copper-light); cursor: pointer; font: inherit;
+    font-size: 11px; padding: 5px 0; }
+  .chip img { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; }
+  .chip .warn-mark { color: var(--error); cursor: help; font-size: 12px; }
+
+  /* --- concept cards ---------------------------------------------------------------- */
+  .concept-card { border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); padding: 22px; display: flex; flex-direction: column;
+    gap: 8px; }
+  .concept-card h3 { margin: 0; font-size: 16px; }
+  .concept-card .mode { align-self: flex-start; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .06em; padding: 3px 9px; border-radius: 999px; }
+  .concept-card .mode.story { color: var(--copper-light); background: var(--copper-soft);
+    border: 1px solid var(--copper-line); }
+  .concept-card .mode.showcase { color: #9fd39f; background: rgba(92,184,92,.10);
+    border: 1px solid rgba(92,184,92,.28); }
+  .concept-card p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .concept-card .tagline { font-style: italic; color: var(--faint); }
+
+  /* --- workspace: top bar ------------------------------------------------------------ */
+  .wtop { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    flex-wrap: wrap; margin-bottom: 14px; }
+  .wtop-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .wtop-left h2 { margin: 0; font-size: 18px; }
+  .wtop select { font-size: 13px; padding: 6px 10px; color: var(--ink); background: var(--raised);
+    border: 1px solid var(--line); border-radius: 8px; appearance: none; -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
+  .wtop select option { background: #17171a; color: var(--ink); }
+  .wmeta { font-size: 12px; color: var(--faint); }
+  .wmeta.ok-badge { color: var(--ok); font-weight: 600; }
+  .wtop-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  button.small { padding: 8px 16px; font-size: 13px; border-radius: 999px; }
+  button.ghost { background: var(--raised); color: var(--ink); border: 1px solid var(--line);
+    cursor: pointer; font: inherit; }
+  button.ghost:hover { border-color: var(--copper-line); }
+  button.ghost:disabled, button.small:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* --- shot strip -------------------------------------------------------------------- */
+  /* minmax(0,1fr) on the track alone doesn't stop a flex child's own min-content size
+     from blowing the column out — .wstrip-col's min-width:0 is what actually makes the
+     strip scroll horizontally INSIDE its column instead of pushing the inspector aside
+     and clipping whatever card lands past the fold. */
+  .wbody { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px;
+    align-items: start; }
+  .wstrip-col { min-width: 0; }
+  .wstrip-wrap { display: flex; gap: 10px; overflow-x: auto; padding: 4px 4px 14px; }
+  .shot-card { flex: none; width: 156px; border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--surface); overflow: hidden;
+    cursor: pointer; transition: border-color .15s; }
+  .shot-card:hover { border-color: var(--copper-line); }
+  .shot-card.selected { border-color: var(--copper); box-shadow: 0 0 0 1px var(--copper); }
+  .shot-card .frame { aspect-ratio: 9/16; background: linear-gradient(160deg, #17171a, #0d0d0f);
+    display: grid; place-items: center; color: var(--faint); font-size: 11px; position: relative; }
+  .shot-card .frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .shot-card .frame.end-card { background: linear-gradient(160deg, #221a12, #0d0d0f); }
+  .shot-card .frame.generating { background: linear-gradient(100deg,
+    #17171a 25%, #232327 37%, #17171a 63%); background-size: 400% 100%;
+    animation: shimmer 1.4s ease-in-out infinite; }
+  @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+  .shot-card .frame.failed { background: rgba(229,115,115,.10); color: var(--error);
+    flex-direction: column; gap: 6px; padding: 10px; text-align: center; }
+  .shot-card .frame.failed button { font-size: 11px; padding: 5px 12px; border-radius: 999px;
+    background: var(--raised); border: 1px solid rgba(229,115,115,.3); color: var(--error);
+    cursor: pointer; font: inherit; }
+  .shot-card .meta { padding: 8px 9px; font-size: 11px; color: var(--faint); display: grid;
+    gap: 3px; }
+  .shot-card .meta .num { font-size: 12px; color: var(--ink); font-weight: 600; }
+  .shot-card .state { display: inline-block; margin-top: 4px; font-size: 10px;
+    text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px;
+    background: var(--raised); border: 1px solid var(--line); color: var(--muted); }
+  .shot-card .state.frame_approved, .shot-card .state.video_approved
+    { color: var(--ok); border-color: rgba(92,184,92,.3); background: rgba(92,184,92,.08); }
+  .shot-card .state.frame_failed, .shot-card .state.video_failed
+    { color: var(--error); border-color: rgba(229,115,115,.3); background: rgba(229,115,115,.08); }
+  .shot-card .state.frame_generating, .shot-card .state.frame_review,
+  .shot-card .state.video_generating, .shot-card .state.video_review
+    { color: var(--copper-light); border-color: var(--copper-line); background: var(--copper-soft); }
+  .shot-card .product-tag { display: inline-block; margin-top: 4px; font-size: 10px;
+    text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px;
+    background: var(--raised); border: 1px solid var(--line); color: var(--faint); }
+  .shot-card .clip-generating-badge { position: absolute; bottom: 6px; left: 6px; font-size: 10px;
+    color: var(--copper-light); background: rgba(0,0,0,.6); border-radius: 999px; padding: 2px 8px; }
+  .shot-card .row { display: flex; gap: 4px; padding: 0 9px 9px; }
+  .shot-card .row button { flex: 1; font-size: 11px; padding: 5px 0; border-radius: 7px;
+    background: var(--raised); border: 1px solid var(--line); color: var(--muted);
+    cursor: pointer; }
+  .shot-card .row button:hover { color: var(--ink); }
+  .add-between { flex: none; width: 26px; display: flex; align-items: center;
+    justify-content: center; }
+  .add-between button { width: 22px; height: 22px; border-radius: 999px; border: 1px dashed
+    var(--line); background: none; color: var(--faint); cursor: pointer; font-size: 14px;
+    line-height: 1; }
+  .add-between button:hover { border-color: var(--copper); color: var(--copper-light); }
+
+  /* --- job progress: honest indicator for a long-running background job -------------- */
+  /* Shared by the concepts/board buttons, a shot card's compact frame/video tile, and
+     the inspector. Never claims a percentage the job didn't report — an indeterminate
+     bar (no known fraction) animates instead of freezing at a fake number. */
+  .job-progress { display: grid; gap: 6px; margin-top: 10px; }
+  .job-progress.compact { gap: 4px; padding: 8px; }
+  .job-progress-label { font-size: 12px; color: var(--muted); }
+  .job-progress.compact .job-progress-label { font-size: 10px; color: var(--faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .job-progress-bar { height: 6px; border-radius: 999px; background: var(--raised);
+    border: 1px solid var(--line); overflow: hidden; position: relative; }
+  .job-progress.compact .job-progress-bar { height: 4px; }
+  .job-progress-fill { height: 100%; background: var(--copper); border-radius: 999px;
+    transition: width .4s ease; }
+  .job-progress-bar.indeterminate .job-progress-fill { width: 40% !important;
+    animation: job-progress-slide 1.6s ease-in-out infinite; }
+  @keyframes job-progress-slide { 0% { transform: translateX(-100%); }
+    100% { transform: translateX(250%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .job-progress-bar.indeterminate .job-progress-fill { animation: none; width: 100%;
+      opacity: .35; }
+  }
+  .job-progress-foot { font-size: 11px; color: var(--faint); }
+  .job-progress-note { font-size: 11px; color: var(--copper-light); }
+  .job-progress-note.warn { color: var(--error); }
+
+  .job-error { display: grid; gap: 8px; padding: 10px; border: 1px solid rgba(229,115,115,.3);
+    border-radius: 8px; background: rgba(229,115,115,.08); }
+  .job-error ul { margin: 0; padding-left: 18px; font-size: 12px; color: var(--error);
+    display: grid; gap: 3px; }
+  .job-error button { align-self: start; font-size: 11px; padding: 6px 14px; border-radius: 999px;
+    background: var(--raised); border: 1px solid rgba(229,115,115,.3); color: var(--error);
+    cursor: pointer; font: inherit; }
+
+  /* --- director notes: dismissible soft-warning callout on a storyboard version ------- */
+  .director-notes { position: relative; border: 1px solid var(--copper-line);
+    border-radius: var(--radius); background: var(--copper-soft); padding: 14px 36px 14px 16px;
+    margin-bottom: 16px; }
+  .director-notes .notes-title { font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--copper-light); margin-bottom: 6px; }
+  .director-notes ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted);
+    display: grid; gap: 4px; line-height: 1.4; }
+  .director-notes .notes-close { position: absolute; top: 8px; right: 10px; background: none;
+    border: 0; color: var(--faint); font-size: 16px; cursor: pointer; line-height: 1; padding: 4px; }
+  .director-notes .notes-close:hover { color: var(--ink); }
+
+  /* --- shot card: script view (no frame generated yet) -------------------------------- */
+  .shot-card .frame.script { display: block; padding: 10px; text-align: left; }
+  .shot-card .frame.script .script-head { font-size: 10px; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--copper-light); margin-bottom: 6px; }
+  .shot-card .frame.script .script-scene { font-size: 11px; color: var(--muted); line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 6; line-clamp: 6; -webkit-box-orient: vertical;
+    overflow: hidden; }
+  .shot-card .frame.script .script-action { font-size: 10px; color: var(--faint);
+    margin-top: 6px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3;
+    line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .shot-card .frame.end-card .script-brand { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .shot-card .frame.end-card .script-tagline { font-size: 11px; color: var(--faint);
+    font-style: italic; margin-top: 4px; }
+
+  /* --- inspector ---------------------------------------------------------------------- */
+  .winspector { position: sticky; top: 20px; border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--surface); padding: 18px; }
+  .winspector h3 { margin: 0 0 12px; font-size: 14px; }
+  .itabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; }
+  .itabs button { font-size: 11px; padding: 6px 10px; border-radius: 999px;
+    background: var(--raised); border: 1px solid var(--line); color: var(--muted);
+    cursor: pointer; font: inherit; }
+  .itabs button[aria-pressed="true"] { background: var(--copper-soft); color: var(--copper-light);
+    border-color: var(--copper-line); }
+  .ifields { display: grid; gap: 12px; }
+  .ifields label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+  .ifields input, .ifields select, .ifields textarea {
+    font: inherit; font-size: 13px; padding: 8px 10px; color: var(--ink);
+    background: var(--raised); border: 1px solid var(--line); border-radius: 8px; width: 100%; }
+  .ifields select { appearance: none; -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
+  .ifields option { background: #17171a; color: var(--ink); }
+  .ifields input::placeholder, .ifields textarea::placeholder { color: var(--faint); }
+  .ifields input:focus, .ifields select:focus, .ifields textarea:focus {
+    outline: 1px solid var(--copper); outline-offset: -1px; border-color: var(--copper); }
+  .ifields textarea { resize: vertical; min-height: 54px; }
+  .check-grid { display: grid; gap: 6px; max-height: 160px; overflow-y: auto; }
+  .check-grid label { display: flex; align-items: center; gap: 8px; flex-direction: row;
+    font-size: 12px; }
+  .check-grid input { width: auto; }
+  .approve-row { margin-top: 16px; display: flex; gap: 8px; }
+  .empty-inspector { color: var(--faint); font-size: 13px; padding: 20px 0; text-align: center; }
+
+  /* --- frames tab --------------------------------------------------------------------- */
+  .variant-gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .variant-thumb { position: relative; border: 2px solid var(--line); border-radius: 8px;
+    overflow: hidden; cursor: pointer; aspect-ratio: 9/16; background: #17171a; padding: 0; }
+  .variant-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .variant-thumb.selected { border-color: var(--copper); }
+  .variant-thumb .v-num { position: absolute; top: 4px; left: 5px; font-size: 10px;
+    color: var(--ink); background: rgba(0,0,0,.55); padding: 1px 6px; border-radius: 999px; }
+  .variant-thumb .fidelity-badge { position: absolute; top: 4px; right: 5px; font-size: 12px;
+    background: rgba(0,0,0,.55); border-radius: 999px; width: 18px; height: 18px;
+    display: grid; place-items: center; cursor: help; }
+  .variant-thumb .fidelity-badge.ok { color: #9fd39f; }
+  .variant-thumb .fidelity-badge.warn { color: #e0b060; }
+  .frame-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .frame-price { font-size: 11px; color: var(--faint); align-self: center; }
+  .frame-empty { color: var(--faint); font-size: 12px; padding: 10px 0; }
+
+  /* --- videos tab --------------------------------------------------------------------- */
+  .video-gallery { grid-template-columns: repeat(2, 1fr); }
+  .video-thumb video { width: 100%; height: 100%; object-fit: cover; display: block;
+    background: #000; }
+
+  /* --- confirm dialog ------------------------------------------------------------------ */
+  .confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    display: grid; place-items: center; z-index: 50; }
+  .confirm-box { background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 24px; max-width: 360px; width: calc(100% - 40px); }
+  .confirm-box h3 { margin: 0 0 10px; font-size: 15px; }
+  .confirm-box p { margin: 0 0 18px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .confirm-box .go-row { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* --- timeline ------------------------------------------------------------------------ */
+  .wtimeline { display: flex; height: 34px; border-radius: 8px; overflow: hidden;
+    margin-top: 18px; border: 1px solid var(--line); }
+  .tl-seg { display: flex; align-items: center; justify-content: center; font-size: 10px;
+    color: var(--muted); background: var(--raised); border-right: 1px solid var(--bg);
+    cursor: pointer; white-space: nowrap; overflow: hidden; }
+  .tl-seg:last-child { border-right: 0; }
+  .tl-seg.end-card { background: var(--copper-soft); color: var(--copper-light); }
+  .tl-seg.selected { outline: 2px solid var(--copper); outline-offset: -2px; }
+
+  @media (max-width: 900px) {
+    .wbody { grid-template-columns: 1fr; }
+    .winspector { position: static; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
+      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
+      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
+    </svg>
+    <b>Donna</b>&nbsp;<span>Photoshoot</span>
+  </a>
+  <div class="account" id="account"></div>
+</header>
+<main>
+<h1 class="page">Video ads</h1>
+<p class="lede">A short multi-shot ad, storyboarded first — every frame and clip traces
+  back to a shot you approved.</p>
+
+<div id="error" class="error hidden"></div>
+<div id="notice" class="notice hidden"></div>
+
+<!-- ============================== screen: campaign list ============================ -->
+<section id="screenList">
+  <div class="card-box">
+    <h2 style="margin:0 0 4px;font-size:16px">New campaign</h2>
+    <p style="margin:0 0 16px;color:var(--faint);font-size:13px">A brief the director
+      turns into 3 concepts, then a full storyboard.</p>
+    <div class="fields">
+      <label class="wide">Campaign name
+        <input id="cName" type="text" maxlength="80" placeholder="e.g. Diwali 2026">
+      </label>
+      <label>Brand <input id="cBrand" type="text" maxlength="60"></label>
+      <label>Platform
+        <select id="cPlatform">
+          <option value="instagram">Instagram</option>
+          <option value="youtube">YouTube</option>
+          <option value="facebook">Facebook</option>
+          <option value="tiktok">TikTok</option>
+        </select>
+      </label>
+      <label class="wide">Campaign goal
+        <input id="cGoal" type="text" maxlength="140" placeholder="e.g. drive festive gifting sales">
+      </label>
+      <label>Audience <input id="cAudience" type="text" maxlength="100"></label>
+      <label>Mood <input id="cMood" type="text" maxlength="60" placeholder="e.g. warm, joyful"></label>
+      <label>Duration (s)
+        <select id="cDuration">
+          <option value="15">15</option>
+          <option value="20">20</option>
+          <option value="25" selected>25</option>
+          <option value="30">30</option>
+        </select>
+      </label>
+      <label>Aspect
+        <select id="cAspect">
+          <option value="9:16" selected>9:16 (Reels / Stories)</option>
+          <option value="4:5">4:5 (IG feed)</option>
+          <option value="1:1">1:1 (Square)</option>
+          <option value="16:9">16:9 (YouTube / web)</option>
+        </select>
+      </label>
+    </div>
+    <div class="go-row" style="margin-top:16px">
+      <button class="go" id="cGo" type="button">Create campaign</button>
+    </div>
+  </div>
+
+  <div class="campaigns" id="campaignList"></div>
+  <p class="empty-state hidden" id="campaignEmpty">No campaigns yet — create one above.</p>
+</section>
+
+<!-- ============================== screen: setup (products/characters) ============== -->
+<section id="screenSetup" class="hidden">
+  <button class="back" data-back type="button">&larr; All campaigns</button>
+  <h2 class="page" id="setupTitle" style="font-size:19px"></h2>
+
+  <h3 style="font-size:14px;margin-bottom:4px">Products in this ad</h3>
+  <div class="upload-zone" id="setupUploadZone" tabindex="0" role="button"
+       aria-label="Upload product photos">
+    <strong>Drop photos here, or click to upload</strong>
+    <p>JPG, PNG or WEBP &middot; up to 15MB each &middot; add as many pieces as this ad needs</p>
+  </div>
+  <input type="file" id="setupUploadInput" accept="image/jpeg,image/png,image/webp"
+         multiple hidden>
+  <div class="upload-tiles" id="setupUploadTiles"></div>
+  <div class="added-list" id="setupProducts"></div>
+  <p class="hint hidden" id="setupPieceEmpty"></p>
+
+  <h3 style="font-size:14px;margin-bottom:4px">Characters in this ad</h3>
+  <div class="added-list" id="setupCharacters"></div>
+
+  <!-- The primary next action sits right under the summary, so it is reachable without
+       scrolling past a large product/cast grid below — see .impeccable/critique on the
+       setup screen having no visible next step past 30+ cast tiles. -->
+  <div class="go-row" style="margin:4px 0 24px">
+    <button class="go" id="setupGenerate" type="button" disabled>Generate 3 concepts</button>
+    <span class="cost" id="setupGenHint" style="font-size:12px;color:var(--faint)"></span>
+  </div>
+  <div id="setupGenerateProgress"></div>
+
+  <details class="picker-disclosure">
+    <summary>Choose a product (<span id="pieceCount">0</span>)</summary>
+    <div class="picker-grid" id="setupPieceGrid"></div>
+  </details>
+
+  <details class="picker-disclosure">
+    <summary>Choose from cast (<span id="castCount">0</span>)</summary>
+    <div class="picker-grid capped" id="setupModelGrid"></div>
+  </details>
+
+  <div class="card-box" style="max-width:520px;margin-top:20px">
+    <h3 style="margin:0 0 10px;font-size:14px">Or describe a character</h3>
+    <div class="fields">
+      <label class="wide">Name <input id="setupCharName" type="text" maxlength="60"></label>
+      <label class="wide">Description
+        <input id="setupCharDesc" type="text" maxlength="200"
+               placeholder="e.g. a 28 year old Delhi model, warm smile">
+      </label>
+    </div>
+    <div class="go-row" style="margin-top:12px">
+      <button class="go" id="setupCharGo" type="button">Add character</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== screen: concepts ================================== -->
+<section id="screenConcepts" class="hidden">
+  <button class="back" data-back type="button">&larr; All campaigns</button>
+  <h2 class="page" id="conceptsTitle" style="font-size:19px">Pick a direction</h2>
+  <div class="fields" style="max-width:520px;margin-bottom:20px">
+    <label>Aspect
+      <select id="ccAspect">
+        <option value="9:16">9:16</option><option value="4:5">4:5</option>
+        <option value="1:1">1:1</option><option value="16:9">16:9</option>
+      </select>
+    </label>
+    <label>Duration (s)
+      <select id="ccDuration">
+        <option value="15">15</option><option value="20">20</option>
+        <option value="25">25</option><option value="30">30</option>
+      </select>
+    </label>
+    <label>Platform <input id="ccPlatform" type="text" maxlength="40"></label>
+  </div>
+  <div class="ways" id="conceptCards"></div>
+</section>
+
+<!-- ============================== screen: storyboard workspace ====================== -->
+<section id="screenWorkspace" class="hidden">
+  <button class="back" data-back type="button">&larr; All campaigns</button>
+  <div class="wtop">
+    <div class="wtop-left">
+      <h2 id="wTitle"></h2>
+      <select id="wVersionSelect" aria-label="Storyboard version"></select>
+      <span class="wmeta" id="wDuration"></span>
+      <span class="wmeta ok-badge hidden" id="wReady">Ready for render ✓</span>
+    </div>
+    <div class="wtop-actions">
+      <button class="ghost small" id="wApproveAll" type="button">Approve all instructions</button>
+      <button class="ghost small" id="wFork" type="button">Fork</button>
+      <button class="go small" id="wApprove" type="button">Approve storyboard</button>
+      <button class="go small" id="wGenerateFrames" type="button">Generate all frames</button>
+      <button class="go small" id="wGenerateVideos" type="button">Generate all videos</button>
+    </div>
+  </div>
+  <p class="hint hidden" id="wFramesHint"></p>
+  <div id="wDirectorNotes" class="hidden"></div>
+
+  <div class="wbody">
+    <div class="wstrip-col">
+      <div class="wstrip-wrap" id="wStrip"></div>
+    </div>
+    <aside class="winspector" id="wInspector">
+      <div class="empty-inspector">Select a shot to edit it.</div>
+    </aside>
+  </div>
+
+  <div class="wtimeline" id="wTimeline"></div>
+</section>
+
+</main>
+<script src="/app.js"></script>
+<script>
+
+// --- vocabulary mirrored from director.py (no endpoint exposes it — it is small and
+// static, the same reasoning cast.SKIN_TONES/HAIR_GROUPS are duplicated into pickers
+// elsewhere in this app rather than fetched). ------------------------------------------
+const SHOT_TYPES = ['wide', 'medium', 'close', 'macro', 'insert'];
+const CAMERA_MOVES = ['static', 'rack_focus', 'slow_push', 'slow_pull', 'orbit', 'pan',
+                      'drift', 'crane_rise'];
+const PRODUCT_VISIBILITY = ['none', 'small', 'medium', 'hero'];
+const MOTION_INTENSITY = ['low', 'medium', 'high'];
+const TRANSITIONS = ['cut', 'dissolve'];
+
+// The inspector's tabs. Each field either lives in shot.spec (jsonb) or is a real shot
+// column (image_prompt/motion_prompt/negative_prompt/duration) — storyboard.update_spec
+// on the server routes a patch to the right place either way, so the client never needs
+// to know which; it just PATCHes {field: value}.
+const TABS = {
+  Creative: [
+    ['purpose', 'text', 'Purpose'], ['scene_description', 'textarea', 'Scene'],
+    ['emotional_beat', 'text', 'Emotional beat'],
+    ['character_action', 'text', 'Character action'],
+    ['facial_expression', 'text', 'Facial expression'],
+  ],
+  Visual: [
+    ['environment', 'text', 'Environment'], ['lighting', 'text', 'Lighting'],
+    ['time_of_day', 'text', 'Time of day'], ['wardrobe', 'text', 'Wardrobe'],
+    ['props', 'text', 'Props'], ['depth_of_field', 'text', 'Depth of field'],
+    ['lens', 'text', 'Lens'],
+  ],
+  Camera: [
+    ['shot_type', 'select', 'Shot type', SHOT_TYPES],
+    ['camera_angle', 'text', 'Camera angle'],
+    ['camera_move', 'select', 'Camera move', CAMERA_MOVES],
+    ['motion_intensity', 'select', 'Motion intensity', MOTION_INTENSITY],
+  ],
+  Product: [
+    ['product_visibility', 'select', 'Product visibility', PRODUCT_VISIBILITY],
+    ['product_interaction', 'text', 'Product interaction'],
+  ],
+  Audio: [
+    ['dialogue', 'text', 'Dialogue'], ['voiceover', 'text', 'Voiceover'],
+    ['ambient_sound', 'text', 'Ambient sound'], ['sound_effects', 'text', 'Sound effects'],
+    ['music_cue', 'text', 'Music cue'],
+  ],
+  Timing: [['duration', 'number', 'Duration (s)']],
+  Transition: [['transition_out', 'select', 'Transition out', TRANSITIONS]],
+  Generation: [
+    ['image_prompt', 'textarea', 'Image prompt override (empty = auto)'],
+    ['motion_prompt', 'textarea', 'Motion prompt override (empty = auto)'],
+  ],
+  Frames: [],          // rendered specially below — a variant gallery, not plain fields
+  Videos: [],          // rendered specially below — a clip gallery, not plain fields
+};
+const TAB_NAMES = Object.keys(TABS);
+
+const state = {
+  campaign: null, campaignDetail: null, version: null,
+  selectedShotKey: null, selectedTab: 'Creative',
+};
+
+function say(id, message) {
+  const other = id === 'error' ? 'notice' : 'error';
+  $(other).classList.add('hidden');
+  if (!message) { $(id).classList.add('hidden'); return; }
+  $(id).textContent = message;
+  $(id).classList.remove('hidden');
+}
+
+function showScreen(name) {
+  // Cleared on every screen change, not just some callers — an error left over from the
+  // setup screen (e.g. "give the character a name") must not still be showing once the
+  // person has navigated away from the form that raised it.
+  say('error', ''); say('notice', '');
+  ['screenList', 'screenSetup', 'screenConcepts', 'screenWorkspace'].forEach((id) => {
+    $(id).classList.toggle('hidden', id !== name);
+  });
+}
+
+// --- URL state: ?campaign=&version= ----------------------------------------------------
+function urlParams() {
+  const p = new URLSearchParams(location.search);
+  return { campaign: p.get('campaign'), version: p.get('version') };
+}
+
+function setURL(params, push) {
+  const p = new URLSearchParams();
+  if (params.campaign) p.set('campaign', params.campaign);
+  if (params.version) p.set('version', params.version);
+  const url = `${location.pathname}${p.toString() ? '?' + p.toString() : ''}`;
+  if (push) history.pushState(null, '', url); else history.replaceState(null, '', url);
+}
+
+window.addEventListener('popstate', () => boot(false));
+
+// --- campaign list -----------------------------------------------------------------------
+
+async function loadCampaignList() {
+  showScreen('screenList');
+  const rows = await api('/api/campaigns');
+  $('campaignEmpty').classList.toggle('hidden', rows.length > 0);
+  $('campaignList').replaceChildren(...rows.map((c) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'campaign-card';
+    const brief = c.brief || {};
+    card.innerHTML = `<b></b><span></span>`;
+    card.querySelector('b').textContent = c.name;
+    card.querySelector('span').textContent =
+      [brief.brand, brief.platform, brief.duration ? `${brief.duration}s` : '']
+        .filter(Boolean).join(' · ') || 'No brief yet';
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = c.status;
+    card.appendChild(badge);
+    card.addEventListener('click', () => {
+      setURL({ campaign: c.id }, true);
+      openCampaign(c.id, null);
+    });
+    return card;
+  }));
+}
+
+$('cGo').addEventListener('click', async () => {
+  const name = $('cName').value.trim();
+  if (!name) return say('error', 'the campaign needs a name');
+  const body = new FormData();
+  body.append('name', name);
+  body.append('brand', $('cBrand').value.trim());
+  body.append('goal', $('cGoal').value.trim());
+  body.append('audience', $('cAudience').value.trim());
+  body.append('platform', $('cPlatform').value);
+  body.append('duration', $('cDuration').value);
+  body.append('aspect', $('cAspect').value);
+  body.append('mood', $('cMood').value.trim());
+  try {
+    const campaign = await api('/api/campaigns', { method: 'POST', body });
+    $('cName').value = ''; $('cGoal').value = ''; $('cAudience').value = ''; $('cMood').value = '';
+    setURL({ campaign: campaign.id }, true);
+    await openCampaign(campaign.id, null);
+  } catch (error) {
+    say('error', String(error.message || error));
+  }
+});
+
+document.querySelectorAll('[data-back]').forEach((btn) => btn.addEventListener('click', () => {
+  setURL({}, true);
+  loadCampaignList().catch((e) => say('error', String(e.message || e)));
+}));
+
+// --- open a campaign: decide which screen fits its current progress --------------------
+
+async function openCampaign(campaignId, versionId) {
+  say('error', ''); say('notice', '');
+  const detail = await api(`/api/campaigns/${campaignId}`);
+  state.campaign = detail.campaign;
+  state.campaignDetail = detail;
+
+  if (versionId) return openVersion(versionId);
+
+  const activeStoryboard = detail.storyboards.find((s) => s.active_version_id);
+  if (activeStoryboard) {
+    setURL({ campaign: campaignId, version: activeStoryboard.active_version_id }, false);
+    return openVersion(activeStoryboard.active_version_id);
+  }
+
+  // Recovery: a "Directing…"/"Storyboarding…" job that was running when the page was
+  // last open is still running server-side — reloading must show its progress again,
+  // not a dead button, per running_jobs from GET /api/campaigns/{id}.
+  const runningConcepts = (detail.running_jobs || []).find((j) => j.kind === 'ad_concepts');
+  const runningBoard = (detail.running_jobs || []).find((j) => j.kind === 'ad_board');
+
+  if (detail.concepts.length > 0) {
+    renderConcepts();
+    if (runningBoard) resumeBoardJob(runningBoard);
+    return;
+  }
+  renderSetup();
+  if (runningConcepts) resumeConceptsJob(runningConcepts);
+}
+
+// --- setup screen: products + characters ------------------------------------------------
+
+function chip(label, onRemove, imageUrl, warnTitle) {
+  const el = document.createElement('span');
+  el.className = 'chip';
+  if (imageUrl) {
+    const img = document.createElement('img');
+    img.src = imageUrl;
+    img.alt = '';
+    el.appendChild(img);
+  }
+  const text = document.createElement('span');
+  text.textContent = label;
+  el.appendChild(text);
+  if (warnTitle) {
+    const warn = document.createElement('span');
+    warn.className = 'warn-mark';
+    warn.textContent = '⚠';
+    warn.title = warnTitle;
+    el.appendChild(warn);
+  }
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.textContent = '×';
+  x.title = 'Remove';
+  x.addEventListener('click', onRemove);
+  el.appendChild(x);
+  return el;
+}
+
+// --- product upload: a drop zone in setup itself, no detour through /products.html -----
+
+const UPLOAD_ACCEPT = ['image/jpeg', 'image/png', 'image/webp'];
+const UPLOAD_MAX_BYTES = 15 * 1024 * 1024;
+// Session-only: which piece ids came back from /api/pieces with detected=false, so their
+// chip can carry a warning. Not persisted server-side — pieces has no such column, and
+// this only matters in the session where the upload just happened.
+// ponytail: no DB column for this; add one if the warning needs to survive a reload.
+const undetectedPieceIds = new Set();
+let uploadTiles = [];   // {key, file, status: 'reading'|'adding'|'error', message}
+
+function renderUploadTiles() {
+  $('setupUploadTiles').replaceChildren(...uploadTiles.map((tile) => {
+    const el = document.createElement('div');
+    el.className = 'upload-tile' + (tile.status === 'error' ? ' error' : '');
+    const img = document.createElement('img');
+    img.src = tile.previewUrl;
+    img.alt = '';
+    el.appendChild(img);
+    const status = document.createElement('div');
+    status.className = 'status';
+    status.textContent = tile.status === 'reading' ? 'Reading the piece…'
+      : tile.status === 'adding' ? 'Adding to the ad…'
+      : tile.message;
+    el.appendChild(status);
+    if (tile.status === 'error') {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'retry';
+      retry.textContent = 'Retry';
+      retry.addEventListener('click', () => uploadOneTile(tile));
+      el.appendChild(retry);
+    }
+    return el;
+  }));
+}
+
+async function uploadOneTile(tile) {
+  tile.status = 'reading'; tile.message = '';
+  renderUploadTiles();
+  try {
+    const body = new FormData();
+    body.append('upload', tile.file);
+    const piece = await api('/api/pieces', { method: 'POST', body });
+    if (!piece.detected) undetectedPieceIds.add(piece.piece_id);
+
+    tile.status = 'adding';
+    renderUploadTiles();
+    const addBody = new FormData();
+    addBody.append('piece_id', piece.piece_id);
+    addBody.append('fidelity_instructions', tile.fidelity || '');
+    // add_product is idempotent server-side, so a retry after a partial failure here
+    // (upload succeeded, add failed) just re-selects the same piece, never a duplicate.
+    await api(`/api/campaigns/${state.campaign.id}/products`, { method: 'POST', body: addBody });
+
+    uploadTiles = uploadTiles.filter((t) => t.key !== tile.key);
+    URL.revokeObjectURL(tile.previewUrl);
+    renderUploadTiles();
+    await openCampaign(state.campaign.id, null);
+  } catch (error) {
+    tile.status = 'error';
+    tile.message = String(error.message || error);
+    renderUploadTiles();
+  }
+}
+
+async function handleUploadFiles(fileList) {
+  const files = Array.from(fileList);
+  const queued = [];
+  for (const file of files) {
+    if (!UPLOAD_ACCEPT.includes(file.type)) {
+      say('error', `${file.name} is not a JPG, PNG or WEBP — skipped`);
+      continue;
+    }
+    if (file.size > UPLOAD_MAX_BYTES) {
+      say('error', `${file.name} is over 15MB — skipped`);
+      continue;
+    }
+    queued.push(file);
+  }
+  if (queued.length === 0) return;
+
+  // A per-file fidelity note, taken up front so the automatic upload → identify → add
+  // pipeline below never has to stop and wait on typing mid-flight.
+  const tiles = queued.map((file) => ({
+    key: `u${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    file,
+    fidelity: prompt(`Anything the shots must keep exact about "${file.name}"? (optional)\n`
+      + 'e.g. keep the emerald drops and pearl fringe exactly', '') || '',
+    status: 'reading', message: '', previewUrl: URL.createObjectURL(file),
+  }));
+  uploadTiles.push(...tiles);
+  renderUploadTiles();
+
+  // Max 2 in parallel, and one failed file must not block the others — each worker just
+  // moves to the next queued tile regardless of how the previous one finished.
+  const queue = tiles.slice();
+  async function worker() {
+    while (queue.length) await uploadOneTile(queue.shift());
+  }
+  await Promise.all([worker(), worker()]);
+}
+
+const uploadZone = $('setupUploadZone');
+const uploadInput = $('setupUploadInput');
+uploadZone.addEventListener('click', () => uploadInput.click());
+uploadZone.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); uploadInput.click(); }
+});
+uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('over'));
+uploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadZone.classList.remove('over');
+  if (e.dataTransfer.files.length) handleUploadFiles(e.dataTransfer.files);
+});
+uploadInput.addEventListener('change', () => {
+  if (uploadInput.files.length) handleUploadFiles(uploadInput.files);
+  uploadInput.value = '';   // so choosing the same file again still fires 'change'
+});
+
+async function removeProduct(productId) {
+  try {
+    await api(`/api/campaigns/${state.campaign.id}/products/${productId}`, { method: 'DELETE' });
+    await openCampaign(state.campaign.id, null);
+  } catch (error) { say('error', String(error.message || error)); }
+}
+
+async function removeCharacter(characterId) {
+  try {
+    await api(`/api/campaigns/${state.campaign.id}/characters/${characterId}`,
+             { method: 'DELETE' });
+    await openCampaign(state.campaign.id, null);
+  } catch (error) { say('error', String(error.message || error)); }
+}
+
+async function renderSetup() {
+  showScreen('screenSetup');
+  $('setupTitle').textContent = state.campaign.name;
+
+  const products = state.campaignDetail.products;
+  const characters = state.campaignDetail.characters;
+
+  $('setupProducts').replaceChildren(...products.map((p) =>
+    chip(p.name || p.category, () => removeProduct(p.id), p.image,
+         undetectedPieceIds.has(p.piece_id)
+           ? "couldn't identify this piece confidently — add a fidelity note" : null)));
+  $('setupCharacters').replaceChildren(...characters.map((c) =>
+    chip(c.name, () => removeCharacter(c.id))));
+
+  const genBtn = $('setupGenerate');
+  const genHint = $('setupGenHint');
+  genBtn.disabled = products.length === 0;
+  genHint.textContent = products.length === 0 ? 'Add at least one product first' : '';
+
+  const pieces = await api('/api/pieces');
+  $('pieceCount').textContent = String(pieces.length);
+  const pieceEmpty = $('setupPieceEmpty');
+  if (pieces.length === 0) {
+    pieceEmpty.textContent = 'No products yet — upload one above.';
+    pieceEmpty.classList.remove('hidden');
+  } else {
+    pieceEmpty.classList.add('hidden');
+  }
+  const addedPieceIds = new Set(products.map((p) => p.piece_id));
+  $('setupPieceGrid').replaceChildren(...pieces.map((piece) => {
+    const already = addedPieceIds.has(piece.piece_id);
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'pick-tile' + (already ? ' cast-added' : '');
+    tile.innerHTML = `<img src="${piece.image || ''}" alt="">
+      <div class="cap"><b></b><span>${already ? 'Added ✓' : 'Click to add'}</span></div>`;
+    tile.querySelector('b').textContent = piece.name;
+    tile.addEventListener('click', async () => {
+      const fidelity = prompt('Anything the shots must keep exact about this piece? '
+        + '(optional)', '') || '';
+      const body = new FormData();
+      body.append('piece_id', piece.piece_id);
+      body.append('fidelity_instructions', fidelity);
+      try {
+        // add_product is idempotent server-side (same piece twice returns the existing
+        // row), so a double click here just re-selects the same chip, never a duplicate.
+        await api(`/api/campaigns/${state.campaign.id}/products`, { method: 'POST', body });
+        await openCampaign(state.campaign.id, null);
+      } catch (error) { say('error', String(error.message || error)); }
+    });
+    return tile;
+  }));
+
+  const models = await api('/api/models');
+  $('castCount').textContent = String(models.models.length);
+  const addedKeys = new Set(characters.filter((c) => c.talent_id).map((c) => c.talent_id));
+  const addedCastKeys = new Set(characters.filter((c) => c.cast_key).map((c) => c.cast_key));
+  $('setupModelGrid').replaceChildren(...models.models.map((m) => {
+    const already = m.mine ? addedKeys.has(m.key) : addedCastKeys.has(m.key);
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'pick-tile' + (already ? ' cast-added' : '');
+    tile.disabled = already;
+    tile.innerHTML = `<img src="${m.image || ''}" alt="">
+      <div class="cap"><b></b><span>${already ? 'Cast ✓' : 'Click to cast'}</span></div>`;
+    tile.querySelector('b').textContent = m.name;
+    tile.addEventListener('click', async () => {
+      const body = new FormData();
+      body.append('name', m.name);
+      if (m.mine) body.append('talent_id', m.key); else body.append('cast_key', m.key);
+      try {
+        // add_character is idempotent server-side too — see add_product above.
+        await api(`/api/campaigns/${state.campaign.id}/characters`, { method: 'POST', body });
+        await openCampaign(state.campaign.id, null);
+      } catch (error) { say('error', String(error.message || error)); }
+    });
+    return tile;
+  }));
+}
+
+$('setupCharGo').addEventListener('click', async () => {
+  const name = $('setupCharName').value.trim();
+  if (!name) return say('error', 'give the character a name');
+  const body = new FormData();
+  body.append('name', name);
+  body.append('description', $('setupCharDesc').value.trim());
+  try {
+    await api(`/api/campaigns/${state.campaign.id}/characters`, { method: 'POST', body });
+    $('setupCharName').value = ''; $('setupCharDesc').value = '';
+    await openCampaign(state.campaign.id, null);
+  } catch (error) { say('error', String(error.message || error)); }
+});
+
+// Watches an already-running ad_concepts job (either just started, or recovered on
+// reload via openCampaign's running_jobs check) and shows its progress under the
+// button. On success, re-opens the campaign (which now has concepts and moves on to
+// renderConcepts); on failure, a readable error + "Try again".
+function watchConceptsJob(jobId, initial) {
+  const btn = $('setupGenerate');
+  const progHost = $('setupGenerateProgress');
+  btn.disabled = true;
+  btn.textContent = 'Directing…';
+  if (initial) progHost.replaceChildren(progressComponent(initial));
+  pollJob(`/api/jobs/${jobId}`, {
+    onUpdate: (detail) => progHost.replaceChildren(progressComponent(detail)),
+  }).then((done) => {
+    if (done.status !== 'succeeded') throw new Error(done.error || 'directing failed');
+    return openCampaign(state.campaign.id, null);
+  }).catch((error) => {
+    progHost.replaceChildren(jobErrorComponent(error.message || String(error),
+      () => { progHost.replaceChildren(); $('setupGenerate').click(); }));
+    btn.disabled = false;
+    btn.textContent = 'Generate 3 concepts';
+  });
+}
+
+function resumeConceptsJob(job) {
+  watchConceptsJob(job.id, job);
+}
+
+$('setupGenerate').addEventListener('click', async () => {
+  const btn = $('setupGenerate');
+  const progHost = $('setupGenerateProgress');
+  btn.disabled = true;
+  try {
+    const body = new FormData();
+    body.append('idempotency_key', `concepts:${state.campaign.id}:${Date.now()}`);
+    const job = await api(`/api/campaigns/${state.campaign.id}/concepts`,
+                          { method: 'POST', body });
+    watchConceptsJob(job.job_id);
+  } catch (error) {
+    progHost.replaceChildren(jobErrorComponent(error.message || String(error),
+      () => { progHost.replaceChildren(); $('setupGenerate').click(); }));
+    btn.disabled = false;
+  }
+});
+
+// --- concepts screen ----------------------------------------------------------------------
+
+function renderConcepts() {
+  showScreen('screenConcepts');
+  const brief = state.campaign.brief || {};
+  $('ccAspect').value = brief.aspect || '9:16';
+  $('ccDuration').value = String(brief.duration || 25);
+  $('ccPlatform').value = brief.platform || '';
+
+  $('conceptCards').replaceChildren(...state.campaignDetail.concepts.map((concept) => {
+    const card = document.createElement('article');
+    card.className = 'concept-card';
+    card.dataset.conceptId = String(concept.id);
+    card.innerHTML = `
+      <span class="mode ${concept.mode}">${concept.mode}</span>
+      <h3></h3>
+      <p class="tagline"></p>
+      <p></p>
+      <p style="color:var(--faint)"></p>
+      <div class="go-row"><button class="go" type="button">Choose this concept</button></div>`;
+    card.querySelector('h3').textContent = concept.name;
+    card.querySelector('.tagline').textContent = `"${concept.tagline}"`;
+    card.querySelectorAll('p')[1].textContent = concept.core_idea;
+    card.querySelectorAll('p')[2].textContent = concept.emotional_hook;
+    const btn = card.querySelector('button');
+    btn.addEventListener('click', () => {
+      // Disable every OTHER concept's button too — only one storyboard job runs at a
+      // time, and a second click on a sibling card while this one is directing would
+      // otherwise start a second, unrelated job.
+      $('conceptCards').querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      runBoardJob(card, concept);
+    });
+    return card;
+  }));
+}
+
+// Polls an already-running ad_board job (either just started, or recovered on reload)
+// and shows its progress in `progHost`. On success, opens the new version; on failure,
+// a readable error list with "Try again" (calls `onRetry`, never a raw bracketed
+// DirectorError string).
+function watchBoardJob(jobId, progHost, onRetry, initial) {
+  if (initial) progHost.replaceChildren(progressComponent(initial));
+  pollJob(`/api/jobs/${jobId}`, {
+    maxMinutes: 5,
+    onUpdate: (detail) => progHost.replaceChildren(progressComponent(detail)),
+  }).then((done) => {
+    if (done.status !== 'succeeded') throw new Error(done.error || 'storyboard failed');
+    setURL({ campaign: state.campaign.id, version: done.version_id }, true);
+    return openVersion(done.version_id);
+  }).catch((error) => {
+    progHost.replaceChildren(jobErrorComponent(error.message || String(error), onRetry));
+  });
+}
+
+// Replaces the clicked concept card's button-row with a live progress component while
+// the storyboard job runs (choose concept -> POST storyboard -> watchBoardJob).
+function runBoardJob(card, concept) {
+  const goRow = card.querySelector('.go-row');
+  const progHost = document.createElement('div');
+  if (goRow) goRow.replaceWith(progHost);
+  else card.appendChild(progHost);          // already replaced once (a retry)
+
+  const start = async () => {
+    progHost.replaceChildren(progressComponent(
+      { progress: { stage: 'starting', message: 'starting…' } }));
+    try {
+      await api(`/api/campaigns/${state.campaign.id}/concepts/${concept.id}/choose`,
+                { method: 'POST' });
+      const body = new FormData();
+      body.append('concept_id', concept.id);
+      body.append('aspect', $('ccAspect').value);
+      body.append('duration', $('ccDuration').value);
+      body.append('platform', $('ccPlatform').value);
+      body.append('idempotency_key', `board:${concept.id}:${Date.now()}`);
+      const job = await api(`/api/campaigns/${state.campaign.id}/storyboards`,
+                            { method: 'POST', body });
+      watchBoardJob(job.job_id, progHost, start);
+    } catch (error) {
+      progHost.replaceChildren(jobErrorComponent(error.message || String(error), start));
+    }
+  };
+  start();
+}
+
+// Recovery: a running ad_board job survived a reload — find its concept's card (by the
+// data-concept-id set in renderConcepts above) and resume watching it in place.
+function resumeBoardJob(job) {
+  const card = document.querySelector(
+    `#conceptCards .concept-card[data-concept-id="${job.concept_id}"]`);
+  if (!card) return;    // the concept it belongs to isn't in this render; nothing to attach to
+  document.querySelectorAll('#conceptCards button').forEach((b) => { b.disabled = true; });
+  const goRow = card.querySelector('.go-row');
+  const progHost = document.createElement('div');
+  if (goRow) goRow.replaceWith(progHost);
+  else card.appendChild(progHost);
+  const concept = state.campaignDetail.concepts.find((c) => String(c.id) === job.concept_id);
+  watchBoardJob(job.id, progHost, () => runBoardJob(card, concept), job);
+}
+
+// --- storyboard workspace ------------------------------------------------------------------
+
+async function openVersion(versionId) {
+  const version = await api(`/api/versions/${versionId}`);
+  state.version = version;
+  if (!state.selectedShotKey || !version.shots.some((s) => s.shot_key === state.selectedShotKey)) {
+    state.selectedShotKey = version.shots.length ? version.shots[0].shot_key : null;
+  }
+  renderWorkspace();
+
+  if (version.active_jobs && version.active_jobs.length) {
+    say('notice', 'Generation is running for this version…');
+    try {
+      await Promise.all(version.active_jobs.map((j) => pollJob(`/api/jobs/${j.id}`, {
+        // Patch the matching shot's frame_job/video_job in place on every poll tick —
+        // without this, the strip/inspector only ever show the state from the moment
+        // openVersion was called, and the elapsed-time/stage text would sit frozen for
+        // up to minutes instead of ticking. A full re-fetch happens only once the job
+        // actually finishes (below).
+        onUpdate: (detail) => {
+          if (!detail.shot_id) return;
+          const shot = state.version.shots.find((s) => String(s.id) === String(detail.shot_id));
+          if (!shot) return;
+          const field = detail.kind === 'ad_video' ? 'video_job' : 'frame_job';
+          shot[field] = { id: detail.job_id, status: detail.status, progress: detail.progress,
+                          started_at: detail.started_at, heartbeat_at: detail.heartbeat_at,
+                          typical_seconds: detail.typical_seconds };
+          if (state.selectedShotKey === shot.shot_key) renderInspector();
+          renderStrip();
+        },
+      })));
+      return openVersion(versionId);          // only re-fetch on a real completion
+    } catch (error) {
+      say('error', 'A background job did not finish in time — refresh to check again.');
+    }
+  }
+}
+
+// A director.py SOFT warning {'rule','severity','message'} in plain language: strip the
+// "[9] rule text:" machine prefix, keep the human detail (already has the real numbers —
+// never re-derived in JS), and add one rule-specific, actionable sentence.
+const WARNING_SUFFIXES = {
+  5: ' Consider stretching one shot to 3-6s in the back half of the ad.',
+  6: ' Consider opening on a medium lifestyle shot instead.',
+  9: ' Fine for a multi-piece launch; edit shots if you want a stronger story arc.',
+  10: ' Consider dialing one camera move back to something subtler.',
+};
+
+function humanizeWarning(w) {
+  const detail = String(w.message || '').replace(/^\[\d+\]\s*[^:]+:\s*/, '');
+  const sentence = detail.charAt(0).toUpperCase() + detail.slice(1);
+  return sentence + (WARNING_SUFFIXES[w.rule] || '');
+}
+
+function renderDirectorNotes(v) {
+  const host = $('wDirectorNotes');
+  const warnings = v.warnings || (v.version && v.version.warnings) || [];
+  if (!warnings.length) {
+    host.classList.add('hidden');
+    host.replaceChildren();
+    return;
+  }
+  const box = document.createElement('div');
+  box.className = 'director-notes';
+  const closeBtn = Object.assign(document.createElement('button'),
+    { type: 'button', className: 'notes-close', textContent: '×',
+      title: 'Dismiss', 'aria-label': 'Dismiss' });
+  closeBtn.addEventListener('click', () => host.classList.add('hidden'));
+  const title = Object.assign(document.createElement('div'),
+    { className: 'notes-title', textContent: 'Director notes' });
+  const list = document.createElement('ul');
+  list.replaceChildren(...warnings.map((w) => Object.assign(
+    document.createElement('li'), { textContent: humanizeWarning(w) })));
+  box.append(closeBtn, title, list);
+  host.replaceChildren(box);
+  host.classList.remove('hidden');
+}
+
+function stateBadge(shot) {
+  const span = document.createElement('span');
+  span.className = `state ${shot.state}`;
+  span.textContent = shot.state.replace(/_/g, ' ');
+  return span;
+}
+
+function renderWorkspace() {
+  showScreen('screenWorkspace');
+  const v = state.version;
+  $('wTitle').textContent = v.storyboard.title || 'Untitled storyboard';
+  $('wDuration').textContent =
+    `${v.total_duration}s target · ${v.storyboard.aspect_ratio} · v${v.version.version_number}`;
+
+  $('wVersionSelect').replaceChildren(...v.versions.map((ver) => Object.assign(
+    document.createElement('option'),
+    { value: ver.id, textContent: `V${ver.version_number} · ${ver.status}`,
+      selected: ver.id === v.version.id })));
+
+  $('wApprove').disabled = v.version.status === 'approved';
+  $('wApprove').textContent = v.version.status === 'approved' ? 'Approved' : 'Approve storyboard';
+
+  $('wReady').classList.toggle('hidden', !v.ready_for_render);
+
+  const estimate = v.frame_estimate;
+  const genBtn = $('wGenerateFrames');
+  if (v.version.status !== 'approved' || !estimate || estimate.shots.length === 0) {
+    genBtn.classList.add('hidden');
+  } else {
+    genBtn.classList.remove('hidden');
+    genBtn.textContent = `Generate all frames — ${estimate.credits} credit`
+      + (estimate.credits === 1 ? '' : 's');
+  }
+
+  const videoEstimate = v.video_estimate;
+  const videoBtn = $('wGenerateVideos');
+  if (v.version.status !== 'approved' || !videoEstimate || videoEstimate.shots.length === 0) {
+    videoBtn.classList.add('hidden');
+  } else {
+    videoBtn.classList.remove('hidden');
+    videoBtn.textContent = `Generate all videos — ${videoEstimate.credits} credit`
+      + (videoEstimate.credits === 1 ? '' : 's');
+  }
+
+  // One clear "what happens next" line instead of two stacked hints that used to say
+  // the same "approve the storyboard first" thing twice — it changes with state, rather
+  // than describing why each individual button is hidden.
+  const ordinaryShots = v.shots.filter((s) => s.kind === 'shot');
+  const notInstructionApproved = ordinaryShots.some((s) => s.state === 'draft');
+  const nextHint = $('wFramesHint');
+  let nextText = '';
+  if (v.version.status !== 'approved') {
+    nextText = 'Next: review the shots, then Approve storyboard. Pictures are generated '
+      + 'after approval (1 credit per shot).';
+  } else if (notInstructionApproved) {
+    nextText = 'Next: Approve all instructions, then Generate all frames.';
+  } else if (estimate && estimate.shots.length) {
+    nextText = `Next: Generate all frames — ${estimate.credits} credit`
+      + (estimate.credits === 1 ? '' : 's') + '.';
+  } else if (videoEstimate && videoEstimate.shots.length) {
+    nextText = `Next: Generate all videos — ${videoEstimate.credits} credit`
+      + (videoEstimate.credits === 1 ? '' : 's') + '.';
+  } else if (!v.ready_for_render && ordinaryShots.length) {
+    nextText = 'Next: review each clip and approve it.';
+  }
+  if (nextText) {
+    nextHint.textContent = nextText;
+    nextHint.classList.remove('hidden');
+  } else {
+    nextHint.classList.add('hidden');
+  }
+
+  renderDirectorNotes(v);
+  renderStrip();
+  renderTimeline();
+  renderInspector();
+}
+
+$('wVersionSelect').addEventListener('change', (e) => {
+  setURL({ campaign: state.campaign.id, version: e.target.value }, true);
+  openVersion(e.target.value).catch((err) => say('error', String(err.message || err)));
+});
+
+$('wApprove').addEventListener('click', async () => {
+  try {
+    await api(`/api/versions/${state.version.version.id}/approve`, { method: 'POST' });
+    await openVersion(state.version.version.id);
+    say('notice', 'Storyboard approved. Any further edit will fork a new version.');
+  } catch (error) { say('error', String(error.message || error)); }
+});
+
+$('wFork').addEventListener('click', async () => {
+  try {
+    const result = await api(`/api/versions/${state.version.version.id}/fork`,
+                             { method: 'POST' });
+    setURL({ campaign: state.campaign.id, version: result.version_id }, true);
+    await openVersion(result.version_id);
+  } catch (error) { say('error', String(error.message || error)); }
+});
+
+$('wApproveAll').addEventListener('click', async () => {
+  const btn = $('wApproveAll');
+  btn.disabled = true;
+  try {
+    for (const shot of state.version.shots) {
+      if (shot.state === 'draft') {
+        try { await api(`/api/shots/${shot.id}/approve-instructions`, { method: 'POST' }); }
+        catch (error) { /* a shot that can't advance is left for the inspector to explain */ }
+      }
+    }
+    await openVersion(state.version.version.id);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function renderStrip() {
+  const shots = state.version.shots;
+  const wrap = $('wStrip');
+  const nodes = [];
+  shots.forEach((shot, index) => {
+    nodes.push(shotCard(shot, index));
+    nodes.push(addBetween(index));
+  });
+  wrap.replaceChildren(...nodes);
+}
+
+// Truncated-but-titled text: the visible line is CSS-clamped (see .script-scene/
+// .script-action), the full string is still there for anyone who hovers.
+function clampText(el, text) {
+  el.textContent = text || '';
+  el.title = text || '';
+}
+
+function frameThumb(shot) {
+  const div = document.createElement('div');
+  const spec = shot.spec || {};
+  if (shot.kind === 'end_card') {
+    div.className = 'frame end-card';
+    if (spec.brand_text || spec.tagline) {
+      div.innerHTML = '<div class="script-brand"></div><div class="script-tagline"></div>';
+      div.querySelector('.script-brand').textContent = spec.brand_text || '';
+      div.querySelector('.script-tagline').textContent = spec.tagline ? `"${spec.tagline}"` : '';
+    } else {
+      div.textContent = 'End card';
+    }
+    return div;
+  }
+  if (shot.frame_job) {
+    div.className = 'frame generating';
+    div.appendChild(progressComponent(shot.frame_job, { compact: true }));
+    return div;
+  }
+  if (shot.frame_error) {
+    div.className = 'frame failed';
+    const label = document.createElement('span');
+    label.textContent = 'Failed';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', (e) => { e.stopPropagation(); generateFrame(shot.id); });
+    div.append(label, retry);
+    return div;
+  }
+  if (shot.selected_video_url) {
+    // The selected clip's poster, with hover-to-play (muted) — the frame it was built
+    // from is the fallback poster when the clip has none of its own yet.
+    div.className = 'frame';
+    const selectedVariant = (shot.video_variants || []).find(
+      (variant) => variant.id === String(shot.selected_video_asset_id));
+    const poster = (selectedVariant && selectedVariant.poster_url) || shot.selected_frame_url || '';
+    const img = document.createElement('img');
+    img.src = poster;
+    img.alt = '';
+    const vid = document.createElement('video');
+    vid.src = shot.selected_video_url;
+    vid.muted = true;
+    vid.loop = true;
+    vid.playsInline = true;
+    vid.preload = 'none';
+    vid.style.cssText = 'width:100%;height:100%;object-fit:cover;display:none';
+    div.append(img, vid);
+    div.addEventListener('mouseenter', () => {
+      img.style.display = 'none';
+      vid.style.display = 'block';
+      vid.play().catch(() => {});
+    });
+    div.addEventListener('mouseleave', () => {
+      vid.pause();
+      vid.currentTime = 0;
+      vid.style.display = 'none';
+      img.style.display = '';
+    });
+    if (shot.video_job) {
+      const badge = document.createElement('span');
+      badge.className = 'clip-generating-badge';
+      badge.textContent = (shot.video_job.progress && shot.video_job.progress.message)
+        || 'New clip…';
+      div.appendChild(badge);
+    }
+    return div;
+  }
+  if (shot.selected_frame_url) {
+    div.className = 'frame';
+    const img = document.createElement('img');
+    img.src = shot.selected_frame_url;
+    img.alt = '';
+    div.appendChild(img);
+    return div;
+  }
+  // No frame yet: a script-style card (shot_type/camera_move header, scene, action) —
+  // an empty tile with just "medium" centred on it reads as broken, not "not started".
+  div.className = 'frame script';
+  const header = [spec.shot_type, spec.camera_move].filter(Boolean).join(' · ').toUpperCase()
+    || 'SHOT';
+  div.innerHTML = '<div class="script-head"></div><div class="script-scene"></div>'
+    + '<div class="script-action"></div>';
+  div.querySelector('.script-head').textContent = header;
+  clampText(div.querySelector('.script-scene'), spec.scene_description);
+  clampText(div.querySelector('.script-action'), spec.character_action);
+  return div;
+}
+
+function shotCard(shot, index) {
+  const card = document.createElement('div');
+  card.className = 'shot-card' + (shot.shot_key === state.selectedShotKey ? ' selected' : '');
+  const spec = shot.spec || {};
+  card.appendChild(frameThumb(shot));
+  card.insertAdjacentHTML('beforeend', `
+    <div class="meta">
+      <span class="num"></span>
+    </div>
+    <div class="row"></div>`);
+  card.querySelector('.num').textContent =
+    `#${index + 1} · ${Number(shot.duration)}s`;
+  const meta = card.querySelector('.meta');
+  meta.appendChild(stateBadge(shot));
+  if (shot.kind !== 'end_card' && spec.product_visibility && spec.product_visibility !== 'none') {
+    const tag = document.createElement('span');
+    tag.className = 'product-tag';
+    tag.textContent = `Product: ${spec.product_visibility}`;
+    meta.appendChild(tag);
+  }
+
+  const row = card.querySelector('.row');
+  const dup = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Dup' });
+  dup.addEventListener('click', (e) => { e.stopPropagation(); shotOp('duplicate', shot.id); });
+  const split = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Split' });
+  split.addEventListener('click', (e) => { e.stopPropagation(); shotOp('split', shot.id); });
+  const del = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Delete' });
+  del.addEventListener('click', (e) => { e.stopPropagation(); shotOp('delete', shot.id); });
+  row.append(dup, split, del);
+
+  card.addEventListener('click', () => {
+    state.selectedShotKey = shot.shot_key;
+    renderStrip(); renderTimeline(); renderInspector();
+  });
+  return card;
+}
+
+function addBetween(afterIndex) {
+  const wrap = document.createElement('div');
+  wrap.className = 'add-between';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = '+';
+  btn.title = 'Add a shot here';
+  btn.addEventListener('click', async () => {
+    try {
+      const result = await api(`/api/versions/${state.version.version.id}/shots`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ after_position: afterIndex, duration: 2, spec: {} }),
+      });
+      await openVersion(result.version_id);
+    } catch (error) { say('error', String(error.message || error)); }
+  });
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+async function shotOp(op, shotId) {
+  try {
+    const result = await api(`/api/shots/${shotId}/${op}`, { method: 'POST' });
+    await openVersion(result.version_id);
+  } catch (error) { say('error', String(error.message || error)); }
+}
+
+// --- frames --------------------------------------------------------------------------
+
+async function generateFrame(shotId) {
+  try {
+    const body = new FormData();
+    body.append('idempotency_key', `frame:${shotId}:${Date.now()}`);
+    await api(`/api/shots/${shotId}/frames`, { method: 'POST', body });
+    await openVersion(state.version.version.id);
+  } catch (error) { say('error', String(error.message || error)); }
+}
+
+async function generateVideo(shotId) {
+  try {
+    const body = new FormData();
+    body.append('idempotency_key', `video:${shotId}:${Date.now()}`);
+    await api(`/api/shots/${shotId}/videos`, { method: 'POST', body });
+    await openVersion(state.version.version.id);
+  } catch (error) { say('error', String(error.message || error)); }
+}
+
+function confirmDialog(title, message, onConfirm) {
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.innerHTML = `
+    <div class="confirm-box">
+      <h3></h3><p></p>
+      <div class="go-row">
+        <button class="ghost small" type="button" data-cancel>Cancel</button>
+        <button class="go small" type="button" data-confirm>Confirm</button>
+      </div>
+    </div>`;
+  overlay.querySelector('h3').textContent = title;
+  overlay.querySelector('p').textContent = message;
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('[data-cancel]').addEventListener('click', close);
+  overlay.querySelector('[data-confirm]').addEventListener('click', async () => {
+    close();
+    await onConfirm();
+  });
+  document.body.appendChild(overlay);
+}
+
+$('wGenerateFrames').addEventListener('click', () => {
+  const estimate = state.version.frame_estimate;
+  if (!estimate || estimate.shots.length === 0) return;
+  confirmDialog('Generate all frames?',
+    `${estimate.shots.length} shot(s) need a frame, at ${estimate.per_shot} credit(s) `
+    + `each — ${estimate.credits} credit(s) total. This runs against your balance `
+    + 'immediately.',
+    async () => {
+      try {
+        const body = new FormData();
+        body.append('confirm_credits', String(estimate.credits));
+        body.append('idempotency_key', `frames-batch:${state.version.version.id}:${Date.now()}`);
+        await api(`/api/versions/${state.version.version.id}/frames`,
+                 { method: 'POST', body });
+        await openVersion(state.version.version.id);
+      } catch (error) { say('error', String(error.message || error)); }
+    });
+});
+
+$('wGenerateVideos').addEventListener('click', () => {
+  const estimate = state.version.video_estimate;
+  if (!estimate || estimate.shots.length === 0) return;
+  confirmDialog('Generate all videos?',
+    `${estimate.shots.length} shot(s) need a clip, ${estimate.credits} credit(s) total `
+    + '(each clip is priced by its own length). This runs against your balance immediately.',
+    async () => {
+      try {
+        const body = new FormData();
+        body.append('confirm_credits', String(estimate.credits));
+        body.append('idempotency_key', `videos-batch:${state.version.version.id}:${Date.now()}`);
+        await api(`/api/versions/${state.version.version.id}/videos`,
+                 { method: 'POST', body });
+        await openVersion(state.version.version.id);
+      } catch (error) { say('error', String(error.message || error)); }
+    });
+});
+
+function renderTimeline() {
+  const shots = state.version.shots;
+  const total = Number(state.version.total_duration) || 1;
+  $('wTimeline').replaceChildren(...shots.map((shot) => {
+    const seg = document.createElement('div');
+    seg.className = 'tl-seg' + (shot.kind === 'end_card' ? ' end-card' : '')
+      + (shot.shot_key === state.selectedShotKey ? ' selected' : '');
+    seg.style.width = `${(Number(shot.duration) / total) * 100}%`;
+    seg.title = `starts at ${Number(shot.start_time).toFixed(1)}s, ${Number(shot.duration)}s`;
+    seg.textContent = `${Number(shot.start_time).toFixed(1)}s`;
+    seg.addEventListener('click', () => {
+      state.selectedShotKey = shot.shot_key;
+      renderStrip(); renderTimeline(); renderInspector();
+    });
+    return seg;
+  }));
+}
+
+function currentShot() {
+  return state.version.shots.find((s) => s.shot_key === state.selectedShotKey) || null;
+}
+
+function renderInspector() {
+  const host = $('wInspector');
+  const shot = currentShot();
+  if (!shot) { host.replaceChildren(Object.assign(document.createElement('div'),
+    { className: 'empty-inspector', textContent: 'Select a shot to edit it.' })); return; }
+
+  if (shot.kind === 'end_card') { renderEndCardInspector(host, shot); return; }
+
+  host.replaceChildren();
+  const h3 = document.createElement('h3');
+  h3.textContent = `Shot — ${shot.state.replace(/_/g, ' ')}`;
+  host.appendChild(h3);
+
+  const tabs = document.createElement('div');
+  tabs.className = 'itabs';
+  TAB_NAMES.forEach((name) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = name;
+    btn.setAttribute('aria-pressed', String(name === state.selectedTab));
+    btn.addEventListener('click', () => { state.selectedTab = name; renderInspector(); });
+    tabs.appendChild(btn);
+  });
+  host.appendChild(tabs);
+
+  const fields = document.createElement('div');
+  fields.className = 'ifields';
+  TABS[state.selectedTab].forEach(([key, type, label, options]) => {
+    fields.appendChild(fieldRow(shot, key, type, label, options));
+  });
+  host.appendChild(fields);
+
+  if (state.selectedTab === 'Product') {
+    fields.appendChild(idChecklist('Products', shot, 'product_ids',
+      state.campaignDetail.products, (p) => p.name || p.category));
+    fields.appendChild(idChecklist('Characters', shot, 'character_ids',
+      state.campaignDetail.characters, (c) => c.name));
+  }
+  if (state.selectedTab === 'Frames') {
+    fields.appendChild(framesPanel(shot));
+  }
+  if (state.selectedTab === 'Videos') {
+    fields.appendChild(videosPanel(shot));
+  }
+
+  const approveRow = document.createElement('div');
+  approveRow.className = 'approve-row';
+  const approveBtn = document.createElement('button');
+  approveBtn.type = 'button';
+  approveBtn.className = 'go small';
+  approveBtn.textContent = shot.state === 'draft' ? 'Approve instructions' : 'Instructions approved';
+  approveBtn.disabled = shot.state !== 'draft';
+  approveBtn.addEventListener('click', async () => {
+    try {
+      const result = await api(`/api/shots/${shot.id}/approve-instructions`,
+                               { method: 'POST' });
+      await openVersion(result.version_id);
+    } catch (error) { say('error', String(error.message || error)); }
+  });
+  approveRow.appendChild(approveBtn);
+  host.appendChild(approveRow);
+}
+
+function framesPanel(shot) {
+  const wrap = document.createElement('div');
+  const variants = shot.frame_variants || [];
+
+  if (variants.length === 0) {
+    if (shot.frame_job) {
+      wrap.appendChild(progressComponent(shot.frame_job));
+    } else {
+      const empty = document.createElement('p');
+      empty.className = 'frame-empty';
+      empty.textContent = 'No frames generated yet.';
+      wrap.appendChild(empty);
+    }
+  } else {
+    const gallery = document.createElement('div');
+    gallery.className = 'variant-gallery';
+    variants.forEach((v) => {
+      const thumb = document.createElement('button');
+      thumb.type = 'button';
+      thumb.className = 'variant-thumb'
+        + (String(shot.selected_frame_asset_id) === v.id ? ' selected' : '');
+      thumb.innerHTML = `<img src="${v.url}" alt="Frame variant ${v.variant}">`
+        + `<span class="v-num">V${v.variant}</span>`;
+      if (v.fidelity) {
+        const badge = document.createElement('span');
+        badge.className = `fidelity-badge ${v.fidelity.ok ? 'ok' : 'warn'}`;
+        badge.textContent = v.fidelity.ok ? '✓' : '⚠';
+        badge.title = v.fidelity.reason || '';
+        thumb.appendChild(badge);
+      }
+      thumb.addEventListener('click', async () => {
+        try {
+          const body = new FormData();
+          body.append('asset_id', v.id);
+          await api(`/api/shots/${shot.id}/select`, { method: 'POST', body });
+          await openVersion(state.version.version.id);
+        } catch (error) { say('error', String(error.message || error)); }
+      });
+      gallery.appendChild(thumb);
+    });
+    wrap.appendChild(gallery);
+  }
+
+  if (shot.frame_error) {
+    wrap.appendChild(jobErrorComponent(shot.frame_error, () => generateFrame(shot.id)));
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'frame-actions';
+
+  const price = (state.version.frame_estimate || {}).per_shot || 1;
+  const regenBtn = document.createElement('button');
+  regenBtn.type = 'button';
+  regenBtn.className = 'ghost small';
+  regenBtn.textContent = variants.length === 0 ? `Generate (${price} credit)`
+    : `Regenerate (${price} credit)`;
+  regenBtn.disabled = Boolean(shot.frame_job) || shot.state === 'draft';
+  regenBtn.addEventListener('click', () => generateFrame(shot.id));
+  actions.appendChild(regenBtn);
+
+  const approveBtn = document.createElement('button');
+  approveBtn.type = 'button';
+  approveBtn.className = 'go small';
+  approveBtn.textContent = shot.state === 'frame_approved' ? 'Frame approved' : 'Approve frame';
+  approveBtn.disabled = shot.state === 'frame_approved' || !shot.selected_frame_asset_id;
+  approveBtn.addEventListener('click', async () => {
+    try {
+      await api(`/api/shots/${shot.id}/approve-frame`, { method: 'POST', body: new FormData() });
+      await openVersion(state.version.version.id);
+    } catch (error) { say('error', String(error.message || error)); }
+  });
+  actions.appendChild(approveBtn);
+
+  wrap.appendChild(actions);
+  return wrap;
+}
+
+// A clip needs an approved frame to animate — the same states shot_state.py's own
+// transition table allows a start_video/retry event from (frame_approved, video_review,
+// video_approved, video_failed).
+const VIDEO_ELIGIBLE_STATES = ['frame_approved', 'video_generating', 'video_review',
+                               'video_approved', 'video_failed'];
+
+function videosPanel(shot) {
+  const wrap = document.createElement('div');
+  if (!VIDEO_ELIGIBLE_STATES.includes(shot.state)) {
+    const note = document.createElement('p');
+    note.className = 'frame-empty';
+    note.textContent = 'Approve a frame first to generate a clip.';
+    wrap.appendChild(note);
+    return wrap;
+  }
+
+  const variants = shot.video_variants || [];
+  if (variants.length === 0) {
+    if (shot.video_job) {
+      wrap.appendChild(progressComponent(shot.video_job));
+    } else {
+      const empty = document.createElement('p');
+      empty.className = 'frame-empty';
+      empty.textContent = 'No clips generated yet.';
+      wrap.appendChild(empty);
+    }
+  } else {
+    const gallery = document.createElement('div');
+    gallery.className = 'variant-gallery video-gallery';
+    variants.forEach((v) => {
+      const thumb = document.createElement('button');
+      thumb.type = 'button';
+      thumb.className = 'variant-thumb video-thumb'
+        + (String(shot.selected_video_asset_id) === v.id ? ' selected' : '');
+      thumb.innerHTML = `<video src="${v.url}" ${v.poster_url ? `poster="${v.poster_url}"` : ''}
+          muted playsinline preload="metadata" controls></video>`
+        + `<span class="v-num">V${v.variant}${v.clip_seconds ? ` · ${v.clip_seconds}s` : ''}</span>`;
+      if (v.fidelity) {
+        const badge = document.createElement('span');
+        badge.className = `fidelity-badge ${v.fidelity.ok ? 'ok' : 'warn'}`;
+        badge.textContent = v.fidelity.ok ? '✓' : '⚠';
+        badge.title = v.fidelity.reason || '';
+        thumb.appendChild(badge);
+      }
+      // Native <video controls> needs its own clicks (play/scrub/volume) — only a click
+      // that lands outside the player itself should select this variant.
+      thumb.addEventListener('click', async (e) => {
+        if (e.target.tagName === 'VIDEO') return;
+        try {
+          const body = new FormData();
+          body.append('asset_id', v.id);
+          await api(`/api/shots/${shot.id}/select`, { method: 'POST', body });
+          await openVersion(state.version.version.id);
+        } catch (error) { say('error', String(error.message || error)); }
+      });
+      gallery.appendChild(thumb);
+    });
+    wrap.appendChild(gallery);
+  }
+
+  if (shot.video_error) {
+    wrap.appendChild(jobErrorComponent(shot.video_error, () => generateVideo(shot.id)));
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'frame-actions';
+
+  const perShotPrices = (state.version.video_estimate || {}).per_shot || {};
+  const price = perShotPrices[shot.id];
+  const priceLabel = price ? ` (${price} credit${price === 1 ? '' : 's'})` : '';
+  const isFailed = shot.state === 'video_failed';
+
+  const genBtn = document.createElement('button');
+  genBtn.type = 'button';
+  genBtn.className = 'ghost small';
+  genBtn.textContent = isFailed ? `Retry${priceLabel}`
+    : (variants.length === 0 ? `Generate${priceLabel}` : `Regenerate${priceLabel}`);
+  genBtn.disabled = Boolean(shot.video_job);
+  genBtn.addEventListener('click', () => generateVideo(shot.id));
+  actions.appendChild(genBtn);
+
+  const approveBtn = document.createElement('button');
+  approveBtn.type = 'button';
+  approveBtn.className = 'go small';
+  approveBtn.textContent = shot.state === 'video_approved' ? 'Video approved' : 'Approve video';
+  approveBtn.disabled = shot.state === 'video_approved' || !shot.selected_video_asset_id;
+  approveBtn.addEventListener('click', async () => {
+    try {
+      await api(`/api/shots/${shot.id}/approve-video`, { method: 'POST', body: new FormData() });
+      await openVersion(state.version.version.id);
+    } catch (error) { say('error', String(error.message || error)); }
+  });
+  actions.appendChild(approveBtn);
+
+  wrap.appendChild(actions);
+  return wrap;
+}
+
+function renderEndCardInspector(host, shot) {
+  host.replaceChildren();
+  const h3 = document.createElement('h3');
+  h3.textContent = 'End card';
+  host.appendChild(h3);
+  const fields = document.createElement('div');
+  fields.className = 'ifields';
+  fields.appendChild(specFieldRow(shot, 'brand_text', 'text', 'Brand text'));
+  fields.appendChild(specFieldRow(shot, 'tagline', 'text', 'Tagline'));
+  fields.appendChild(fieldRow(shot, 'duration', 'number', 'Duration (s)'));
+  host.appendChild(fields);
+}
+
+// A field is either a real column (duration/image_prompt/motion_prompt) or one of
+// spec's keys — PATCH /api/shots/{id} accepts either shape in the same patch dict, so
+// the client only needs to know which value to read FROM, not where the server writes it.
+function fieldValue(shot, key) {
+  if (key in shot && key !== 'spec') return shot[key];
+  return (shot.spec || {})[key] ?? '';
+}
+
+function fieldRow(shot, key, type, label, options) {
+  return buildFieldRow(shot, key, type, label, options, fieldValue(shot, key));
+}
+function specFieldRow(shot, key, type, label) {
+  return buildFieldRow(shot, key, type, label, null, (shot.spec || {})[key] || '');
+}
+
+function buildFieldRow(shot, key, type, label, options, value) {
+  const wrap = document.createElement('label');
+  const span = document.createElement('span');
+  span.textContent = label;
+  wrap.appendChild(span);
+  let input;
+  if (type === 'select') {
+    input = document.createElement('select');
+    input.appendChild(Object.assign(document.createElement('option'),
+      { value: '', textContent: '—' }));
+    options.forEach((opt) => input.appendChild(Object.assign(
+      document.createElement('option'), { value: opt, textContent: opt })));
+    input.value = value || '';
+  } else if (type === 'textarea') {
+    input = document.createElement('textarea');
+    input.value = value || '';
+  } else {
+    input = document.createElement('input');
+    input.type = type === 'number' ? 'number' : 'text';
+    if (type === 'number') input.step = '0.5';
+    input.value = value ?? '';
+  }
+  input.addEventListener('change', () => patchShot(shot, key, type === 'number'
+    ? Number(input.value) : input.value));
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function idChecklist(label, shot, key, options, nameOf) {
+  const wrap = document.createElement('div');
+  const span = document.createElement('span');
+  span.textContent = label;
+  wrap.appendChild(span);
+  const grid = document.createElement('div');
+  grid.className = 'check-grid';
+  const selected = new Set(shot[key] || []);
+  options.forEach((opt) => {
+    const row = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = selected.has(opt.id);
+    cb.addEventListener('change', () => {
+      const next = new Set(shot[key] || []);
+      if (cb.checked) next.add(opt.id); else next.delete(opt.id);
+      patchShot(shot, key, [...next]);
+    });
+    row.append(cb, document.createTextNode(nameOf(opt)));
+    grid.appendChild(row);
+  });
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+async function patchShot(shot, key, value) {
+  try {
+    const result = await api(`/api/shots/${shot.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: value }),
+    });
+    const forked = result.version_id !== state.version.version.id;
+    setURL({ campaign: state.campaign.id, version: result.version_id }, false);
+    await openVersion(result.version_id);
+    if (forked) {
+      const newVersion = state.version.versions.find((v) => v.id === result.version_id);
+      say('notice', `Approved version is locked — editing created `
+        + `V${newVersion ? newVersion.version_number : '?'}.`);
+    }
+  } catch (error) {
+    say('error', String(error.message || error));
+  }
+}
+
+// --- boot: read the URL, recover whatever it points at ----------------------------------
+
+async function boot(initial) {
+  try {
+    await loadSession();
+    await loadBalance();
+    const params = urlParams();
+    if (params.campaign) {
+      await openCampaign(params.campaign, params.version);
+    } else {
+      await loadCampaignList();
+    }
+  } catch (error) {
+    say('error', String(error.message || error));
+  }
+}
+
+boot(true);
+</script>
+</body>
+</html>

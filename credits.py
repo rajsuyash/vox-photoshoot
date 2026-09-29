@@ -37,6 +37,9 @@ COST = {
     # worth more than one throwaway image — but it is priced as what it is, because a
     # customer who has not seen the result yet reads a bigger number as a bigger risk.
     'model': 1,
+    # One ad frame is one generated still, same basis as a reshoot — the resolution
+    # multiplier still applies via cost(), so a 4K frame costs twice a 2K one.
+    'ad_frame': 1,
 }
 
 # One credit is priced against $0.15 of provider spend — fal's nano-banana-pro/edit @2K

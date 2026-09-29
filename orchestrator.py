@@ -1,0 +1,1169 @@
+"""Generation service layer for the storyboard ad editor: reference frames (Phase 3) and
+shot clips (Phase 4) — start_video/run_video_shot mirror start_frame/run_frame's exact
+claim/heartbeat/finish/settle shape, which itself mirrors app.py's run_video.
+
+No FastAPI here — ads_api.py turns these into HTTP, the same split storyboard.py/ads_api.py
+already draw. storyboard.py owns the state machine and persistence; this file owns talking
+to providers and turning the result back into storyboard.py calls.
+
+    .venv/bin/python orchestrator.py     # prompt composition + reference ordering + estimate
+                                          # (DB parts skip without DATABASE_URL; no network)
+"""
+
+import hashlib
+import json
+import logging
+import math
+import os
+import pathlib
+import tempfile
+
+import credits
+import db
+import jobs
+import motion
+import pieces
+import providers
+import shoot
+import shot_state
+import storage
+import storyboard
+import talent
+import video
+
+OUT_DIR = pathlib.Path('out/ads')
+REF_CACHE_DIR = OUT_DIR / 'refs'
+
+QUALITY = 'high'                 # matches shoot.py's DEFAULTS — the house default for frames
+MAX_REFERENCE_IMAGES = 4
+MAX_PROMPT_CHARS = 4000          # "keep it readable" — plenty for a shot prompt, never hit
+                                  # in practice; a hard cap rather than a token-accurate budget.
+
+FRAME_FIDELITY_MODEL = 'claude-haiku-4-5'          # matches video.FIDELITY_MODEL
+FRAME_FIDELITY_SCHEMA = {
+    'type': 'object',
+    'properties': {'same_design': {'type': 'boolean'}, 'reason': {'type': 'string'}},
+    'required': ['same_design', 'reason'],
+    'additionalProperties': False,
+}
+
+NEGATIVE_CLAUSE = (
+    'The jewellery must match the reference image exactly in shape, proportion, stone '
+    'layout and metal colour — no redesign, and do not add any jewellery beyond what is '
+    'described above.'
+)
+
+# The spec fields that describe the still image itself, in reading order, with the label
+# each gets in the composed prompt. Mirrors shot_state.FIELD_GROUPS' 'frame' group —
+# everything that invalidates a generated frame is exactly what belongs in its prompt.
+SPEC_FIELDS = [
+    ('shot_type', 'Shot'), ('camera_angle', 'Camera angle'), ('lens', 'Lens'),
+    ('depth_of_field', 'Depth of field'), ('scene_description', 'Scene'),
+    ('character_action', 'Action'), ('facial_expression', 'Expression'),
+    ('product_interaction', 'Product interaction'), ('environment', 'Environment'),
+    ('lighting', 'Lighting'), ('time_of_day', 'Time of day'), ('wardrobe', 'Wardrobe'),
+    ('props', 'Props'),
+]
+
+
+class NotApproved(Exception):
+    """A production event (start_frame) was requested against a version that is not
+    'approved' — frames only generate against the storyboard the customer signed off."""
+
+
+class EstimateMismatch(Exception):
+    """A batch's confirm_credits didn't match the server's own estimate. .estimate is the
+    fresh one, so the caller (ads_api.py) can hand it straight back to the client."""
+
+    def __init__(self, estimate: dict):
+        super().__init__(f"confirm_credits did not match the current estimate: {estimate}")
+        self.estimate = estimate
+
+
+# --- context: everything a version's shots need to compose a prompt, built once ----------
+
+def _local_product_path(piece_row: dict) -> str | None:
+    """The product's reference photo, on local disk — fetched from storage once and
+    cached under REF_CACHE_DIR, the same recovery path app.piece_path uses."""
+    key = pieces.key_for(piece_row)
+    if not key:
+        return None
+    local = REF_CACHE_DIR / 'products' / pathlib.Path(key).name
+    if not local.exists():
+        try:
+            storage.fetch(key, local)
+        except FileNotFoundError:
+            return None
+    return str(local)
+
+
+def _load_products(product_ids: list[str]) -> list[dict]:
+    if not product_ids:
+        return []
+    rows = db.query(
+        """SELECT cp.id, cp.fidelity_instructions, cp.piece_id, p.s3_key, p.category,
+                  p.description, p.sku
+             FROM campaign_products cp JOIN pieces p ON p.id = cp.piece_id
+            WHERE cp.id = ANY(%s::uuid[])""", (product_ids,))
+    out = []
+    for r in rows:
+        name = (r['sku'] or r['description'] or r['category'] or '').strip()
+        out.append({
+            'id': str(r['id']), 'name': name, 'description': name, 'category': r['category'],
+            'fidelity_instructions': r['fidelity_instructions'],
+            'local_path': _local_product_path({'id': r['piece_id'], 's3_key': r['s3_key']}),
+        })
+    return out
+
+
+def _clean_description(text: str) -> str:
+    """Some house cast.json entries carry a literal, unfilled '{EXPRESSION}' token (a
+    pre-existing bug in how cast.json is generated, tracked separately from this phase —
+    see video_spike.py's _subject_clause for the same workaround). We have no
+    expression-selection UI for ads yet, so the placeholder is simply dropped rather than
+    leaking into a real generation prompt.
+    """
+    return (text or '').replace('{EXPRESSION}', '').strip()
+
+
+def _load_characters(character_ids: list[str], workspace_id: str) -> list[dict]:
+    if not character_ids:
+        return []
+    rows = db.query('SELECT * FROM campaign_characters WHERE id = ANY(%s::uuid[])',
+                    (character_ids,))
+    cast_entries = None
+    out = []
+    for r in rows:
+        description, face_path = '', None
+        if r['talent_id']:
+            owned = talent.owned(r['talent_id'], workspace_id)
+            if owned:
+                face = talent.face(owned)
+                description, face_path = face['description'], face['file']
+        elif r['cast_key']:
+            if cast_entries is None:
+                cast_entries = shoot.load_cast()
+            entry = cast_entries.get(r['cast_key'])
+            if entry:
+                description, face_path = entry['description'], entry['file']
+        else:
+            description = (r['appearance'] or {}).get('description', '')
+        out.append({'id': str(r['id']), 'name': r['name'],
+                    'description': _clean_description(description), 'face_path': face_path})
+    return out
+
+
+def build_context(workspace_id: str, version_id: str) -> dict:
+    """Everything shared across every shot in this version — campaign/storyboard style,
+    every product and character referenced anywhere in it, local reference files resolved
+    once. Built once per version (or per batch), never once per shot.
+    """
+    version = storyboard.get_version(workspace_id, version_id)
+    campaign = storyboard.get_campaign(workspace_id, version['storyboard']['campaign_id'])
+    product_ids = sorted({str(pid) for s in version['shots'] for pid in (s['product_ids'] or [])})
+    character_ids = sorted({str(cid) for s in version['shots']
+                            for cid in (s['character_ids'] or [])})
+    products = {p['id']: p for p in _load_products(product_ids)}
+    characters = {c['id']: c for c in _load_characters(character_ids, workspace_id)}
+    return {'campaign': campaign, 'storyboard': version['storyboard'], 'shots': version['shots'],
+            'products': products, 'characters': characters}
+
+
+# --- prompt composition + reference ordering, pure functions, no I/O ---------------------
+
+def compose_frame_prompt(ctx: dict, shot: dict) -> str:
+    """Deterministic, no LLM. Layers: brand/campaign style -> the one grade for the whole
+    ad -> a block per character -> a block per product (with fidelity instructions) -> the
+    shot spec (or the user's own image_prompt override, still wrapped in the layers above)
+    -> a negative clause. Reuses the phrasing locations.compose's CRAFT_BASE/negative
+    clauses use for product fidelity, rather than inventing a second vocabulary for it.
+    """
+    campaign = ctx['campaign'] or {}
+    board = ctx['storyboard'] or {}
+    spec = shot.get('spec') or {}
+    parts = []
+
+    style_bits = [b for b in (campaign.get('brand_style'), campaign.get('campaign_style'))
+                 if b]
+    if style_bits:
+        parts.append('Brand style: ' + '; '.join(style_bits) + '.')
+
+    grade_bits = [b for b in (board.get('visual_style'), board.get('palette')) if b]
+    if grade_bits:
+        parts.append('Visual grade, one look for the whole ad: ' + '; '.join(grade_bits) + '.')
+
+    for cid in shot.get('character_ids') or []:
+        character = ctx['characters'].get(str(cid))
+        if not character:
+            continue
+        bits = [character.get('name', ''), character.get('description', '')]
+        if spec.get('wardrobe'):
+            bits.append(f"wearing {spec['wardrobe']}")
+        text = ', '.join(b for b in bits if b)
+        if text:
+            parts.append(f'Character — {text}.')
+
+    for pid in shot.get('product_ids') or []:
+        product_ctx = ctx['products'].get(str(pid))
+        if not product_ctx:
+            continue
+        desc = product_ctx.get('description') or product_ctx.get('category') or 'the piece'
+        parts.append(
+            f'Product — {desc}, shown from the reference image. Reproduce exactly: shape, '
+            'stones, metal colour, proportions, scale.')
+        if product_ctx.get('fidelity_instructions'):
+            parts.append(product_ctx['fidelity_instructions'])
+
+    if shot.get('image_prompt'):
+        parts.append(shot['image_prompt'])
+    else:
+        spec_bits = [f'{label}: {spec[key]}' for key, label in SPEC_FIELDS if spec.get(key)]
+        if spec_bits:
+            parts.append('. '.join(spec_bits) + '.')
+
+    parts.append(NEGATIVE_CLAUSE)
+    prompt = ' '.join(parts)
+    if len(prompt) > MAX_PROMPT_CHARS:
+        prompt = prompt[:MAX_PROMPT_CHARS].rsplit(' ', 1)[0] + '…'
+    return prompt
+
+
+def reference_images(ctx: dict, shot: dict) -> list[str]:
+    """Local file paths, product photos first (the reference that must not be
+    compromised — same ordering shoot.build uses), then the first character's master
+    portrait, then (continuity) the previous shot's selected+approved frame if it shares
+    a character with this one. Capped at MAX_REFERENCE_IMAGES. Uploading is the caller's
+    job (run_frame), same split shoot.shoot() draws between build() and the upload call.
+    """
+    paths = []
+    for pid in shot.get('product_ids') or []:
+        product_ctx = ctx['products'].get(str(pid))
+        if product_ctx and product_ctx.get('local_path'):
+            paths.append(product_ctx['local_path'])
+
+    character_ids = [str(cid) for cid in (shot.get('character_ids') or [])]
+    if character_ids:
+        character = ctx['characters'].get(character_ids[0])
+        if character and character.get('face_path'):
+            paths.append(character['face_path'])
+
+    shots = ctx.get('shots') or []
+    index = next((i for i, s in enumerate(shots) if str(s['id']) == str(shot['id'])), None)
+    if index is not None and index > 0 and character_ids:
+        previous = shots[index - 1]
+        previous_characters = {str(cid) for cid in (previous.get('character_ids') or [])}
+        if (previous_characters & set(character_ids) and previous.get('selected_frame_asset_id')
+                and previous.get('state') in ('frame_approved', 'video_review',
+                                              'video_approved', 'video_failed')):
+            continuity_path = _local_asset_path(previous['selected_frame_asset_id'])
+            if continuity_path:
+                paths.append(continuity_path)
+
+    return paths[:MAX_REFERENCE_IMAGES]
+
+
+def _local_asset_path(asset_id: str) -> str | None:
+    """A local copy of one generated_assets row's key, fetched once and cached.
+
+    Used both for continuity references and (Phase 4) for the frame a clip animates —
+    real keys look like `ads/<campaign>/<shot_key>/frame-<variant>.png`, so the bare
+    filename alone is NOT unique: every shot's own first variant is literally
+    "frame-1.png". The cache path keeps the shot_key segment too, or two different
+    shots' assets collide on one cached file (the second call would silently hand back
+    the FIRST shot's picture instead of fetching its own).
+    """
+    row = db.query('SELECT key FROM generated_assets WHERE id = %s', (asset_id,), one=True)
+    if row is None:
+        return None
+    key_path = pathlib.Path(row['key'])
+    local_name = f'{key_path.parent.name}-{key_path.name}' if key_path.parent.name else key_path.name
+    local = REF_CACHE_DIR / 'continuity' / local_name
+    if not local.exists():
+        try:
+            storage.fetch(row['key'], local)
+        except FileNotFoundError:
+            return None
+    return str(local)
+
+
+def _pick_aspect(provider, aspect_ratio: str) -> tuple[str, str | None]:
+    """(aspect actually requested, a note if it had to be substituted). fal supports
+    9:16/4:5/1:1/16:9 directly today, so the substitution path is a safety net, not the
+    common case."""
+    if aspect_ratio in provider.aspect_ratios:
+        return aspect_ratio, None
+    width, height = (int(x) for x in aspect_ratio.split(':'))
+    nearest = provider.nearest_aspect(width, height)
+    return nearest, f'{provider.name} does not support {aspect_ratio}; used {nearest} instead'
+
+
+def _seed_for(shot_key: str, variant: int) -> int:
+    """Stable-ish seed from shot_key+variant — not a global uniqueness guarantee (the
+    real variant number is only known once add_asset's transaction runs), just enough
+    that two generations of the same shot/variant tend to reproduce."""
+    digest = hashlib.sha256(f'{shot_key}:{variant}'.encode()).hexdigest()
+    return int(digest[:8], 16)
+
+
+# --- motion prompt composition, pure, no I/O, no LLM ------------------------------------
+#
+# Deterministic like compose_frame_prompt, not a video.direct()-style Anthropic call: a
+# storyboard shot's spec already names the action, camera move and intensity (the
+# director LLM chose them once when the board was written), so there is nothing left for
+# a second model call to decide. Reuses motion.py's FIDELITY_LOCK/NEGATIVE rather than a
+# second copy of either — see motion.render() for the sibling prompt this mirrors.
+
+# One phrase per director.py CAMERA_MOVES value — a different vocabulary from
+# motion.CAMERAS (that one is keyed for a single still's reveal-a-piece video; this one is
+# keyed for a storyboard shot's own camera_move spec field), so it is its own small table
+# rather than forcing one shared dict across two unrelated domains.
+CAMERA_MOVE_PROSE = {
+    'static': 'the camera holds still',
+    'rack_focus': 'the focus shifts smoothly from the background to the foreground',
+    'slow_push': 'the camera pushes in slowly',
+    'slow_pull': 'the camera pulls back slowly',
+    'orbit': 'the camera orbits gently around the subject',
+    'pan': 'the camera pans slowly across the scene',
+    'drift': 'the camera drifts gently sideways',
+    'crane_rise': 'the camera rises smoothly, revealing more of the scene',
+}
+DEFAULT_CAMERA_MOVE = 'static'
+
+# director.py's motion_intensity has no 'high' pace in motion.PACE (only slow/medium) —
+# 'high' still maps to medium rather than inventing a third pace value nothing else uses.
+MOTION_INTENSITY_PACE = {'low': motion.PACE['slow'], 'medium': motion.PACE['medium'],
+                         'high': motion.PACE['medium']}
+
+
+def _cap_first(text: str) -> str:
+    return text[0].upper() + text[1:] if text else text
+
+
+def compose_motion_prompt(ctx: dict, shot: dict) -> tuple[str, str]:
+    """(prompt, negative) for one shot's clip. Deterministic, built from the shot's own
+    spec (character_action, camera_move, product_interaction, motion_intensity,
+    environment, emotional_beat) plus the storyboard's palette — the video counterpart of
+    compose_frame_prompt.
+
+    shot['motion_prompt'] (a user override) replaces only the action/camera beat, exactly
+    like video.direct's motion/mood override never touches FIDELITY_LOCK: the fidelity
+    lock and negative are appended either way, never left to an override to drop.
+    """
+    board = ctx['storyboard'] or {}
+    spec = shot.get('spec') or {}
+    override = (shot.get('motion_prompt') or '').strip()
+
+    if override:
+        body = override
+    else:
+        parts = []
+        action = (spec.get('character_action') or '').strip()
+        if action:
+            parts.append(f'{_cap_first(action)}.')
+        interaction = (spec.get('product_interaction') or '').strip()
+        if interaction:
+            parts.append(f'{_cap_first(interaction)}.')
+        move_prose = CAMERA_MOVE_PROSE.get(spec.get('camera_move'),
+                                           CAMERA_MOVE_PROSE[DEFAULT_CAMERA_MOVE])
+        pace = MOTION_INTENSITY_PACE.get(spec.get('motion_intensity'),
+                                         motion.PACE['medium'])
+        parts.append(f'{_cap_first(move_prose)}, {pace}.')
+        environment = (spec.get('environment') or '').strip()
+        if environment:
+            parts.append(f'{_cap_first(environment)}.')
+        beat = (spec.get('emotional_beat') or '').strip()
+        if beat:
+            parts.append(f'Mood: {beat}.')
+        palette = board.get('palette') or board.get('visual_style') or ''
+        if palette:
+            parts.append(f'One grade throughout: {palette}.')
+        # parts always has at least the camera-move beat (CAMERA_MOVE_PROSE always
+        # resolves, defaulting to DEFAULT_CAMERA_MOVE), so this never joins empty.
+        body = ' '.join(parts)
+
+    prompt = f'{body} {motion.FIDELITY_LOCK}'
+    if len(prompt) > MAX_PROMPT_CHARS:
+        prompt = prompt[:MAX_PROMPT_CHARS].rsplit(' ', 1)[0] + '…'
+    return prompt, motion.NEGATIVE
+
+
+def _clip_seconds(shot_duration: float, provider) -> int:
+    """The clip length to actually generate at: at least the provider's own minimum, at
+    least the shot's own duration rounded up, and always a value the provider actually
+    supports — the smallest one that clears both floors. Shots generate at their own
+    length (Phase 0 finding), not a fixed 5/10s, so a 2.5s shot on a 3-15s-capable
+    provider generates a 3s clip, not a wasted 5s one."""
+    needed = max(min(provider.durations), math.ceil(float(shot_duration)))
+    supported = sorted(d for d in provider.durations if d >= needed)
+    return supported[0] if supported else max(provider.durations)
+
+
+# --- estimate ------------------------------------------------------------------------
+
+def estimate(workspace_id: str, version_id: str, stage: str = 'frames') -> dict:
+    if stage not in ('frames', 'videos'):
+        raise ValueError(f'unknown stage {stage!r}')
+    version = storyboard.get_version(workspace_id, version_id)
+    if stage == 'frames':
+        eligible = [str(s['id']) for s in version['shots']
+                    if s['kind'] == 'shot' and s['state'] in ('ready_for_frame', 'frame_failed')]
+        per_shot = credits.cost('ad_frame')
+        return {'shots': eligible, 'per_shot': per_shot, 'credits': per_shot * len(eligible)}
+
+    # 'videos': a clip's price depends on its own length, so per_shot is a map, not one
+    # flat number — the UI shows each shot's own price rather than an average.
+    provider = video.get()
+    per_shot: dict[str, int] = {}
+    for s in version['shots']:
+        if s['kind'] != 'shot' or s['state'] not in ('frame_approved', 'video_failed'):
+            continue
+        clip_seconds = _clip_seconds(float(s['duration']), provider)
+        per_shot[str(s['id'])] = video.credits_for(clip_seconds, provider)
+    return {'shots': list(per_shot), 'per_shot': per_shot, 'credits': sum(per_shot.values())}
+
+
+# --- start a single frame job ----------------------------------------------------------
+
+def _frame_shot_row(workspace_id: str, shot_id: str) -> dict:
+    row = db.query(
+        """SELECT sh.id, sh.kind, sh.state, sh.shot_key, sh.version_id,
+                  sv.status AS version_status, sv.storyboard_id, sb.campaign_id,
+                  c.workspace_id
+             FROM storyboard_shots sh
+             JOIN storyboard_versions sv ON sv.id = sh.version_id
+             JOIN storyboards sb ON sb.id = sv.storyboard_id
+             JOIN campaigns c ON c.id = sb.campaign_id
+            WHERE sh.id = %s AND c.workspace_id = %s""",
+        (shot_id, workspace_id), one=True)
+    if row is None:
+        raise storyboard.NotFound('shot not found')
+    return row
+
+
+def start_frame(workspace_id: str, shot_id: str, idempotency_key: str, user_id: str) -> str:
+    """Validate, reserve, and start one shot's frame job. Mirrors POST /api/videos: job
+    plus credit reserve in one transaction, then the state event — never the reverse,
+    or a crash between them either loses the credit or starts a job nothing paid for.
+    """
+    shot = _frame_shot_row(workspace_id, shot_id)
+    if shot['kind'] != 'shot':
+        raise ValueError('only ordinary shots generate frames — not the end card')
+    if shot['version_status'] != 'approved':
+        raise NotApproved('approve the storyboard before generating frames')
+    event = 'retry' if shot['state'] == 'frame_failed' else 'start_frame'
+    shot_state.transition(shot['state'], event, kind=shot['kind'])   # IllegalTransition if not
+
+    per_shot = credits.cost('ad_frame')
+    params = {'shot_id': str(shot_id), 'shot_key': str(shot['shot_key']),
+             'storyboard_id': str(shot['storyboard_id']), 'campaign_id': str(shot['campaign_id']),
+             'version_id': str(shot['version_id'])}
+    with db.tx() as conn:
+        job = jobs.create(workspace_id, user_id, 'ad_frame', idempotency_key, params,
+                          reserved_credits=per_shot, conn=conn,
+                          storyboard_version_id=shot['version_id'], storyboard_shot_id=shot_id)
+        if job['created']:
+            credits.reserve(conn, workspace_id, str(job['id']), per_shot)
+
+    if job['created']:
+        try:
+            storyboard.apply_event(workspace_id, shot_id, event, user_id=user_id)
+        except Exception as error:
+            # Vanishingly rare (the shot changed state between the check above and here)
+            # but the job and its reservation already committed, so both are unwound by
+            # hand rather than through jobs.finish/settle, which expect a claimed job.
+            credits.settle(str(job['id']), delivered=0)
+            db.query("UPDATE jobs SET status = 'failed', error = %s, finished_at = now() "
+                     'WHERE id = %s', (str(error), job['id']))
+            raise
+    return str(job['id'])
+
+
+def start_frames(workspace_id: str, version_id: str, confirm_credits: int,
+                 idempotency_key: str, user_id: str) -> list[str]:
+    """Batch: recompute the estimate server-side and refuse a stale confirm, then one job
+    per eligible shot with a per-shot idempotency key derived from the batch's."""
+    fresh = estimate(workspace_id, version_id, stage='frames')
+    if int(confirm_credits) != fresh['credits']:
+        raise EstimateMismatch(fresh)
+    return [start_frame(workspace_id, shot_id, f'{idempotency_key}:{shot_id}', user_id)
+            for shot_id in fresh['shots']]
+
+
+# --- start a single video job ------------------------------------------------------------
+
+def _video_shot_row(workspace_id: str, shot_id: str) -> dict:
+    row = db.query(
+        """SELECT sh.id, sh.kind, sh.state, sh.shot_key, sh.version_id, sh.duration,
+                  sh.selected_frame_asset_id, sv.status AS version_status,
+                  sv.storyboard_id, sb.campaign_id, c.workspace_id
+             FROM storyboard_shots sh
+             JOIN storyboard_versions sv ON sv.id = sh.version_id
+             JOIN storyboards sb ON sb.id = sv.storyboard_id
+             JOIN campaigns c ON c.id = sb.campaign_id
+            WHERE sh.id = %s AND c.workspace_id = %s""",
+        (shot_id, workspace_id), one=True)
+    if row is None:
+        raise storyboard.NotFound('shot not found')
+    return row
+
+
+def start_video(workspace_id: str, shot_id: str, idempotency_key: str, user_id: str) -> str:
+    """Validate, reserve, and start one shot's clip job. Mirrors start_frame exactly —
+    job plus credit reserve in one transaction, then the state event.
+
+    A clip needs an approved frame to animate (text-to-video isn't supported by any
+    registered provider). Most of the time that surfaces as an IllegalTransition — a shot
+    that never reached frame_approved cannot take a start_video/retry event at all — but
+    the state machine alone does not guarantee a SELECTED frame (approve-frame can legally
+    fire with no asset_id and nothing pre-selected), so the explicit check below is a real
+    backstop, not just paranoia. It runs after the transition check so the common case
+    (no frame yet at all) reads as "wrong state" rather than "no frame selected".
+    """
+    shot = _video_shot_row(workspace_id, shot_id)
+    if shot['kind'] != 'shot':
+        raise ValueError('only ordinary shots generate clips — not the end card')
+    if shot['version_status'] != 'approved':
+        raise NotApproved('approve the storyboard before generating videos')
+    event = 'retry' if shot['state'] == 'video_failed' else 'start_video'
+    shot_state.transition(shot['state'], event, kind=shot['kind'])   # IllegalTransition if not
+    if not shot['selected_frame_asset_id']:
+        raise ValueError('select and approve a frame before generating a clip')
+
+    provider = video.get()
+    clip_seconds = _clip_seconds(float(shot['duration']), provider)
+    per_shot = video.credits_for(clip_seconds, provider)
+    params = {'shot_id': str(shot_id), 'shot_key': str(shot['shot_key']),
+             'storyboard_id': str(shot['storyboard_id']), 'campaign_id': str(shot['campaign_id']),
+             'version_id': str(shot['version_id']), 'clip_seconds': clip_seconds}
+    with db.tx() as conn:
+        job = jobs.create(workspace_id, user_id, 'ad_video', idempotency_key, params,
+                          reserved_credits=per_shot, conn=conn,
+                          storyboard_version_id=shot['version_id'], storyboard_shot_id=shot_id)
+        if job['created']:
+            credits.reserve(conn, workspace_id, str(job['id']), per_shot)
+
+    if job['created']:
+        try:
+            storyboard.apply_event(workspace_id, shot_id, event, user_id=user_id)
+        except Exception as error:
+            # Same unwind as start_frame: the job/reservation already committed, and the
+            # shot changed state between the check above and here.
+            credits.settle(str(job['id']), delivered=0)
+            db.query("UPDATE jobs SET status = 'failed', error = %s, finished_at = now() "
+                     'WHERE id = %s', (str(error), job['id']))
+            raise
+    return str(job['id'])
+
+
+def start_videos(workspace_id: str, version_id: str, confirm_credits: int,
+                 idempotency_key: str, user_id: str) -> list[str]:
+    """Batch, mirrors start_frames: recompute the estimate server-side and refuse a stale
+    confirm, then one job per eligible shot."""
+    fresh = estimate(workspace_id, version_id, stage='videos')
+    if int(confirm_credits) != fresh['credits']:
+        raise EstimateMismatch(fresh)
+    return [start_video(workspace_id, shot_id, f'{idempotency_key}:{shot_id}', user_id)
+            for shot_id in fresh['shots']]
+
+
+# --- the background job body ------------------------------------------------------------
+
+def check_frame_fidelity(product_path, frame_path, description: str = '') -> tuple[bool, str]:
+    """Did the generated frame keep the product's real design? Mirrors video.py's
+    check_fidelity: never raises (a checker outage must not fail a paid job), and asks a
+    strict yes/no with a reason rather than trusting a self-graded description.
+    """
+    try:
+        import anthropic
+
+        import product as product_module
+
+        def image_block(path):
+            return {'type': 'image', 'source': {'type': 'base64',
+                    'media_type': product_module.VISION_MEDIA_TYPE,
+                    'data': product_module.encode(path)}}
+
+        piece_clause = f'The piece is: {description}.' if description else ''
+        reply = anthropic.Anthropic().messages.create(
+            model=FRAME_FIDELITY_MODEL, max_tokens=300,
+            system=(
+                'You are a strict jewellery QC inspector. Catch a generated frame that '
+                'silently redesigned the piece — a different silhouette, metal colour or '
+                'stone layout — even if the frame is well composed. When unsure, answer '
+                'same_design=false: a false pass ships a wrong ad, a false fail only '
+                'costs one regenerate.'
+            ),
+            messages=[{'role': 'user', 'content': [
+                {'type': 'text', 'text': 'Image 1 — the product reference photo (ground truth).'},
+                image_block(product_path),
+                {'type': 'text', 'text': 'Image 2 — the generated ad frame.'},
+                image_block(frame_path),
+                {'type': 'text', 'text': (
+                    f'{piece_clause} Does Image 2 show the same piece as Image 1 — same '
+                    'outline/shape, metal colour and stone layout? Give a one-sentence '
+                    'reason.')},
+            ]}],
+            output_config={'format': {'type': 'json_schema', 'schema': FRAME_FIDELITY_SCHEMA}},
+        )
+        text = next(block.text for block in reply.content if block.type == 'text')
+        answer = json.loads(text)
+        return bool(answer['same_design']), answer['reason']
+    except Exception as error:                       # noqa: BLE001 - never fail a paid job
+        logging.warning('orchestrator.check_frame_fidelity unavailable: %r', error)
+        return True, f'fidelity check unavailable: {error!r}'
+
+
+def run_frame(job_id: str) -> None:
+    """Claim, compose, generate, verify fidelity (no auto-retry — the user reviews),
+    record the asset, settle. A failure here only ever touches this one job/shot: a
+    version's other shots are separate jobs with separate reservations.
+    """
+    if not jobs.claim(job_id):
+        return
+    job = db.query('SELECT workspace_id, reserved_credits, params FROM jobs WHERE id = %s',
+                   (job_id,), one=True)
+    workspace_id = str(job['workspace_id'])
+    reserved = int(job['reserved_credits'])
+    params = job['params'] or {}
+    shot_id, shot_key = params['shot_id'], params['shot_key']
+    storyboard_id, campaign_id = params['storyboard_id'], params['campaign_id']
+    version_id = params['version_id']
+
+    try:
+        jobs.progress(job_id, 'preparing references', None, 'preparing references…',
+                     force=True)
+        ctx = build_context(workspace_id, version_id)
+        shot = next(s for s in ctx['shots'] if str(s['id']) == str(shot_id))
+        provider = providers.get()
+        prompt = compose_frame_prompt(ctx, shot)
+        aspect, aspect_note = _pick_aspect(
+            provider, ctx['storyboard'].get('aspect_ratio') or '9:16')
+        reference_paths = reference_images(ctx, shot)
+        image_urls = [provider.upload(path) for path in reference_paths]
+
+        variant_guess = len(
+            storyboard.list_assets(workspace_id, shot_key, 'storyboard_image')) + 1
+        seed = _seed_for(shot_key, variant_guess)
+
+        jobs.progress(job_id, 'generating image', None, 'generating the image…',
+                     force=True)
+        urls = provider.generate(prompt, image_urls=image_urls, aspect_ratio=aspect,
+                                 quality=QUALITY, seed=seed, num_images=1)
+        if not urls:
+            raise RuntimeError('the provider returned no image')
+        jobs.heartbeat(job_id)
+
+        import hf
+        [local_path] = hf.download(urls, OUT_DIR / job_id, prefix='frame')
+        key = f'ads/{campaign_id}/{shot_key}/frame-{variant_guess}.png'
+        storage.put(local_path, key)
+
+        fidelity = None
+        visibility = (shot.get('spec') or {}).get('product_visibility')
+        product_ids = shot.get('product_ids') or []
+        if product_ids and visibility in ('medium', 'hero'):
+            jobs.progress(job_id, 'checking the piece matches', None,
+                         'checking the piece matches…', force=True)
+            product_ctx = ctx['products'].get(str(product_ids[0]))
+            product_path = product_ctx.get('local_path') if product_ctx else None
+            if product_path:
+                ok, reason = check_frame_fidelity(product_path, local_path,
+                                                  product_ctx.get('description', ''))
+                fidelity = {'ok': ok, 'reason': reason}
+
+        jobs.progress(job_id, 'saving', 0.98, 'saving the image…', force=True)
+
+        active_shot = storyboard.shot_in_active_version(workspace_id, shot_key, storyboard_id)
+        asset_shot_id = str(active_shot['id']) if active_shot else shot_id
+        asset_version_id = str(active_shot['version_id']) if active_shot else version_id
+
+        asset = storyboard.add_asset(
+            workspace_id, campaign_id, storyboard_id, asset_version_id, 'storyboard_image',
+            key, shot_id=asset_shot_id, shot_key=shot_key, provider=provider.name,
+            prompt=prompt,
+            settings={'aspect_ratio': aspect, 'quality': QUALITY, 'seed': seed,
+                     'reference_count': len(image_urls), 'aspect_note': aspect_note},
+            job_id=job_id, metadata={'fidelity': fidelity} if fidelity else {})
+
+        if active_shot and not active_shot.get('selected_frame_asset_id'):
+            storyboard.select_asset(workspace_id, asset_shot_id, asset['id'])
+
+        storyboard.complete_generation(workspace_id, storyboard_id, shot_key, 'frame_done')
+        credits.settle(job_id, delivered=reserved)
+        jobs.finish(job_id, 'succeeded',
+                   failures=[['fidelity', fidelity['reason']]] if fidelity and not fidelity['ok']
+                   else [], settled_credits=reserved)
+    except Exception as error:                       # noqa: BLE001 - report, don't crash
+        logging.exception('orchestrator.run_frame failed for job %s', job_id)
+        try:
+            storyboard.complete_generation(workspace_id, storyboard_id, shot_key, 'frame_failed')
+        except Exception as reset_error:              # noqa: BLE001 - best-effort state fix
+            logging.warning('orchestrator.run_frame: could not mark %s as frame_failed: %r',
+                            shot_key, reset_error)
+        credits.settle(job_id, delivered=0)
+        jobs.finish(job_id, 'failed', error=str(error), settled_credits=0)
+
+
+def run_video_shot(job_id: str) -> None:
+    """Claim, fetch the approved frame, reframe if needed, compose the motion prompt,
+    generate, verify fidelity (ONE free automatic retry — same as app.run_video, the old
+    single-clip flow), record the asset + a poster thumbnail, settle. Isolated per shot,
+    same failure shape as run_frame.
+    """
+    if not jobs.claim(job_id):
+        return
+    job = db.query('SELECT workspace_id, reserved_credits, params FROM jobs WHERE id = %s',
+                   (job_id,), one=True)
+    workspace_id = str(job['workspace_id'])
+    reserved = int(job['reserved_credits'])
+    params = job['params'] or {}
+    shot_id, shot_key = params['shot_id'], params['shot_key']
+    storyboard_id, campaign_id = params['storyboard_id'], params['campaign_id']
+    version_id = params['version_id']
+    clip_seconds = int(params['clip_seconds'])
+
+    try:
+        ctx = build_context(workspace_id, version_id)
+        shot = next(s for s in ctx['shots'] if str(s['id']) == str(shot_id))
+        frame_asset_id = shot.get('selected_frame_asset_id')
+        if not frame_asset_id:
+            raise RuntimeError('no approved frame to animate')
+        local_frame = _local_asset_path(str(frame_asset_id))
+        if not local_frame:
+            raise RuntimeError('the selected frame is missing from storage')
+
+        provider = video.get()
+        aspect = ctx['storyboard'].get('aspect_ratio') or '9:16'
+        out_dir = OUT_DIR / 'videos' / job_id
+
+        jobs.progress(job_id, 'uploading frame', None, 'uploading the frame…', force=True)
+        # A no-op the vast majority of the time: run_frame already generates at the
+        # storyboard's own aspect, so this only ever does real (paid) work for a frame
+        # that got there some other way. reframe() checks needs_reframe itself.
+        working_frame = video.reframe(local_frame, aspect, out_dir)
+
+        prompt, negative = compose_motion_prompt(ctx, shot)
+        product_ids = shot.get('product_ids') or []
+        description = ''
+        if product_ids:
+            product_ctx = ctx['products'].get(str(product_ids[0]))
+            description = product_ctx.get('description', '') if product_ctx else ''
+
+        attempt_count = 0
+
+        # The provider hands back its own Queued/InProgress/Completed status objects
+        # (fal_client and higgsfield_client each define their own — see video._hf_submit/
+        # _fal_submit) — matched by class name so this stays provider-agnostic, the same
+        # abstraction video.py's own VideoProvider.submit already draws. Anything else
+        # (e.g. Completed, or a backend that sends nothing recognisable) still bumps the
+        # heartbeat so the job never reads as stalled mid-render.
+        def on_provider_progress(status):
+            stage = {'Queued': 'queued at provider',
+                     'InProgress': 'rendering clip'}.get(type(status).__name__)
+            if stage:
+                jobs.progress(job_id, stage, None, f'{stage}…')
+            else:
+                jobs.heartbeat(job_id)
+
+        def one_attempt():
+            nonlocal attempt_count
+            attempt_count += 1
+            url = video.generate(working_frame, prompt, negative, clip_seconds, provider,
+                                 on_progress=on_provider_progress)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            import hf
+            mp4_path = out_dir / f'attempt-{attempt_count}.mp4'
+            mp4_path.write_bytes(hf._fetch_bytes(url))
+            return mp4_path
+
+        attempts = []
+        mp4_path = one_attempt()
+        jobs.progress(job_id, 'checking fidelity', None, 'checking the piece matches…',
+                     force=True)
+        ok, reason = video.check_fidelity(working_frame, mp4_path, description)
+        attempts.append({'ok': ok, 'reason': reason})
+        if not ok:
+            jobs.progress(job_id, 'retrying — the clip changed the piece', 0.0,
+                         'retrying — the clip changed the piece…', force=True)
+            mp4_path = one_attempt()                            # one free retry
+            jobs.progress(job_id, 'checking fidelity', None,
+                         'checking the piece matches…', force=True)
+            ok2, reason2 = video.check_fidelity(working_frame, mp4_path, description)
+            attempts.append({'ok': ok2, 'reason': reason2})
+            # The second result is kept regardless of its own verdict, same as
+            # app.run_video — there is no third try.
+
+        jobs.progress(job_id, 'saving', 0.98, 'saving the clip…', force=True)
+        variant_guess = len(
+            storyboard.list_assets(workspace_id, shot_key, 'video_clip')) + 1
+        key = f'ads/{campaign_id}/{shot_key}/clip-{variant_guess}.mp4'
+        storage.put(mp4_path, key)
+
+        poster_path = out_dir / f'poster-{variant_guess}.jpg'
+        video._extract_frame(mp4_path, 0.0, poster_path)
+        thumb_key = f'ads/{campaign_id}/{shot_key}/clip-{variant_guess}-poster.jpg'
+        storage.put(poster_path, thumb_key)
+
+        probe = video._probe(mp4_path)
+        final_fidelity = attempts[-1]
+
+        active_shot = storyboard.shot_in_active_version(workspace_id, shot_key, storyboard_id)
+        asset_shot_id = str(active_shot['id']) if active_shot else shot_id
+        asset_version_id = str(active_shot['version_id']) if active_shot else version_id
+
+        asset = storyboard.add_asset(
+            workspace_id, campaign_id, storyboard_id, asset_version_id, 'video_clip',
+            key, shot_id=asset_shot_id, shot_key=shot_key,
+            provider=f'{provider.backend}/{provider.model}', prompt=prompt,
+            settings={'clip_seconds': clip_seconds, 'provider': provider.backend,
+                     'model': provider.model, 'trim_to': float(shot['duration'])},
+            thumb_key=thumb_key, job_id=job_id,
+            metadata={'fidelity': final_fidelity, 'attempts': attempts, 'probe': probe})
+
+        if active_shot and not active_shot.get('selected_video_asset_id'):
+            storyboard.select_asset(workspace_id, asset_shot_id, asset['id'])
+
+        storyboard.complete_generation(workspace_id, storyboard_id, shot_key, 'video_done')
+        credits.settle(job_id, delivered=reserved)
+        jobs.finish(job_id, 'succeeded',
+                   failures=[['fidelity', final_fidelity['reason']]]
+                   if not final_fidelity['ok'] else [],
+                   settled_credits=reserved)
+    except Exception as error:                       # noqa: BLE001 - report, don't crash
+        logging.exception('orchestrator.run_video_shot failed for job %s', job_id)
+        try:
+            storyboard.complete_generation(workspace_id, storyboard_id, shot_key, 'video_failed')
+        except Exception as reset_error:              # noqa: BLE001 - best-effort state fix
+            logging.warning('orchestrator.run_video_shot: could not mark %s as '
+                            'video_failed: %r', shot_key, reset_error)
+        credits.settle(job_id, delivered=0)
+        jobs.finish(job_id, 'failed', error=str(error), settled_credits=0)
+
+
+def demo() -> None:
+    """Prompt composition + reference ordering, pure and network-free — then, only if
+    DATABASE_URL is set, a real estimate() against a fixture version."""
+    ctx = {
+        'campaign': {'brand_style': 'warm, editorial', 'campaign_style': 'festive'},
+        'storyboard': {'visual_style': 'golden hour glow', 'palette': 'amber and gold'},
+        'products': {
+            'p1': {'id': 'p1', 'description': 'a gold signet ring', 'category': 'ring',
+                  'fidelity_instructions': 'keep the hallmark exact', 'local_path': '/tmp/p1.png'},
+        },
+        'characters': {
+            'c1': {'id': 'c1', 'name': 'Aanya', 'description': 'a 28 year old Delhi model',
+                  'face_path': '/tmp/c1.png'},
+        },
+        'shots': [
+            {'id': 's0', 'character_ids': ['c1'], 'product_ids': ['p1'],
+             'selected_frame_asset_id': None, 'state': 'frame_approved',
+             'spec': {'shot_type': 'medium', 'wardrobe': 'a green silk saree'}},
+            {'id': 's1', 'character_ids': ['c1'], 'product_ids': ['p1'],
+             'selected_frame_asset_id': 'asset-1', 'state': 'frame_approved',
+             'spec': {'shot_type': 'macro'}},
+        ],
+    }
+
+    prompt0 = compose_frame_prompt(ctx, ctx['shots'][0])
+    assert 'warm, editorial' in prompt0 and 'festive' in prompt0, prompt0
+    assert 'golden hour glow' in prompt0 and 'amber and gold' in prompt0, prompt0
+    assert 'Aanya' in prompt0 and 'Delhi model' in prompt0, prompt0
+    assert 'green silk saree' in prompt0, prompt0
+    assert 'a gold signet ring' in prompt0 and 'keep the hallmark exact' in prompt0, prompt0
+    assert 'medium' in prompt0, prompt0
+    assert 'no redesign' in prompt0, prompt0
+    # style/character/product all come before the shot spec, in that order
+    assert prompt0.index('warm, editorial') < prompt0.index('golden hour glow') \
+        < prompt0.index('Aanya') < prompt0.index('a gold signet ring') \
+        < prompt0.index('medium'), prompt0
+
+    # a user's image_prompt override still gets the style/character/product wrapper
+    overridden = {**ctx['shots'][0], 'image_prompt': 'she looks directly at camera, smiling'}
+    prompt_override = compose_frame_prompt(ctx, overridden)
+    assert 'she looks directly at camera' in prompt_override
+    assert 'Aanya' in prompt_override and 'gold signet ring' in prompt_override
+
+    # length cap actually caps
+    long_ctx = {**ctx, 'campaign': {'brand_style': 'x ' * 3000}}
+    capped = compose_frame_prompt(long_ctx, ctx['shots'][0])
+    assert len(capped) <= MAX_PROMPT_CHARS + 1, len(capped)
+
+    # reference ordering: product first, then character, no continuity for shot 0 (first
+    # shot, nothing before it)
+    refs0 = reference_images(ctx, ctx['shots'][0])
+    assert refs0 == ['/tmp/p1.png', '/tmp/c1.png'], refs0
+
+    # shot 1 shares character c1 with shot 0, and shot 0 has no selected_frame_asset_id ->
+    # no continuity reference yet
+    refs1 = reference_images(ctx, ctx['shots'][1])
+    assert refs1 == ['/tmp/p1.png', '/tmp/c1.png'], refs1
+
+    # once the earlier shot has a selected+approved frame, continuity kicks in — proved by
+    # swapping which shot is "earlier" so shot 1 becomes shot 0's predecessor.
+    # _local_asset_path is swapped out by hand (not unittest.mock.patch('orchestrator....'),
+    # which would import a SECOND copy of this module under its real name when this file is
+    # run as __main__ — patching that copy leaves the one actually running untouched).
+    global _local_asset_path
+    real_local_asset_path = _local_asset_path
+    _local_asset_path = lambda asset_id: '/tmp/continuity.png'
+    try:
+        ctx_with_history = {**ctx, 'shots': [
+            {**ctx['shots'][1], 'id': 's1'}, {**ctx['shots'][0], 'id': 's0'}]}
+        refs_continuity = reference_images(ctx_with_history, ctx_with_history['shots'][1])
+        assert refs_continuity == ['/tmp/p1.png', '/tmp/c1.png', '/tmp/continuity.png'], \
+            refs_continuity
+
+        # the cap is real: 4 references max even if more would qualify
+        assert MAX_REFERENCE_IMAGES == 4
+        over_ctx = {**ctx, 'products': {
+            'p1': ctx['products']['p1'],
+            'p2': {**ctx['products']['p1'], 'id': 'p2', 'local_path': '/tmp/p2.png'},
+            'p3': {**ctx['products']['p1'], 'id': 'p3', 'local_path': '/tmp/p3.png'},
+        }, 'shots': ctx_with_history['shots']}
+        crowded_shot = {**ctx['shots'][0], 'product_ids': ['p1', 'p2', 'p3']}
+        refs_over = reference_images(over_ctx, crowded_shot)
+        assert len(refs_over) == MAX_REFERENCE_IMAGES, refs_over
+    finally:
+        _local_asset_path = real_local_asset_path
+
+    print('orchestrator.compose_frame_prompt / reference_images ok')
+
+    # --- compose_motion_prompt: pure, no LLM -----------------------------------------
+    video_shot = {
+        'id': 'vs0', 'motion_prompt': '', 'product_ids': ['p1'],
+        'spec': {'character_action': 'she turns her wrist toward the light',
+                 'camera_move': 'orbit', 'motion_intensity': 'low',
+                 'environment': 'a marble courtyard', 'emotional_beat': 'quiet pride',
+                 'product_interaction': 'the light catches the stone'},
+    }
+    motion_ctx = {**ctx, 'shots': [video_shot]}
+    motion_prompt, negative = compose_motion_prompt(motion_ctx, video_shot)
+    assert 'She turns her wrist toward the light' in motion_prompt, motion_prompt
+    assert 'orbits' in motion_prompt, motion_prompt
+    assert motion.PACE['slow'] in motion_prompt, motion_prompt      # low intensity -> slow
+    assert 'marble courtyard' in motion_prompt, motion_prompt
+    assert 'quiet pride' in motion_prompt, motion_prompt
+    assert 'amber and gold' in motion_prompt, motion_prompt          # storyboard palette
+    assert motion.FIDELITY_LOCK in motion_prompt, motion_prompt
+    assert negative == motion.NEGATIVE, negative
+
+    # a user's motion_prompt override replaces the action/camera beat, but the fidelity
+    # lock and negative still land — never left to an override to drop.
+    override_shot = {**video_shot, 'motion_prompt': 'a custom cinematic beat'}
+    override_prompt, override_negative = compose_motion_prompt(motion_ctx, override_shot)
+    assert override_prompt.startswith('a custom cinematic beat'), override_prompt
+    assert motion.FIDELITY_LOCK in override_prompt, override_prompt
+    assert override_negative == motion.NEGATIVE
+
+    # an empty spec still produces something sane (the default camera-move beat), not an
+    # empty/whitespace prompt — red-before-green: prove this can actually fail first, by
+    # asking for a camera move that isn't in the vocabulary at all.
+    bare_prompt, _ = compose_motion_prompt({**ctx, 'storyboard': {}}, {'id': 'vs9', 'spec': {}})
+    assert CAMERA_MOVE_PROSE[DEFAULT_CAMERA_MOVE] in bare_prompt.lower(), bare_prompt
+    assert motion.FIDELITY_LOCK in bare_prompt, bare_prompt
+    junk_prompt, _ = compose_motion_prompt(
+        {**ctx, 'storyboard': {}}, {'id': 'vs8', 'spec': {'camera_move': 'dolly-zoom'}})
+    assert CAMERA_MOVE_PROSE[DEFAULT_CAMERA_MOVE] in junk_prompt.lower(), \
+        'an unknown camera_move must fall back to the default, not be dropped or raise'
+
+    print('orchestrator.compose_motion_prompt ok')
+
+    # --- _clip_seconds: smallest supported duration >= max(min(durations), ceil(shot)) -
+    kling_provider = video.get('higgsfield', 'kling')        # durations 3-15
+    assert _clip_seconds(2.5, kling_provider) == 3, _clip_seconds(2.5, kling_provider)
+    assert _clip_seconds(3, kling_provider) == 3
+    assert _clip_seconds(3.1, kling_provider) == 4
+    assert _clip_seconds(15, kling_provider) == 15
+    assert _clip_seconds(20, kling_provider) == 15, 'must cap at the provider maximum'
+    seedance_provider = video.get('higgsfield', 'seedance')  # durations 4-15
+    assert _clip_seconds(1, seedance_provider) == 4, 'must never go below the minimum'
+    print('orchestrator._clip_seconds ok')
+
+    if not os.environ.get('DATABASE_URL'):
+        print('orchestrator: DATABASE_URL not set, skipping the estimate() check')
+        return
+
+    import uuid
+
+    db.migrate()
+    ws = str(db.query("INSERT INTO workspaces (name) VALUES ('orch-check') RETURNING id",
+                      one=True)['id'])
+    user = str(db.query(
+        "INSERT INTO users (email, password_hash) VALUES (%s, 'x') RETURNING id",
+        (f'orch-{uuid.uuid4().hex[:8]}@test',), one=True)['id'])
+    piece = f'oc{uuid.uuid4().hex[:10]}'
+    db.query("INSERT INTO pieces (id, workspace_id, user_id, category) "
+             "VALUES (%s, %s, %s, 'ring')", (piece, ws, user))
+    try:
+        campaign = storyboard.create_campaign(ws, 'Orchestrator check')
+        campaign_id = str(campaign['id'])
+        storyboard.add_product(ws, campaign_id, piece)
+        shots = [{'duration': 3} for _ in range(3)] + [{'duration': 2, 'kind': 'end_card'}]
+        created = storyboard.create_storyboard(
+            ws, campaign_id, {'target_duration': 11}, shots)
+        version_id = created['version_id']
+
+        # draft version: nothing is eligible yet (instructions not approved)
+        est_draft = estimate(ws, version_id, 'frames')
+        assert est_draft == {'shots': [], 'per_shot': credits.cost('ad_frame'), 'credits': 0}, \
+            est_draft
+
+        # start_frame on a draft version's shot must refuse — the storyboard isn't
+        # approved yet, so there is nothing to run production against
+        ordinary = next(s for s in storyboard.get_version(ws, version_id)['shots']
+                        if s['kind'] == 'shot')
+        try:
+            start_frame(ws, str(ordinary['id']), 'k1', user)
+            raise AssertionError('start_frame allowed generation against an unapproved version')
+        except NotApproved:
+            pass
+
+        for s in storyboard.get_version(ws, version_id)['shots']:
+            if s['kind'] == 'shot':
+                storyboard.apply_event(ws, str(s['id']), 'approve_instructions')
+        storyboard.approve_version(ws, version_id)
+
+        est = estimate(ws, version_id, 'frames')
+        assert est['per_shot'] == credits.cost('ad_frame') == 1, est
+        assert len(est['shots']) == 3, est
+        assert est['credits'] == 3, est
+
+        # a batch confirm that doesn't match the fresh estimate is refused, and the
+        # exception carries the fresh one back
+        try:
+            start_frames(ws, version_id, confirm_credits=999,
+                        idempotency_key='batch1', user_id=user)
+            raise AssertionError('start_frames accepted a stale confirm_credits')
+        except EstimateMismatch as mismatch:
+            assert mismatch.estimate['credits'] == 3, mismatch.estimate
+
+        print('orchestrator.estimate ok')
+
+        # --- videos: same lifecycle, priced by clip length --------------------------
+        credits.grant(ws, 20, 'orch-video-check')
+
+        est_videos_before = estimate(ws, version_id, 'videos')
+        assert est_videos_before == {'shots': [], 'per_shot': {}, 'credits': 0}, \
+            est_videos_before
+
+        # Take one shot to frame_approved by hand — a real (fake-keyed) asset row, no
+        # provider call, exactly the trick storyboard.py's own demo() uses for assets.
+        video_shot_id = str(ordinary['id'])
+        storyboard.apply_event(ws, video_shot_id, 'start_frame')
+        storyboard.apply_event(ws, video_shot_id, 'frame_done')
+        version_shots = storyboard.get_version(ws, version_id)['shots']
+        video_shot_row = next(s for s in version_shots if str(s['id']) == video_shot_id)
+        fake_frame = storyboard.add_asset(
+            ws, campaign_id, created['storyboard_id'], version_id, 'storyboard_image',
+            'fake://frame.png', shot_id=video_shot_id, shot_key=video_shot_row['shot_key'])
+        storyboard.select_asset(ws, video_shot_id, fake_frame['id'])
+        storyboard.apply_event(ws, video_shot_id, 'approve_frame', asset_id=fake_frame['id'])
+
+        # _local_asset_path must not collide two different shots' same-named variant —
+        # every shot's own first frame is literally "frame-1.png" under its own shot_key
+        # directory, so the cache key has to carry the shot_key segment too.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dir = pathlib.Path(tmp_dir)
+            shot_a_source = tmp_dir / 'a.png'
+            shot_b_source = tmp_dir / 'b.png'
+            shot_a_source.write_bytes(b'shot-a-bytes')
+            shot_b_source.write_bytes(b'shot-b-bytes')
+            key_a = f'ads/collision-check/{uuid.uuid4()}/frame-1.png'
+            key_b = f'ads/collision-check/{uuid.uuid4()}/frame-1.png'
+            storage.put(shot_a_source, key_a)
+            storage.put(shot_b_source, key_b)
+            asset_a = storyboard.add_asset(ws, campaign_id, created['storyboard_id'],
+                                           version_id, 'storyboard_image', key_a,
+                                           shot_id=video_shot_id,
+                                           shot_key=video_shot_row['shot_key'])
+            asset_b = storyboard.add_asset(ws, campaign_id, created['storyboard_id'],
+                                           version_id, 'storyboard_image', key_b,
+                                           shot_id=video_shot_id,
+                                           shot_key=video_shot_row['shot_key'])
+            path_a = pathlib.Path(_local_asset_path(asset_a['id']))
+            path_b = pathlib.Path(_local_asset_path(asset_b['id']))
+            assert path_a != path_b, 'two assets with the same basename collided on one cache file'
+            assert path_a.read_bytes() == b'shot-a-bytes', path_a.read_bytes()
+            assert path_b.read_bytes() == b'shot-b-bytes', path_b.read_bytes()
+        print('orchestrator._local_asset_path (no basename collisions) ok')
+
+        kling_provider = video.get('higgsfield', 'kling')
+        expected_clip_seconds = _clip_seconds(3.0, kling_provider)   # this fixture's shots are 3s
+        assert expected_clip_seconds == 3, expected_clip_seconds
+
+        est_videos = estimate(ws, version_id, 'videos')
+        assert est_videos['shots'] == [video_shot_id], est_videos
+        assert est_videos['per_shot'][video_shot_id] == video.credits_for(3, kling_provider), \
+            est_videos
+        assert est_videos['credits'] == video.credits_for(3, kling_provider), est_videos
+
+        # a batch confirm that doesn't match the fresh videos estimate is refused too
+        try:
+            start_videos(ws, version_id, confirm_credits=999,
+                        idempotency_key='vbatch1', user_id=user)
+            raise AssertionError('start_videos accepted a stale confirm_credits')
+        except EstimateMismatch as mismatch:
+            assert mismatch.estimate['credits'] == video.credits_for(3, kling_provider), \
+                mismatch.estimate
+
+        # start_video refuses a shot that never reached frame_approved at all — the
+        # common case, and an IllegalTransition (the shot_state table has no start_video
+        # edge from ready_for_frame), not the "no frame selected" ValueError below.
+        other_shot_id = str(next(s for s in version_shots
+                                 if s['kind'] == 'shot' and str(s['id']) != video_shot_id)['id'])
+        try:
+            start_video(ws, other_shot_id, 'novid', user)
+            raise AssertionError('start_video generated a clip from ready_for_frame')
+        except shot_state.IllegalTransition:
+            pass
+
+        # start_video also refuses the rarer case: the STATE says frame_approved (a legal
+        # approve_frame can fire with no asset_id and nothing pre-selected — the state
+        # machine alone does not guarantee a selection), but nothing was ever selected.
+        storyboard.apply_event(ws, other_shot_id, 'start_frame')
+        storyboard.apply_event(ws, other_shot_id, 'frame_done')
+        storyboard.apply_event(ws, other_shot_id, 'approve_frame')   # no asset_id at all
+        try:
+            start_video(ws, other_shot_id, 'novid2', user)
+            raise AssertionError('start_video generated a clip with no selected frame')
+        except ValueError as error:
+            assert 'frame' in str(error), error
+
+        # the real thing: reserves credits, creates an ad_video job, moves the shot to
+        # video_generating — never calls run_video_shot, the one place that would spend
+        # real provider money (the same split run_frame's own coverage above draws).
+        balance_before = credits.balance(ws)
+        video_job_id = start_video(ws, video_shot_id, 'v1', user)
+        video_job_row = db.query('SELECT kind, reserved_credits FROM jobs WHERE id = %s',
+                                 (video_job_id,), one=True)
+        assert video_job_row['kind'] == 'ad_video', video_job_row
+        assert int(video_job_row['reserved_credits']) == video.credits_for(3, kling_provider), \
+            video_job_row
+        assert credits.balance(ws) == balance_before - video.credits_for(3, kling_provider), \
+            credits.balance(ws)
+        moved = next(s for s in storyboard.get_version(ws, version_id)['shots']
+                    if str(s['id']) == video_shot_id)
+        assert moved['state'] == 'video_generating', moved['state']
+
+        print('orchestrator.estimate/start_video (videos) ok')
+    finally:
+        # Order matters: approvals.asset_id and credit_ledger.job_id/final_renders.job_id
+        # all RESTRICT deleting the row they reference, so approvals goes before
+        # generated_assets, and credit_ledger before jobs — wrapped in its own try/finally
+        # so a future ordering mistake still closes the pool instead of leaking its worker
+        # threads on exit ("couldn't stop thread 'pool-1-worker-0'").
+        try:
+            db.query('DELETE FROM approvals WHERE workspace_id = %s', (ws,))
+            db.query('DELETE FROM credit_ledger WHERE workspace_id = %s', (ws,))
+            db.query('DELETE FROM generated_assets WHERE workspace_id = %s', (ws,))
+            db.query('DELETE FROM jobs WHERE workspace_id = %s', (ws,))
+            db.query('DELETE FROM campaigns WHERE workspace_id = %s', (ws,))
+            db.query('DELETE FROM pieces WHERE workspace_id = %s', (ws,))
+            db.query('DELETE FROM workspaces WHERE id = %s', (ws,))
+            db.query('DELETE FROM users WHERE id = %s', (user,))
+        finally:
+            db.close()
+
+
+if __name__ == '__main__':
+    demo()

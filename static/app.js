@@ -42,6 +42,8 @@ const ICONS = {
       + 'A2.5 2.5 0 0 1 3 14.5zM3 9.5h16M6.5 13.8h3',
   shield: 'M11 3.4 4.8 6v4.9c0 3.4 2.5 6.5 6.2 7.7 3.7-1.2 6.2-4.3 6.2-7.7V6z',
   plus: 'M11 5.5v11M5.5 11h11',
+  film: 'M4 5.5A1.5 1.5 0 0 1 5.5 4h11A1.5 1.5 0 0 1 18 5.5v11a1.5 1.5 0 0 1-1.5 1.5h-11'
+      + 'A1.5 1.5 0 0 1 4 16.5zM9 8.2v5.6l4.5-2.8z',
 };
 
 function icon(name) {
@@ -86,6 +88,7 @@ function renderAccount() {
     ['/settings.html', 'Branding', 'brand'],
     ['/billing.html', 'Billing', 'card'],
   ];
+  if (isAdmin) routes.push(['/ads.html', 'Video Ads', 'film']);
   if (isAdmin) routes.push(['/admin.html', 'Admin', 'shield']);
 
   routes.forEach(([href, label, glyph, primary]) => {
@@ -189,6 +192,122 @@ function showWelcome() {
 
   const main = document.querySelector('main');
   if (main) main.prepend(banner);
+}
+
+// Shared by any page that starts a background job (shoot, video, ad_concepts, ad_board,
+// ...) and needs to wait for it. Bounded so a wedged job cannot spin a tab forever, and it
+// stops the moment `status` stops being queued/running — `isDone` only needs overriding
+// when a job's terminal states are named differently.
+function pollJob(url, { intervalMs = 3000, maxMinutes = 15, isDone, onUpdate } = {}) {
+  const deadline = Date.now() + maxMinutes * 60 * 1000;
+  const stillRunning = (status) => status === 'queued' || status === 'running';
+  return new Promise((resolve, reject) => {
+    async function tick() {
+      let detail;
+      try {
+        detail = await api(url);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      if (onUpdate) onUpdate(detail);
+      if (isDone ? isDone(detail) : !stillRunning(detail.status)) {
+        resolve(detail);
+        return;
+      }
+      if (Date.now() > deadline) {
+        reject(new Error(`${url} did not finish within ${maxMinutes} minutes`));
+        return;
+      }
+      setTimeout(tick, intervalMs);
+    }
+    tick();
+  });
+}
+
+// --- job progress: an honest indicator for a long-running background job (ad_concepts/
+// ad_board/ad_frame/ad_video today). Shared so ads.html renders the same component under
+// "Generate 3 concepts", on a chosen concept card, on a shot card (compact) and in the
+// inspector. Never claims precision the job didn't report: an indeterminate bar when
+// `fraction` is absent, real elapsed time from `started_at`, and a "typical" duration
+// labelled as typical, never as a promise. pollJob's onUpdate is the usual way to keep
+// this refreshed — it hands the whole poll payload straight to this function each tick.
+function formatElapsed(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function progressComponent(job, { compact = false } = {}) {
+  const wrap = document.createElement('div');
+  wrap.className = 'job-progress' + (compact ? ' compact' : '');
+  if (!job) return wrap;
+
+  const progress = job.progress || {};
+  const startedAt = job.started_at ? new Date(job.started_at).getTime() : null;
+  const heartbeatAt = job.heartbeat_at ? new Date(job.heartbeat_at).getTime() : null;
+  const now = Date.now();
+  const elapsedMs = startedAt !== null && !Number.isNaN(startedAt) ? now - startedAt : null;
+  const typicalS = job.typical_seconds || null;
+
+  const label = document.createElement('div');
+  label.className = 'job-progress-label';
+  label.textContent = progress.message || (progress.stage
+    ? progress.stage.charAt(0).toUpperCase() + progress.stage.slice(1) + '…' : 'Working…');
+  wrap.appendChild(label);
+
+  const bar = document.createElement('div');
+  bar.className = 'job-progress-bar';
+  const fill = document.createElement('div');
+  fill.className = 'job-progress-fill';
+  if (typeof progress.fraction === 'number') {
+    fill.style.width = `${Math.min(100, Math.max(0, progress.fraction * 100))}%`;
+  } else {
+    bar.classList.add('indeterminate');
+  }
+  bar.appendChild(fill);
+  wrap.appendChild(bar);
+
+  const footBits = [];
+  if (elapsedMs !== null) footBits.push(`elapsed ${formatElapsed(elapsedMs)}`);
+  if (typicalS) footBits.push(`usually ~${formatElapsed(typicalS * 1000)}`);
+  if (footBits.length) {
+    const foot = document.createElement('div');
+    foot.className = 'job-progress-foot';
+    foot.textContent = footBits.join(' · ');
+    wrap.appendChild(foot);
+  }
+
+  if (!compact && elapsedMs !== null && typicalS && elapsedMs > typicalS * 1000 * 2.5) {
+    wrap.appendChild(Object.assign(document.createElement('div'),
+      { className: 'job-progress-note', textContent: 'Taking longer than usual — still working.' }));
+  }
+  if (!compact && heartbeatAt !== null && now - heartbeatAt > 3 * 60 * 1000) {
+    wrap.appendChild(Object.assign(document.createElement('div'), { className: 'job-progress-note warn',
+      textContent: 'This may have stalled — you can leave the page; it keeps running server-side.' }));
+  }
+  return wrap;
+}
+
+// A failed job's error, as a readable list (never a raw bracketed validator string) plus
+// an optional "Try again" button. `errorText` is split on ';'/newlines because
+// DirectorError joins its own list of rule violations with '; '.
+function jobErrorComponent(errorText, onRetry) {
+  const wrap = document.createElement('div');
+  wrap.className = 'job-error';
+  const lines = String(errorText || 'The job failed.').split(/;\s*|\n+/).map((l) => l.trim())
+    .filter(Boolean);
+  const list = document.createElement('ul');
+  list.replaceChildren(...lines.map((line) => Object.assign(
+    document.createElement('li'), { textContent: line })));
+  wrap.appendChild(list);
+  if (onRetry) {
+    const btn = Object.assign(document.createElement('button'),
+      { type: 'button', textContent: 'Try again' });
+    btn.addEventListener('click', onRetry);
+    wrap.appendChild(btn);
+  }
+  return wrap;
 }
 
 // Shared by the generator and the models page. It lived in index.html, which is why
