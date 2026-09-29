@@ -10,9 +10,12 @@ anything but a local database first (guard copied from video_e2e.py verbatim).
     DATABASE_URL='postgresql://postgres:pg@localhost:55432/donna?sslmode=disable' \\
         .venv/bin/python ads_e2e.py --dry-run       # prompts + estimate, no paid call
     DATABASE_URL='...' .venv/bin/python ads_e2e.py --max-frames 1     # the real thing
+    DATABASE_URL='...' .venv/bin/python ads_e2e.py --dry-run --render   # music plan + estimate only
+    DATABASE_URL='...' .venv/bin/python ads_e2e.py --render            # videos -> music -> render, real
 """
 
 import argparse
+import json
 import os
 import sys
 import urllib.parse
@@ -35,6 +38,7 @@ import uuid                  # noqa: E402
 import admin          # noqa: E402
 import credits         # noqa: E402
 import db              # noqa: E402
+import music             # noqa: E402
 import orchestrator     # noqa: E402
 import shoot            # noqa: E402
 import storage          # noqa: E402
@@ -81,6 +85,12 @@ def main() -> None:
     parser.add_argument('--videos', type=int, default=0,
                         help=f'how many shots to also generate a clip for in real mode '
                              f'(default 0, hard cap {MAX_VIDEOS})')
+    parser.add_argument('--render', action='store_true',
+                        help='go all the way to a final render: video every ordinary '
+                             'shot (overrides --max-frames/--videos to cover all of '
+                             'them — a render needs every shot approved), generate one '
+                             'music take, approve it, then render. In --dry-run, prints '
+                             'the music composition plan + estimate and stops there.')
     args = parser.parse_args()
     args.videos = max(0, min(args.videos, MAX_VIDEOS))
 
@@ -143,9 +153,15 @@ def main() -> None:
         ctx = orchestrator.build_context(ws_id, version_id)
         # --videos alone (no explicit --max-frames) must still get frames for as many
         # shots as it needs a clip for — a video can only animate a shot that already has
-        # an approved frame.
-        target_ids = ordinary_ids[:max(1, args.max_frames, args.videos)]
-        video_target_ids = target_ids[:args.videos] if args.videos else []
+        # an approved frame. --render needs EVERY ordinary shot video_approved (that's
+        # what validate_for_render checks), so it overrides both counts to cover all of
+        # them rather than whatever --max-frames/--videos happened to say.
+        if args.render:
+            target_ids = list(ordinary_ids)
+            video_target_ids = list(ordinary_ids)
+        else:
+            target_ids = ordinary_ids[:max(1, args.max_frames, args.videos)]
+            video_target_ids = target_ids[:args.videos] if args.videos else []
 
         est = orchestrator.estimate(ws_id, version_id, 'frames')
         print(f'estimate: {est}')
@@ -158,7 +174,7 @@ def main() -> None:
             print(f'references ({len(refs)}): {refs}')
             print(f'prompt: {prompt}')
 
-        if args.videos:
+        if args.videos or args.render:
             provider = video.get()
             print(f'\n--- video stage ({len(video_target_ids)} shot(s), '
                  f'{provider.backend}/{provider.model}) ---')
@@ -174,6 +190,18 @@ def main() -> None:
                 print(f'  clip_seconds: {clip_seconds}, credits: {price}')
                 print(f'  motion prompt: {motion_prompt}')
                 print(f'  negative: {negative}')
+
+        if args.render:
+            music_version = storyboard.get_version(ws_id, version_id)
+            music_provider = music.get()
+            plan = music.plan_chunks(music_version)
+            music_seconds = music.seconds_for(music_version)
+            music_price = music.credits_for(music_seconds, music_provider)
+            print(f'\n--- music stage ({music_provider.backend}/{music_provider.model}) ---')
+            print(f'composition plan ({len(plan)} chunk(s)):')
+            for chunk in plan:
+                print(f'  {chunk}')
+            print(f'seconds: {music_seconds:.1f}, credits: {music_price}')
 
         if args.dry_run:
             print('\n--dry-run: stopping before any paid call.')
@@ -231,6 +259,58 @@ def main() -> None:
             print(f'  clip_seconds: {clip_settings.get("clip_seconds")}, '
                  f'credits charged: {vjob_row["settled_credits"]}')
             print(f'  fidelity: {(latest_clip["metadata"] or {}).get("fidelity")}')
+
+            if args.render:
+                # A render needs every ordinary shot at video_approved, not just
+                # video_review — approve the clip run_video_shot just auto-selected.
+                storyboard.apply_event(ws_id, shot_id, 'approve_video',
+                                       asset_id=latest_clip['id'])
+
+        if args.render:
+            print('\n--- music + render stage (real) ---')
+            music_est = orchestrator.estimate(ws_id, version_id, 'music')
+            music_job_id = orchestrator.start_music(
+                ws_id, version_id, music_est['credits'], f'e2e-music-{uuid.uuid4()}', user_id)
+            print(f'music job {music_job_id} started, {music_est["credits"]} credit(s)')
+            orchestrator.run_music(music_job_id)          # synchronous, cap 1 — one take
+            music_job_row = db.query('SELECT status, error FROM jobs WHERE id = %s',
+                                     (music_job_id,), one=True)
+            print(f'  status: {music_job_row["status"]}' + (f' ({music_job_row["error"]})'
+                  if music_job_row['error'] else ''))
+            assert music_job_row['status'] == 'succeeded', music_job_row
+
+            music_after = storyboard.music_state(ws_id, version_id)
+            assert music_after['selected_id'], 'the take must have been auto-selected'
+            storyboard.approve_music(ws_id, version_id, music_after['selected_id'])
+            print(f'  music approved: asset {music_after["selected_id"]}')
+
+            problems = orchestrator.validate_for_render(ws_id, version_id)
+            print(f'validate_for_render: {problems or "ready"}')
+            assert not problems, problems
+
+            render_job_id = orchestrator.start_render(
+                ws_id, version_id, f'e2e-render-{uuid.uuid4()}', user_id)
+            print(f'render job {render_job_id} started')
+            orchestrator.run_render(render_job_id)         # synchronous — real ffmpeg
+            render_job_row = db.query('SELECT status, error FROM jobs WHERE id = %s',
+                                      (render_job_id,), one=True)
+            print(f'  status: {render_job_row["status"]}' + (f' ({render_job_row["error"]})'
+                  if render_job_row['error'] else ''))
+            assert render_job_row['status'] == 'succeeded', render_job_row
+
+            final_row = db.query('SELECT * FROM final_renders WHERE job_id = %s',
+                                 (render_job_id,), one=True)
+            manifest = final_row['manifest'] or {}
+            asset_row = db.query('SELECT key FROM generated_assets WHERE id = %s',
+                                 (final_row['asset_id'],), one=True)
+            final_local = E2E_OUT / f'{version_id}-final.mp4'
+            storage.fetch(asset_row['key'], final_local)
+            print(f'\nfinal render saved: {final_local}')
+            print(f'  duration: {manifest.get("duration")}s, size: '
+                 f'{final_local.stat().st_size} bytes')
+            print(f'  resolution: {final_row["resolution"]}, aspect: '
+                 f'{final_row["aspect_ratio"]}')
+            print(f'  manifest: {json.dumps(manifest, indent=2, default=str)}')
 
         total, tail = credits.reconcile(ws_id)
         assert total == tail, (total, tail)

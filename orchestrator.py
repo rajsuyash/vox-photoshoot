@@ -16,14 +16,18 @@ import logging
 import math
 import os
 import pathlib
+import re
+import subprocess
 import tempfile
 
 import credits
 import db
 import jobs
 import motion
+import music
 import pieces
 import providers
+import render
 import shoot
 import shot_state
 import storage
@@ -78,6 +82,15 @@ class EstimateMismatch(Exception):
     def __init__(self, estimate: dict):
         super().__init__(f"confirm_credits did not match the current estimate: {estimate}")
         self.estimate = estimate
+
+
+class NotRenderable(Exception):
+    """The version failed validate_for_render(). .problems is the human-readable list —
+    the caller (ads_api.py) hands it straight back as the 422 body."""
+
+    def __init__(self, problems: list[str]):
+        super().__init__('; '.join(problems))
+        self.problems = problems
 
 
 # --- context: everything a version's shots need to compose a prompt, built once ----------
@@ -171,6 +184,42 @@ def build_context(workspace_id: str, version_id: str) -> dict:
 
 # --- prompt composition + reference ordering, pure functions, no I/O ---------------------
 
+# Words in product_interaction that mean hands legitimately appear (holding/wearing the
+# piece) — a product-only frame/clip still bars a face and body even then, but not hands.
+HAND_INTERACTION_WORDS = ('hand', 'hands', 'finger', 'fingers', 'hold', 'holds', 'holding',
+                          'wear', 'wears', 'wearing', 'worn')
+
+
+def _shot_has_person(shot: dict) -> bool:
+    """Whether this shot is meant to show a person at all.
+
+    A 2026-09-27 spike against a real storyboard found a product-only macro shot
+    (character_ids=[], no character_action in its spec — just a necklace on a tray) whose
+    composed motion prompt still carried motion.FIDELITY_LOCK's person language ("her
+    whole face stays in frame"), and Kling obeyed by inventing a woman partway through the
+    clip. compose_frame_prompt/compose_motion_prompt both call this first so a shot with no
+    person in its own spec never gets prompt text describing one.
+    """
+    if shot.get('character_ids'):
+        return True
+    spec = shot.get('spec') or {}
+    return bool((spec.get('character_action') or '').strip())
+
+
+def _frame_person_clause(shot: dict) -> str:
+    """compose_frame_prompt's product-only amendment: without this, a shot with no
+    person in its spec still had no person language (compose_frame_prompt never invents
+    one), but it also never said the STILL must stay person-free — so an image model is
+    free to add one anyway. Empty string for a shot that IS meant to show a person."""
+    if _shot_has_person(shot):
+        return ''
+    spec = shot.get('spec') or {}
+    interaction = (spec.get('product_interaction') or '').lower()
+    if any(re.search(rf'\b{word}s?\b', interaction) for word in HAND_INTERACTION_WORDS):
+        return 'Only a hand may appear, holding or wearing the piece — no face or body.'
+    return 'No people, hands or faces appear in this shot.'
+
+
 def compose_frame_prompt(ctx: dict, shot: dict) -> str:
     """Deterministic, no LLM. Layers: brand/campaign style -> the one grade for the whole
     ad -> a block per character -> a block per product (with fidelity instructions) -> the
@@ -220,6 +269,10 @@ def compose_frame_prompt(ctx: dict, shot: dict) -> str:
         spec_bits = [f'{label}: {spec[key]}' for key, label in SPEC_FIELDS if spec.get(key)]
         if spec_bits:
             parts.append('. '.join(spec_bits) + '.')
+
+    person_clause = _frame_person_clause(shot)
+    if person_clause:
+        parts.append(person_clause)
 
     parts.append(NEGATIVE_CLAUSE)
     prompt = ' '.join(parts)
@@ -334,6 +387,21 @@ DEFAULT_CAMERA_MOVE = 'static'
 MOTION_INTENSITY_PACE = {'low': motion.PACE['slow'], 'medium': motion.PACE['medium'],
                          'high': motion.PACE['medium']}
 
+# motion.FIDELITY_LOCK was written for the old single-still flow, where there is always a
+# model in frame — "her whole face stays in frame; her identity does not change" — and a
+# 2026-09-27 spike showed that language, injected into a product-only macro shot (no
+# character_ids, nothing in the spec naming a person), made Kling invent a woman partway
+# through the clip. PRODUCT_LOCK is the person-free equivalent, used whenever
+# _shot_has_person(shot) is False; the extra negative terms below go with it, since
+# motion.NEGATIVE (Kling only) never had to rule out an invented person before.
+PRODUCT_LOCK = (
+    'One continuous shot, no cuts. No people, hands or faces appear. The jewellery '
+    'stays exactly as in the first frame — same metal, stones, shape, size and '
+    'position; nothing added or removed. Only light and camera move.'
+)
+PRODUCT_NEGATIVE_EXTRA = ('person, woman, model, face, hands, body, cut, scene change, '
+                          'transition')
+
 
 def _cap_first(text: str) -> str:
     return text[0].upper() + text[1:] if text else text
@@ -381,10 +449,17 @@ def compose_motion_prompt(ctx: dict, shot: dict) -> tuple[str, str]:
         # resolves, defaulting to DEFAULT_CAMERA_MOVE), so this never joins empty.
         body = ' '.join(parts)
 
-    prompt = f'{body} {motion.FIDELITY_LOCK}'
+    if _shot_has_person(shot):
+        lock = f'{motion.FIDELITY_LOCK} One continuous shot, no cuts.'
+        negative = motion.NEGATIVE
+    else:
+        lock = PRODUCT_LOCK
+        negative = f'{motion.NEGATIVE}, {PRODUCT_NEGATIVE_EXTRA}'
+
+    prompt = f'{body} {lock}'
     if len(prompt) > MAX_PROMPT_CHARS:
         prompt = prompt[:MAX_PROMPT_CHARS].rsplit(' ', 1)[0] + '…'
-    return prompt, motion.NEGATIVE
+    return prompt, negative
 
 
 def _clip_seconds(shot_duration: float, provider) -> int:
@@ -401,7 +476,7 @@ def _clip_seconds(shot_duration: float, provider) -> int:
 # --- estimate ------------------------------------------------------------------------
 
 def estimate(workspace_id: str, version_id: str, stage: str = 'frames') -> dict:
-    if stage not in ('frames', 'videos'):
+    if stage not in ('frames', 'videos', 'music'):
         raise ValueError(f'unknown stage {stage!r}')
     version = storyboard.get_version(workspace_id, version_id)
     if stage == 'frames':
@@ -410,16 +485,36 @@ def estimate(workspace_id: str, version_id: str, stage: str = 'frames') -> dict:
         per_shot = credits.cost('ad_frame')
         return {'shots': eligible, 'per_shot': per_shot, 'credits': per_shot * len(eligible)}
 
+    if stage == 'music':
+        # One flat price for the whole bed — there is no per-shot breakdown, unlike
+        # frames/videos, so 'shots' stays empty and per_shot IS the total.
+        provider = music.get()
+        seconds = music.seconds_for(version)
+        total = music.credits_for(seconds, provider)
+        return {'shots': [], 'per_shot': total, 'credits': total, 'seconds': seconds}
+
     # 'videos': a clip's price depends on its own length, so per_shot is a map, not one
     # flat number — the UI shows each shot's own price rather than an average.
+    #
+    # per_shot is priced for every shot a NEW clip could legally start against
+    # (shot_state.py allows start_video from frame_approved, video_failed, video_review
+    # AND video_approved — a customer reshooting an already-approved clip), so the
+    # card-level "New clip" button always has a price. 'shots'/'credits' stay narrower —
+    # only frame_approved/video_failed count toward the BATCH "generate all videos"
+    # estimate, unchanged from before this widening.
     provider = video.get()
     per_shot: dict[str, int] = {}
+    eligible: list[str] = []
     for s in version['shots']:
-        if s['kind'] != 'shot' or s['state'] not in ('frame_approved', 'video_failed'):
+        if s['kind'] != 'shot' or s['state'] not in (
+                'frame_approved', 'video_failed', 'video_review', 'video_approved'):
             continue
         clip_seconds = _clip_seconds(float(s['duration']), provider)
         per_shot[str(s['id'])] = video.credits_for(clip_seconds, provider)
-    return {'shots': list(per_shot), 'per_shot': per_shot, 'credits': sum(per_shot.values())}
+        if s['state'] in ('frame_approved', 'video_failed'):
+            eligible.append(str(s['id']))
+    return {'shots': eligible, 'per_shot': per_shot,
+           'credits': sum(per_shot[sid] for sid in eligible)}
 
 
 # --- start a single frame job ----------------------------------------------------------
@@ -566,6 +661,282 @@ def start_videos(workspace_id: str, version_id: str, confirm_credits: int,
             for shot_id in fresh['shots']]
 
 
+# --- music (version-level, no shot) -----------------------------------------------------
+
+def start_music(workspace_id: str, version_id: str, confirm_credits: int,
+                idempotency_key: str, user_id: str) -> str:
+    """Validate, reserve, and start the version's music job. Mirrors start_frames'
+    EstimateMismatch gate (there is only one "shot" here — the whole version — so this
+    reads like a batch-of-one rather than start_frame's single-shot shape)."""
+    version = storyboard.get_version(workspace_id, version_id)
+    if version['version']['status'] != 'approved':
+        raise NotApproved('approve the storyboard before generating music')
+    fresh = estimate(workspace_id, version_id, stage='music')
+    if int(confirm_credits) != fresh['credits']:
+        raise EstimateMismatch(fresh)
+
+    params = {'version_id': str(version_id),
+             'storyboard_id': str(version['storyboard']['id']),
+             'campaign_id': str(version['storyboard']['campaign_id'])}
+    with db.tx() as conn:
+        job = jobs.create(workspace_id, user_id, 'ad_music', idempotency_key, params,
+                          reserved_credits=fresh['credits'], conn=conn,
+                          storyboard_version_id=version_id)
+        if job['created']:
+            credits.reserve(conn, workspace_id, str(job['id']), fresh['credits'])
+    return str(job['id'])
+
+
+def run_music(job_id: str) -> None:
+    """Claim, compose the score, save, auto-select if nothing is selected yet, settle.
+    No shot_state event — music has no shot to drive through the state machine."""
+    if not jobs.claim(job_id):
+        return
+    job = db.query('SELECT workspace_id, reserved_credits, params FROM jobs WHERE id = %s',
+                   (job_id,), one=True)
+    workspace_id = str(job['workspace_id'])
+    reserved = int(job['reserved_credits'])
+    params = job['params'] or {}
+    version_id = params['version_id']
+    storyboard_id, campaign_id = params['storyboard_id'], params['campaign_id']
+
+    try:
+        jobs.progress(job_id, 'composing', None, 'composing the score…', force=True)
+        version = storyboard.get_version(workspace_id, version_id)
+        provider = music.get()
+
+        def on_provider_progress(status):
+            stage = {'Queued': 'queued at provider',
+                     'InProgress': 'composing the score'}.get(type(status).__name__)
+            if stage:
+                jobs.progress(job_id, stage, None, f'{stage}…')
+            else:
+                jobs.heartbeat(job_id)
+
+        variant_guess = int(db.query(
+            "SELECT COUNT(*) AS n FROM generated_assets "
+            "WHERE storyboard_id = %s AND type = 'music'", (storyboard_id,),
+            one=True)['n']) + 1
+        out_path = OUT_DIR / 'music' / job_id / f'variant-{variant_guess}.mp3'
+        result = music.generate(version, out_path, provider, on_progress=on_provider_progress,
+                                seed=_seed_for(str(version_id), variant_guess))
+        jobs.heartbeat(job_id)
+
+        jobs.progress(job_id, 'saving', 0.98, 'saving the score…', force=True)
+        key = f'ads/{campaign_id}/music/{version_id}-{variant_guess}.mp3'
+        storage.put(result['path'], key)
+        chunks = len((result['arguments'].get('composition_plan') or {}).get('chunks') or [])
+
+        asset = storyboard.add_asset(
+            workspace_id, campaign_id, storyboard_id, version_id, 'music', key,
+            provider=provider.backend, provider_model=provider.model,
+            settings={'arguments': result['arguments']},
+            job_id=job_id, metadata={'duration': result['duration'], 'chunks': chunks})
+
+        current = db.query('SELECT selected_music_asset_id FROM storyboard_versions '
+                           'WHERE id = %s', (version_id,), one=True)
+        if not current or not current['selected_music_asset_id']:
+            try:
+                storyboard.select_music(workspace_id, version_id, asset['id'])
+            except ValueError:
+                # The version was superseded while this job ran — the asset still
+                # exists (and is still pickable from any other version of the same
+                # storyboard), it just cannot be auto-selected onto a frozen version.
+                pass
+
+        credits.settle(job_id, delivered=reserved)
+        jobs.finish(job_id, 'succeeded', settled_credits=reserved)
+    except Exception as error:                       # noqa: BLE001 - report, don't crash
+        logging.exception('orchestrator.run_music failed for job %s', job_id)
+        credits.settle(job_id, delivered=0)
+        jobs.finish(job_id, 'failed', error=str(error), settled_credits=0)
+
+
+# --- final render ------------------------------------------------------------------------
+
+def validate_for_render(workspace_id: str, version_id: str) -> list[str]:
+    """Human-readable problems standing between this version and a final render. Empty
+    means ready. Checked fresh on every GET /api/versions/{id} (render_ready) and again,
+    authoritatively, at start_render — the readiness checklist and the render button's
+    gate must never disagree."""
+    version = storyboard.get_version(workspace_id, version_id)
+    shots = version['shots']
+    ordinary = [s for s in shots if s['kind'] == 'shot']
+    end_cards = [s for s in shots if s['kind'] == 'end_card']
+    problems = []
+
+    if not ordinary:
+        problems.append('the ad has no shots yet')
+
+    for shot in ordinary:
+        label = f"shot {int(shot['position']) + 1}"
+        if shot['state'] != 'video_approved' or not shot.get('selected_video_asset_id'):
+            problems.append(f'{label} has no approved clip yet')
+            continue
+        asset = db.query('SELECT key, metadata FROM generated_assets WHERE id = %s',
+                         (shot['selected_video_asset_id'],), one=True)
+        if asset is None:
+            problems.append(f"{label}'s approved clip could not be found")
+            continue
+        duration = ((asset['metadata'] or {}).get('probe') or {}).get('duration')
+        if duration is None:
+            local = _local_asset_path(str(shot['selected_video_asset_id']))
+            if not local:
+                problems.append(f"{label}'s clip file is missing from storage")
+                continue
+            duration = video._probe(pathlib.Path(local))['duration']
+        if float(duration) < float(shot['duration']) - 0.05:
+            problems.append(f"{label}'s clip ({float(duration):.1f}s) is shorter than "
+                            f"its {float(shot['duration']):.1f}s shot duration")
+
+    if len(end_cards) != 1:
+        problems.append(f'exactly one end card is required, found {len(end_cards)}')
+    elif not ((end_cards[0].get('spec') or {}).get('brand_text') or '').strip():
+        problems.append('the end card needs brand text')
+
+    music_info = storyboard.music_state(workspace_id, version_id)
+    if not (music_info['skipped'] or (music_info['selected_id'] and music_info['approved'])):
+        problems.append('choose music, or silent, before rendering')
+
+    return problems
+
+
+def start_render(workspace_id: str, version_id: str, idempotency_key: str,
+                 user_id: str) -> str:
+    """Validate, then start the render job. 0 credits — this is local ffmpeg compute,
+    never a paid provider call."""
+    version = storyboard.get_version(workspace_id, version_id)
+    if version['version']['status'] != 'approved':
+        raise NotApproved('approve the storyboard before rendering')
+    problems = validate_for_render(workspace_id, version_id)
+    if problems:
+        raise NotRenderable(problems)
+
+    params = {'version_id': str(version_id),
+             'storyboard_id': str(version['storyboard']['id']),
+             'campaign_id': str(version['storyboard']['campaign_id'])}
+    job = jobs.create(workspace_id, user_id, 'ad_render', idempotency_key, params,
+                      reserved_credits=0, storyboard_version_id=version_id)
+    return str(job['id'])
+
+
+def _workspace_logo_path(workspace_id: str) -> pathlib.Path | None:
+    """The workspace's brand logo, fetched from storage once and cached — same recovery
+    path as _local_product_path, for the end card's branding block."""
+    row = db.query('SELECT brand_logo_key FROM workspaces WHERE id = %s',
+                   (workspace_id,), one=True)
+    key = row.get('brand_logo_key') if row else None
+    if not key:
+        return None
+    local = REF_CACHE_DIR / 'logos' / pathlib.Path(key).name
+    if not local.exists():
+        try:
+            storage.fetch(key, local)
+        except FileNotFoundError:
+            return None
+    return local
+
+
+def run_render(job_id: str) -> None:
+    """Claim, assemble every approved clip + the end card + (optional) music into the
+    final MP4 via render.render(), save it, and record a final_renders row. A failure
+    here still writes a final_renders row (status='failed') so the version's render
+    history shows the attempt, not just silence."""
+    if not jobs.claim(job_id):
+        return
+    job = db.query('SELECT workspace_id, params FROM jobs WHERE id = %s',
+                   (job_id,), one=True)
+    workspace_id = str(job['workspace_id'])
+    params = job['params'] or {}
+    version_id = params['version_id']
+    storyboard_id, campaign_id = params['storyboard_id'], params['campaign_id']
+    aspect = '9:16'
+
+    try:
+        jobs.progress(job_id, 'preparing', None, 'preparing the render…', force=True)
+        version = storyboard.get_version(workspace_id, version_id)
+        aspect = version['storyboard'].get('aspect_ratio') or '9:16'
+        shots = sorted(version['shots'], key=lambda s: s['position'])
+        ordinary = [s for s in shots if s['kind'] == 'shot']
+        end_card_shot = next(s for s in shots if s['kind'] == 'end_card')
+
+        segments, clip_asset_ids = [], []
+        for shot in ordinary:
+            asset_id = str(shot['selected_video_asset_id'])
+            local_clip = _local_asset_path(asset_id)
+            if not local_clip:
+                raise RuntimeError(
+                    f"clip for shot {int(shot['position']) + 1} is missing from storage")
+            transition_out = (shot.get('spec') or {}).get('transition_out') or 'cut'
+            segments.append(render.Segment(clip=pathlib.Path(local_clip),
+                                           duration=float(shot['duration']),
+                                           transition_out=transition_out))
+            clip_asset_ids.append(asset_id)
+
+        end_spec = end_card_shot.get('spec') or {}
+        end_card = render.EndCard(duration=float(end_card_shot['duration']),
+                                  brand_text=(end_spec.get('brand_text') or '').strip(),
+                                  tagline=(end_spec.get('tagline') or '').strip(),
+                                  logo=_workspace_logo_path(workspace_id))
+
+        music_info = storyboard.music_state(workspace_id, version_id)
+        music_path, music_asset_id = None, None
+        if music_info['selected_id'] and music_info['approved']:
+            music_asset_id = music_info['selected_id']
+            music_row = db.query('SELECT key FROM generated_assets WHERE id = %s',
+                                 (music_asset_id,), one=True)
+            music_path = REF_CACHE_DIR / 'music' / f'{music_asset_id}.mp3'
+            if not music_path.exists():
+                storage.fetch(music_row['key'], music_path)
+
+        def on_render_progress(stage, fraction):
+            jobs.progress(job_id, stage, fraction, f'{stage}…')
+
+        out_path = OUT_DIR / 'renders' / f'{job_id}.mp4'
+        manifest = render.render(segments, end_card, out_path, aspect=aspect,
+                                 music=music_path, on_progress=on_render_progress)
+
+        jobs.progress(job_id, 'saving', 0.98, 'saving the render…', force=True)
+        video_key = f'ads/{campaign_id}/renders/{job_id}.mp4'
+        storage.put(manifest['out_path'], video_key)
+        poster_key = f'ads/{campaign_id}/renders/{job_id}-poster.jpg'
+        storage.put(manifest['poster_path'], poster_key)
+
+        asset = storyboard.add_asset(
+            workspace_id, campaign_id, storyboard_id, version_id, 'final_render', video_key,
+            thumb_key=poster_key, job_id=job_id,
+            metadata={'duration': manifest['duration'], 'width': manifest['width'],
+                     'height': manifest['height']})
+
+        full_manifest = {
+            **{k: v for k, v in manifest.items() if k not in ('out_path', 'poster_path')},
+            'version_id': str(version_id),
+            'version_number': version['version']['version_number'],
+            'clip_asset_ids': clip_asset_ids, 'music_asset_id': music_asset_id,
+            'shot_durations': [float(s['duration']) for s in shots],
+        }
+        db.query(
+            """INSERT INTO final_renders (campaign_id, storyboard_id, version_id,
+                    aspect_ratio, resolution, status, asset_id, job_id, manifest)
+               VALUES (%s, %s, %s, %s, %s, 'succeeded', %s, %s, %s)""",
+            (campaign_id, storyboard_id, version_id, aspect,
+             f"{manifest['width']}x{manifest['height']}", asset['id'], job_id,
+             json.dumps(full_manifest)))
+        db.query("UPDATE storyboards SET status = 'completed', updated_at = now() "
+                 'WHERE id = %s', (storyboard_id,))
+
+        jobs.finish(job_id, 'succeeded', settled_credits=0)
+    except Exception as error:                       # noqa: BLE001 - report, don't crash
+        logging.exception('orchestrator.run_render failed for job %s', job_id)
+        db.query(
+            """INSERT INTO final_renders (campaign_id, storyboard_id, version_id,
+                    aspect_ratio, resolution, status, job_id, manifest)
+               VALUES (%s, %s, %s, %s, '', 'failed', %s, %s)""",
+            (campaign_id, storyboard_id, version_id, aspect, job_id,
+             json.dumps({'error': str(error)})))
+        jobs.finish(job_id, 'failed', error=str(error), settled_credits=0)
+
+
 # --- the background job body ------------------------------------------------------------
 
 def check_frame_fidelity(product_path, frame_path, description: str = '') -> tuple[bool, str]:
@@ -610,6 +981,176 @@ def check_frame_fidelity(product_path, frame_path, description: str = '') -> tup
         return bool(answer['same_design']), answer['reason']
     except Exception as error:                       # noqa: BLE001 - never fail a paid job
         logging.warning('orchestrator.check_frame_fidelity unavailable: %r', error)
+        return True, f'fidelity check unavailable: {error!r}'
+
+
+# --- cut detector: free, deterministic, no LLM -----------------------------------------
+#
+# A 2026-09-27 spike found a product-only clip that held the approved frame for ~1.5s then
+# hard-cut to an invented scene — video.check_fidelity's schema never asked "did this stay
+# one shot", so it passed. ffmpeg's own scene-change score flags candidate cuts for free;
+# CUT_SCENE_THRESHOLD alone is not enough (fast in-shot motion — a hand sweeping close to
+# camera — can trip the same score), so each candidate is confirmed by a pixel-diff check
+# across a small window either side of it. Thresholds calibrated 2026-09-29 against two
+# real clips from this project (one with a genuine hard cut at ~1.5s, one without) plus two
+# synthetic ffmpeg fixtures (a hard cut and continuous fast motion) — see this change's
+# report for the measured numbers.
+CUT_SCENE_THRESHOLD = 0.4
+CUT_EDGE_GUARD = 0.15        # ignore a "cut" within this many seconds of either end
+CUT_CONFIRM_DELTA = 0.2      # compare frames this far before/after a candidate cut
+CUT_CONFIRM_PIXEL_DIFF = 40  # mean abs diff on a 64x36 greyscale pair: a genuine hard cut
+                             # measured 60-95 here; fast in-shot motion that also trips the
+                             # scene-score threshold measured ~28; a clip with no cut at
+                             # all measured <10.
+
+
+def _grey_frame(mp4_path, timestamp: float) -> bytes:
+    """A small greyscale raw frame at `timestamp`, downscaled to 64x36 so the pixel-diff
+    confirmation in detect_cuts compares overall composition, not per-pixel noise."""
+    out = subprocess.run(
+        [video.FFMPEG, '-y', '-ss', f'{max(timestamp, 0.0):.3f}', '-i', str(mp4_path),
+         '-frames:v', '1', '-vf', 'scale=64:36,format=gray', '-f', 'rawvideo', '-'],
+        capture_output=True, check=True)
+    return out.stdout
+
+
+def detect_cuts(mp4_path) -> list[float]:
+    """Timestamps (seconds) where this clip hard-cuts to a different scene.
+
+    Never raises: ffmpeg missing or a malformed clip degrades to "no cuts detected"
+    rather than failing a paid job on a checker outage — same policy as check_fidelity.
+    """
+    try:
+        info = video._probe(pathlib.Path(mp4_path))
+        duration = info['duration'] or 0.0
+        result = subprocess.run(
+            [video.FFMPEG, '-i', str(mp4_path),
+             '-vf', f"select='gt(scene,{CUT_SCENE_THRESHOLD})',showinfo",
+             '-f', 'null', '-'],
+            capture_output=True, text=True)
+        candidates = [float(m) for m in re.findall(r'pts_time:([\d.]+)', result.stderr)]
+        candidates = [t for t in candidates
+                     if CUT_EDGE_GUARD <= t <= duration - CUT_EDGE_GUARD]
+
+        confirmed = []
+        for t in candidates:
+            before = _grey_frame(mp4_path, t - CUT_CONFIRM_DELTA)
+            after = _grey_frame(mp4_path, min(t + CUT_CONFIRM_DELTA, duration))
+            n = min(len(before), len(after))
+            if n == 0:
+                continue
+            diff = sum(abs(a - b) for a, b in zip(before[:n], after[:n])) / n
+            if diff > CUT_CONFIRM_PIXEL_DIFF:
+                confirmed.append(round(t, 2))
+        return confirmed
+    except Exception as error:                       # noqa: BLE001 - degrade, don't fail
+        logging.warning('orchestrator.detect_cuts unavailable: %r', error)
+        return []
+
+
+# --- vision check for storyboard ad clips -----------------------------------------------
+
+SHOT_CLIP_MODEL = 'claude-haiku-4-5'          # matches video.FIDELITY_MODEL
+SHOT_CLIP_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'same_scene': {'type': 'boolean'},
+        'same_design': {'type': 'boolean'},
+        'person_appears': {'type': 'boolean'},
+        'person_matches_frame': {'anyOf': [{'type': 'boolean'}, {'type': 'null'}]},
+        'reason': {'type': 'string'},
+    },
+    'required': ['same_scene', 'same_design', 'person_appears', 'person_matches_frame',
+                'reason'],
+    'additionalProperties': False,
+}
+
+
+def check_shot_clip(frame_path, mp4_path, description: str = '',
+                    has_person: bool = False) -> tuple[bool, str]:
+    """Did this storyboard shot's clip stay faithful to its approved frame?
+
+    Mirrors video.check_fidelity's never-raise pattern (a checker outage must never fail
+    a paid job), comparing the approved frame against the clip's midpoint and its last
+    frame. Unlike video.check_fidelity — written for the old single-model flow, whose
+    schema only ever asked person questions ("is her whole face in frame") — this also
+    asks same_scene, so a product-only shot that grew an invented person fails here even
+    when video.check_fidelity would have passed it on jewellery design alone (the exact
+    2026-09-27 spike this change fixes).
+
+    `has_person` comes from the shot's own spec (_shot_has_person) — for a product-only
+    shot, person_matches_frame is meaningless (there is no person in the approved frame to
+    match), so it is only consulted when has_person is True.
+    """
+    try:
+        info = video._probe(pathlib.Path(mp4_path))
+        duration = info['duration'] or 0.0
+        midpoint = duration / 2
+        near_end = max(duration - 0.1, 0.0)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dir = pathlib.Path(tmp_dir)
+            mid_frame = tmp_dir / 'mid.jpg'
+            end_frame = tmp_dir / 'end.jpg'
+            video._extract_frame(mp4_path, midpoint, mid_frame)
+            video._extract_frame(mp4_path, near_end, end_frame)
+
+            import anthropic
+
+            import product as product_module
+
+            def image_block(path):
+                return {'type': 'image', 'source': {'type': 'base64',
+                        'media_type': product_module.VISION_MEDIA_TYPE,
+                        'data': product_module.encode(path)}}
+
+            piece_clause = f'The piece is: {description}.' if description else ''
+            person_clause = (
+                'This shot is meant to show a person; person_matches_frame: does the '
+                'person in the clip match the one in the approved frame (same identity)? '
+                if has_person else
+                'This shot is meant to be PRODUCT-ONLY — no person should appear anywhere '
+                'in the clip. Set person_matches_frame to null.'
+            )
+            reply = anthropic.Anthropic().messages.create(
+                model=SHOT_CLIP_MODEL, max_tokens=400,
+                system=(
+                    'You are a strict jewellery ad QC inspector. Catch a clip that '
+                    'drifted away from its approved frame — cut to a different scene, '
+                    'silently redesigned the piece, or (for a product-only shot) '
+                    'invented a person who was never in the approved frame. When unsure, '
+                    'answer the stricter (failing) value: a false pass ships a wrong ad, '
+                    'a false fail only costs one retry.'
+                ),
+                messages=[{'role': 'user', 'content': [
+                    {'type': 'text', 'text': 'Image 1 — the APPROVED FRAME (ground truth).'},
+                    image_block(frame_path),
+                    {'type': 'text', 'text': "Image 2 — the clip's middle frame."},
+                    image_block(mid_frame),
+                    {'type': 'text', 'text': "Image 3 — the clip's FINAL frame."},
+                    image_block(end_frame),
+                    {'type': 'text', 'text': (
+                        f'{piece_clause} same_scene: do Images 2 and 3 show the SAME '
+                        'setting/composition as Image 1 — not a hard cut to a different '
+                        'scene? same_design: same jewellery shape, metal colour and stone '
+                        'layout as Image 1? person_appears: does a person (face, hands or '
+                        f'body) appear anywhere in Image 2 or Image 3? {person_clause} '
+                        'Give a one-sentence reason.')},
+                ]}],
+                output_config={'format': {'type': 'json_schema', 'schema': SHOT_CLIP_SCHEMA}},
+            )
+            text = next(block.text for block in reply.content if block.type == 'text')
+            answer = json.loads(text)
+
+        if not answer['same_scene'] or not answer['same_design']:
+            return False, answer['reason']
+        if not has_person and answer['person_appears']:
+            return False, answer['reason']
+        if has_person and answer['person_matches_frame'] is False:
+            return False, answer['reason']
+        return True, answer['reason']
+    except Exception as error:                       # noqa: BLE001 - never fail a paid job
+        logging.warning('orchestrator.check_shot_clip unavailable: %r', error)
         return True, f'fidelity check unavailable: {error!r}'
 
 
@@ -685,10 +1226,10 @@ def run_frame(job_id: str) -> None:
                      'reference_count': len(image_urls), 'aspect_note': aspect_note},
             job_id=job_id, metadata={'fidelity': fidelity} if fidelity else {})
 
-        if active_shot and not active_shot.get('selected_frame_asset_id'):
-            storyboard.select_asset(workspace_id, asset_shot_id, asset['id'])
-
-        storyboard.complete_generation(workspace_id, storyboard_id, shot_key, 'frame_done')
+        # complete_generation transitions + selects on EVERY shot row (any version) still
+        # waiting on this exact job, not just the active version's — see its docstring.
+        storyboard.complete_generation(workspace_id, storyboard_id, shot_key, 'frame_done',
+                                       asset_id=asset['id'])
         credits.settle(job_id, delivered=reserved)
         jobs.finish(job_id, 'succeeded',
                    failures=[['fidelity', fidelity['reason']]] if fidelity and not fidelity['ok']
@@ -776,11 +1317,26 @@ def run_video_shot(job_id: str) -> None:
             mp4_path.write_bytes(hf._fetch_bytes(url))
             return mp4_path
 
+        has_person = _shot_has_person(shot)
+
+        def check_clip(path):
+            """Cut detector first (free, no LLM) — a hard cut fails outright without
+            spending a vision call; only a clean, single-scene clip goes on to
+            check_shot_clip. Replaces video.check_fidelity here: that checker's schema
+            only ever asked person questions, so it passed the 2026-09-27 spike's clip
+            (a product-only shot that hard-cut to an invented woman) on jewellery design
+            alone. The old single-clip flow (app.run_video) still uses
+            video.check_fidelity, untouched."""
+            cuts = detect_cuts(path)
+            if cuts:
+                return False, f'the clip cuts to a different scene at {cuts[0]:.1f}s'
+            return check_shot_clip(working_frame, path, description, has_person)
+
         attempts = []
         mp4_path = one_attempt()
         jobs.progress(job_id, 'checking fidelity', None, 'checking the piece matches…',
                      force=True)
-        ok, reason = video.check_fidelity(working_frame, mp4_path, description)
+        ok, reason = check_clip(mp4_path)
         attempts.append({'ok': ok, 'reason': reason})
         if not ok:
             jobs.progress(job_id, 'retrying — the clip changed the piece', 0.0,
@@ -788,7 +1344,7 @@ def run_video_shot(job_id: str) -> None:
             mp4_path = one_attempt()                            # one free retry
             jobs.progress(job_id, 'checking fidelity', None,
                          'checking the piece matches…', force=True)
-            ok2, reason2 = video.check_fidelity(working_frame, mp4_path, description)
+            ok2, reason2 = check_clip(mp4_path)
             attempts.append({'ok': ok2, 'reason': reason2})
             # The second result is kept regardless of its own verdict, same as
             # app.run_video — there is no third try.
@@ -820,10 +1376,10 @@ def run_video_shot(job_id: str) -> None:
             thumb_key=thumb_key, job_id=job_id,
             metadata={'fidelity': final_fidelity, 'attempts': attempts, 'probe': probe})
 
-        if active_shot and not active_shot.get('selected_video_asset_id'):
-            storyboard.select_asset(workspace_id, asset_shot_id, asset['id'])
-
-        storyboard.complete_generation(workspace_id, storyboard_id, shot_key, 'video_done')
+        # complete_generation transitions + selects on EVERY shot row (any version) still
+        # waiting on this exact job, not just the active version's — see its docstring.
+        storyboard.complete_generation(workspace_id, storyboard_id, shot_key, 'video_done',
+                                       asset_id=asset['id'])
         credits.settle(job_id, delivered=reserved)
         jobs.finish(job_id, 'succeeded',
                    failures=[['fidelity', final_fidelity['reason']]]
@@ -946,6 +1502,10 @@ def demo() -> None:
     assert 'amber and gold' in motion_prompt, motion_prompt          # storyboard palette
     assert motion.FIDELITY_LOCK in motion_prompt, motion_prompt
     assert negative == motion.NEGATIVE, negative
+    # a character shot keeps FIDELITY_LOCK's identity language AND gets the new
+    # "one continuous shot" line appended after it (never instead of it).
+    assert 'her identity does not change' in motion_prompt, motion_prompt
+    assert motion_prompt.endswith('One continuous shot, no cuts.'), motion_prompt
 
     # a user's motion_prompt override replaces the action/camera beat, but the fidelity
     # lock and negative still land — never left to an override to drop.
@@ -957,16 +1517,111 @@ def demo() -> None:
 
     # an empty spec still produces something sane (the default camera-move beat), not an
     # empty/whitespace prompt — red-before-green: prove this can actually fail first, by
-    # asking for a camera move that isn't in the vocabulary at all.
-    bare_prompt, _ = compose_motion_prompt({**ctx, 'storyboard': {}}, {'id': 'vs9', 'spec': {}})
+    # asking for a camera move that isn't in the vocabulary at all. character_ids keeps
+    # these two on the character-lock path — they are testing camera_move fallback, not
+    # the person/product split (covered separately below).
+    bare_prompt, _ = compose_motion_prompt(
+        {**ctx, 'storyboard': {}}, {'id': 'vs9', 'character_ids': ['c1'], 'spec': {}})
     assert CAMERA_MOVE_PROSE[DEFAULT_CAMERA_MOVE] in bare_prompt.lower(), bare_prompt
     assert motion.FIDELITY_LOCK in bare_prompt, bare_prompt
     junk_prompt, _ = compose_motion_prompt(
-        {**ctx, 'storyboard': {}}, {'id': 'vs8', 'spec': {'camera_move': 'dolly-zoom'}})
+        {**ctx, 'storyboard': {}},
+        {'id': 'vs8', 'character_ids': ['c1'], 'spec': {'camera_move': 'dolly-zoom'}})
     assert CAMERA_MOVE_PROSE[DEFAULT_CAMERA_MOVE] in junk_prompt.lower(), \
         'an unknown camera_move must fall back to the default, not be dropped or raise'
 
     print('orchestrator.compose_motion_prompt ok')
+
+    # --- product-only shots get PRODUCT_LOCK, never FIDELITY_LOCK's person language ---
+    # The exact bug this section guards against (2026-09-27 spike): a product-only macro
+    # shot (no character_ids, no character_action) whose prompt still said "her whole
+    # face stays in frame" — Kling obeyed by inventing a woman mid-clip.
+    product_shot = {
+        'id': 'vs-product', 'motion_prompt': '', 'product_ids': ['p1'],
+        'spec': {'camera_move': 'static', 'motion_intensity': 'low',
+                 'environment': 'a brass tray', 'emotional_beat': 'quiet luxury',
+                 'product_interaction': 'the necklace catches the light'},
+    }
+    assert not _shot_has_person(product_shot)
+    product_ctx = {**ctx, 'shots': [product_shot]}
+    product_prompt, product_negative = compose_motion_prompt(product_ctx, product_shot)
+    assert PRODUCT_LOCK in product_prompt, product_prompt
+    assert 'No people, hands or faces appear' in product_prompt, product_prompt
+    padded = f' {product_prompt.lower()} '
+    for banned in (' she ', ' her '):
+        assert banned not in padded, (banned, product_prompt)
+    assert 'her whole face' not in product_prompt.lower(), product_prompt
+    assert 'her identity' not in product_prompt.lower(), product_prompt
+    assert motion.NEGATIVE in product_negative and PRODUCT_NEGATIVE_EXTRA in product_negative, \
+        product_negative
+    assert motion.FIDELITY_LOCK not in product_prompt, product_prompt
+
+    # a motion_prompt override on a product-only shot still gets PRODUCT_LOCK, not
+    # FIDELITY_LOCK — the override replaces only the action/camera beat.
+    product_override = {**product_shot, 'motion_prompt': 'light drifts across the pave'}
+    override_product_prompt, _ = compose_motion_prompt(product_ctx, product_override)
+    assert override_product_prompt.startswith('light drifts across the pave')
+    assert PRODUCT_LOCK in override_product_prompt, override_product_prompt
+
+    # character_ids alone (no character_action) is also enough to select the person path.
+    character_only_shot = {**product_shot, 'id': 'vs-char-only', 'character_ids': ['c1']}
+    assert _shot_has_person(character_only_shot)
+    character_only_prompt, character_only_negative = compose_motion_prompt(
+        {**ctx, 'shots': [character_only_shot]}, character_only_shot)
+    assert motion.FIDELITY_LOCK in character_only_prompt, character_only_prompt
+    assert character_only_negative == motion.NEGATIVE, character_only_negative
+
+    print('orchestrator.compose_motion_prompt (product-only PRODUCT_LOCK) ok')
+
+    # --- compose_frame_prompt: product-only shots get a no-person clause too -----------
+    frame_product_shot = {**ctx['shots'][0], 'character_ids': [], 'product_ids': ['p1'],
+                          'spec': {'shot_type': 'macro',
+                                   'product_interaction': 'resting on a brass tray'}}
+    frame_product_prompt = compose_frame_prompt(ctx, frame_product_shot)
+    assert 'No people, hands or faces appear' in frame_product_prompt, frame_product_prompt
+
+    frame_hands_shot = {**frame_product_shot,
+                        'spec': {**frame_product_shot['spec'],
+                                'product_interaction': 'a hand holds the pendant'}}
+    frame_hands_prompt = compose_frame_prompt(ctx, frame_hands_shot)
+    assert 'Only a hand may appear' in frame_hands_prompt, frame_hands_prompt
+    assert 'No people, hands or faces appear' not in frame_hands_prompt, frame_hands_prompt
+
+    # a character shot never gets the product-only clause at all.
+    assert 'No people, hands or faces appear' not in prompt0, prompt0
+    print('orchestrator.compose_frame_prompt (product-only no-person clause) ok')
+
+    # --- detect_cuts: free, deterministic, no LLM --------------------------------------
+    # Two synthetic ffmpeg fixtures: one with a genuine hard cut at 1.5s (two different
+    # testsrc patterns concatenated), one continuous but with fast in-shot motion (the
+    # exact case CUT_CONFIRM_PIXEL_DIFF exists to NOT flag as a cut).
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_dir = pathlib.Path(tmp_dir)
+        cut_fixture = tmp_dir / 'cut.mp4'
+        continuous_fixture = tmp_dir / 'continuous.mp4'
+        subprocess.run(
+            [video.FFMPEG, '-y', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25:duration=1.5',
+             '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=25:duration=1.5',
+             '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0', str(cut_fixture)],
+            capture_output=True, check=True)
+        subprocess.run(
+            [video.FFMPEG, '-y', '-f', 'lavfi', '-i',
+             'testsrc2=size=320x240:rate=25:duration=3,rotate=t*0.5:c=black,'
+             "zoompan=z='1+0.1*sin(time)':d=1",
+             '-t', '3', str(continuous_fixture)],
+            capture_output=True, check=True)
+
+        cut_result = detect_cuts(cut_fixture)
+        assert len(cut_result) == 1 and 1.3 <= cut_result[0] <= 1.7, cut_result
+        # The continuous fixture's rotate/zoom is exactly the fast in-shot motion
+        # CUT_CONFIRM_PIXEL_DIFF exists to tolerate — measured against the two REAL
+        # clips this change was written against, a genuine hard cut reads 60-95 mean
+        # abs diff, fast in-shot motion that still crosses CUT_SCENE_THRESHOLD reads
+        # ~28, and a clip with no cut at all reads <10 (see this change's report).
+        continuous_result = detect_cuts(continuous_fixture)
+        assert continuous_result == [], continuous_result
+
+    print('orchestrator.detect_cuts ok')
 
     # --- _clip_seconds: smallest supported duration >= max(min(durations), ceil(shot)) -
     kling_provider = video.get('higgsfield', 'kling')        # durations 3-15

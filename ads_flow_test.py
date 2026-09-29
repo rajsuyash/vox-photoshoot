@@ -31,9 +31,11 @@ import db
 import director
 import hf
 import jobs
+import music
 import orchestrator
 import product as product_module   # `product` is already a local var name inside main()
 import providers
+import render
 import storage
 import storyboard
 import video
@@ -41,6 +43,7 @@ import video
 
 FIXTURE_MP4 = pathlib.Path('out/ads_test_fixtures/fixture.mp4')
 FIXTURE_FRAME = pathlib.Path('out/ads_test_fixtures/frame-fixture.jpg')
+CUT_FIXTURE_MP4 = pathlib.Path('out/ads_test_fixtures/cut-fixture.mp4')
 
 
 def ensure_fixture_frame() -> None:
@@ -65,6 +68,23 @@ def ensure_fixture_mp4() -> None:
     subprocess.run(
         ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=5',
          '-pix_fmt', 'yuv420p', str(FIXTURE_MP4)],
+        capture_output=True, check=True)
+
+
+def ensure_cut_fixture_mp4() -> None:
+    """A real mp4 with a genuine hard cut at 1.5s — two different testsrc patterns
+    concatenated — for exercising orchestrator.detect_cuts (unstubbed, real ffmpeg) end
+    to end through run_video_shot, the same shape as the real clip this whole change
+    was written against (a product-only shot's clip that hard-cut to an invented
+    person)."""
+    if CUT_FIXTURE_MP4.exists():
+        return
+    CUT_FIXTURE_MP4.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25:duration=1.5',
+         '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=25:duration=1.5',
+         '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0', '-pix_fmt', 'yuv420p',
+         str(CUT_FIXTURE_MP4)],
         capture_output=True, check=True)
 
 
@@ -107,6 +127,19 @@ def fake_hf_download(urls, directory, prefix='frame'):
         path.write_bytes(b'fake-png-bytes')
         paths.append(path)
     return paths
+
+
+def fake_music_generate(version, out_path, provider=None, on_progress=None, seed=None):
+    """Stands in for music.generate() — no real fal call. A real 20s sine tone mp3, so
+    render.render() (called FOR REAL in the music+render test section below) has an
+    actual audio file to mux, not garbage bytes."""
+    out_path = pathlib.Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['ffmpeg', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=20',
+                    '-ar', '44100', str(out_path)], capture_output=True, check=True)
+    arguments = music.build_arguments(version, seed=seed)
+    return {'path': out_path, 'duration': 20.0, 'provider': 'fal/elevenlabs-music-2.5',
+           'model': 'elevenlabs/music/v2.5', 'arguments': arguments}
 
 
 def fake_generate_concepts(brief, products, characters, on_progress=None):
@@ -756,8 +789,11 @@ def main() -> None:
 
             print('ads_flow: frames ok')
 
-            # --- a fork made while a frame job is running -> completion lands on the ----------
-            #     ACTIVE version's shot, not the pre-fork row (storyboard.complete_generation)
+            # --- a fork made while a frame job is running -> completion lands on EVERY ------
+            #     shot row still waiting on that exact job, not just the version active
+            #     when it finishes (storyboard.complete_generation). The pre-fork row is
+            #     NOT "left untouched" — nothing else will ever complete it once its own
+            #     version stops being the one anything points at, so it must heal too.
             fork_target_id = (ordinary_ids[2] if failed_shot_id == ordinary_ids[1]
                               else ordinary_ids[1])
             shot_key = by_id[fork_target_id]['shot_key']
@@ -767,36 +803,55 @@ def main() -> None:
                                       (fork_target_id,), one=True)['state']
             assert pre_fork_state == 'frame_generating', pre_fork_state
 
-            # an unrelated edit on a different shot forks the whole version
+            # an unrelated edit on a different shot forks the whole version — the job's
+            # own real row (status='queued') is what keeps this fork's copy of
+            # fork_target_id from being reconciled away as abandoned (see
+            # storyboard.reconcile_generating, run right after every fork)
             forked = client.patch(f'/api/shots/{ordinary_ids[0]}',
                                   json={'camera_angle': 'a different angle'}).json()
             new_version_id = forked['version_id']
             assert new_version_id != frame_version_id, 'the edit should have forked'
+            forked_copy_state = db.query(
+                """SELECT state FROM storyboard_shots
+                    WHERE version_id = %s AND shot_key = %s""",
+                (new_version_id, shot_key), one=True)['state']
+            assert forked_copy_state == 'frame_generating', \
+                'a job genuinely still queued must not be reconciled away by the fork'
 
             orchestrator.run_frame(job_id)
 
             new_version = client.get(f'/api/versions/{new_version_id}').json()
             active_shot = next(s for s in new_version['shots'] if s['shot_key'] == shot_key)
             assert active_shot['state'] == 'frame_review', active_shot
-            stale = db.query('SELECT state FROM storyboard_shots WHERE id = %s',
-                             (fork_target_id,), one=True)
-            assert stale['state'] == 'frame_generating', \
-                'the pre-fork shot row must be left untouched'
+            assert active_shot['selected_frame_url'], active_shot
 
-            print('ads_flow: fork-while-generating ok')
+            healed_pre_fork = db.query('SELECT state FROM storyboard_shots WHERE id = %s',
+                                       (fork_target_id,), one=True)
+            assert healed_pre_fork['state'] == 'frame_review', \
+                'the pre-fork row must heal too — its version is no longer the active ' \
+                'one, so nothing else will ever complete it'
+
+            print('ads_flow: fork-while-generating heals every waiting shot ok')
         finally:
             providers.get, orchestrator.check_frame_fidelity, hf.download = (
                 real_provider_get, real_check_fidelity, real_hf_download)
 
         # --- 15) videos: clip generation, stubbed provider + fidelity --------------------
+        # run_video_shot calls orchestrator.detect_cuts (real ffmpeg, never stubbed — see
+        # the cut-fixture section below) then orchestrator.check_shot_clip (the paid
+        # vision call, stubbed here exactly the way video.check_fidelity used to be — the
+        # OLD single-clip flow, app.run_video, still calls the real video.check_fidelity
+        # and is covered separately by video_flow_test.py, untouched by this change).
         ensure_fixture_mp4()
         ensure_fixture_frame()
+        ensure_cut_fixture_mp4()
         fake_video_provider = FakeVideoProvider()
-        real_video_get, real_video_generate, real_video_check_fidelity, real_hf_fetch_bytes = (
-            video.get, video.generate, video.check_fidelity, hf._fetch_bytes)
+        real_video_get, real_video_generate, real_check_shot_clip, real_hf_fetch_bytes = (
+            video.get, video.generate, orchestrator.check_shot_clip, hf._fetch_bytes)
 
         video_generate_calls = []
         video_control = {'fail_always': False}
+        hf_fetch_control = {'use_cut_fixture': False}
 
         def fake_video_generate(still_path, prompt, negative, duration, provider,
                                 on_progress=None):
@@ -806,11 +861,13 @@ def main() -> None:
             return 'fake://clip.mp4'
 
         def fake_hf_fetch_bytes(url):
+            if hf_fetch_control['use_cut_fixture']:
+                return CUT_FIXTURE_MP4.read_bytes()
             return FIXTURE_MP4.read_bytes()
 
         fidelity_control = {'sequence': None}
 
-        def fake_video_check_fidelity(still_path, mp4_path, description=''):
+        def fake_check_shot_clip(frame_path, mp4_path, description='', has_person=False):
             if fidelity_control['sequence']:
                 return fidelity_control['sequence'].pop(0)
             return True, 'looks right'
@@ -818,7 +875,7 @@ def main() -> None:
         video.get = lambda *a, **k: fake_video_provider
         video.generate = fake_video_generate
         hf._fetch_bytes = fake_hf_fetch_bytes
-        video.check_fidelity = fake_video_check_fidelity
+        orchestrator.check_shot_clip = fake_check_shot_clip
 
         try:
             video_created = storyboard.create_storyboard(
@@ -927,6 +984,33 @@ def main() -> None:
                 {'ok': False, 'reason': 'second attempt bad'}, latest_variant
             fidelity_control['sequence'] = None
 
+            # --- a clip with a real hard cut -> caught by the REAL detect_cuts (no LLM,
+            #     never stubbed) before check_shot_clip is even asked -> both attempts use
+            #     the same cut fixture -> still fails after the retry, 2 attempts, 1 charge.
+            #     check_shot_clip stays stubbed to 'looks right' throughout, proving the
+            #     failure came from the cut detector, not the (stubbed) vision check.
+            hf_fetch_control['use_cut_fixture'] = True
+            balance_before = credits.balance(ws_id)
+            calls_before = len(video_generate_calls)
+            cut_resp = client.post(f'/api/shots/{video_shot_id}/videos',
+                                   data={'idempotency_key': 'v-cut'})
+            assert cut_resp.status_code == 200, cut_resp.text
+            cut_job = _await_job(client, cut_resp.json()['job_id'])
+            assert cut_job['status'] == 'succeeded', cut_job   # delivered anyway
+            assert len(video_generate_calls) - calls_before == 2, \
+                'a detected cut must trigger exactly one free retry, same as a vision fail'
+            assert credits.balance(ws_id) == balance_before - expected_price, \
+                'only one charge for the whole attempt, retry included'
+            hf_fetch_control['use_cut_fixture'] = False
+
+            video_v = client.get(f'/api/versions/{video_version_id}').json()
+            video_shot = next(s for s in video_v['shots'] if s['id'] == video_shot_id)
+            cut_variant = video_shot['video_variants'][-1]
+            assert cut_variant['fidelity']['ok'] is False, cut_variant
+            assert 'different scene' in cut_variant['fidelity']['reason'], cut_variant
+
+            print('ads_flow: videos cut detector (real ffmpeg, unstubbed) ok')
+
             print('ads_flow: videos success/fidelity ok')
 
             # --- provider raises -> video_failed + refund, others unaffected -------------
@@ -992,25 +1076,404 @@ def main() -> None:
 
             print('ads_flow: videos approve/ready_for_render ok')
 
+            # --- PATCH a shot on an approved version with its OWN current values -> --------
+            #     no-op: same version id back, version count unchanged, state untouched -----
+            versions_before_noop = len(
+                client.get(f'/api/versions/{video_version_id}').json()['versions'])
+            current_video_shot = next(s for s in final_v['shots'] if s['id'] == video_shot_id)
+            noop_patch = client.patch(f'/api/shots/{video_shot_id}', json={
+                'duration': str(current_video_shot['duration']),   # numeric string == number
+                'lighting': '',                                   # '' == a never-set key
+            }).json()
+            assert noop_patch['version_id'] == video_version_id, \
+                'a no-op PATCH must not fork an approved version'
+            assert noop_patch['state'] == 'video_approved', noop_patch
+            versions_after_noop = len(
+                client.get(f'/api/versions/{video_version_id}').json()['versions'])
+            assert versions_after_noop == versions_before_noop, \
+                'a no-op PATCH must not create a new version'
+            print('ads_flow: no-op PATCH (unchanged values) does not fork or demote ok')
+
+            # --- 16) THE REAL BUG, reproduced exactly: approved V2 -> start video on S ------
+            #     -> (job still queued) split+delete another shot forks V2 -> V3, approve
+            #     V3 -> job completes -> both V2:S and V3:S land on video_review with the
+            #     clip selected -> re-approve V2 from the dropdown -> GET V2 shows
+            #     video_review, never stuck in video_generating again. ------------------------
+            bug_created = storyboard.create_storyboard(
+                ws_id, campaign_id, {'target_duration': 6, 'title': 'multi-version healing'},
+                [{'duration': 3}, {'duration': 3}])
+            bug_storyboard_id = bug_created['storyboard_id']
+            version_2_id = bug_created['version_id']
+            bug_shots = storyboard.get_version(ws_id, version_2_id)['shots']
+            shot_s_id, shot_s_key = str(bug_shots[0]['id']), str(bug_shots[0]['shot_key'])
+            shot_t_id = str(bug_shots[1]['id'])
+
+            storyboard.apply_event(ws_id, shot_s_id, 'approve_instructions')
+            storyboard.apply_event(ws_id, shot_t_id, 'approve_instructions')
+            storyboard.approve_version(ws_id, version_2_id)   # "approved V2"
+
+            # drive S to frame_approved by hand — frame generation itself is exhaustively
+            # covered elsewhere in this file; this section is about job completion routing.
+            bug_frame_key = f'ads/{campaign_id}/{shot_s_key}/frame-fake.jpg'
+            storage.put(FIXTURE_FRAME, bug_frame_key)
+            storyboard.apply_event(ws_id, shot_s_id, 'start_frame')
+            storyboard.apply_event(ws_id, shot_s_id, 'frame_done')
+            bug_frame_asset = storyboard.add_asset(
+                ws_id, campaign_id, bug_storyboard_id, version_2_id, 'storyboard_image',
+                bug_frame_key, shot_id=shot_s_id, shot_key=shot_s_key)
+            storyboard.select_asset(ws_id, shot_s_id, bug_frame_asset['id'])
+            storyboard.apply_event(ws_id, shot_s_id, 'approve_frame',
+                                   asset_id=bug_frame_asset['id'])
+
+            # start the video job on S — created (status='queued'), nothing has run it yet
+            video_job_id = orchestrator.start_video(ws_id, shot_s_id, 'v-bug-repro',
+                                                    str(admin_account['id']))
+            mid_flight = db.query('SELECT state FROM storyboard_shots WHERE id = %s',
+                                  (shot_s_id,), one=True)
+            assert mid_flight['state'] == 'video_generating', mid_flight
+
+            # while the job is still queued: split T, then delete the split-off half — any
+            # structural edit on an approved version forks it (ensure_editable) -> V3
+            split_resp = client.post(f'/api/shots/{shot_t_id}/split')
+            assert split_resp.status_code == 200, split_resp.text
+            version_3_id = split_resp.json()['version_id']
+            assert version_3_id != version_2_id, 'the split must have forked the version'
+            _t_half, split_off_id = split_resp.json()['shot_ids']
+            delete_resp = client.post(f'/api/shots/{split_off_id}/delete')
+            assert delete_resp.status_code == 200, delete_resp.text
+            assert delete_resp.json()['version_id'] == version_3_id, \
+                'V3 is already a draft — deleting from it must not fork again'
+
+            shot_s_in_v3 = next(s for s in storyboard.get_version(ws_id, version_3_id)['shots']
+                                if str(s['shot_key']) == shot_s_key)
+            assert shot_s_in_v3['state'] == 'video_generating', \
+                ('the fork must copy S mid-flight, and the job genuinely still queued '
+                 'must stop reconcile_generating from healing it away as abandoned')
+
+            storyboard.approve_version(ws_id, version_3_id)   # "approved V3" (V2 superseded)
+
+            # the job finishes now -> complete_generation must heal EVERY row still
+            # waiting on it: V2's original S (no longer active, soon superseded) AND
+            # V3's forked copy (the one active when the job actually finishes)
+            orchestrator.run_video_shot(video_job_id)
+
+            for vid, label in ((version_2_id, 'V2 (pre-fork)'), (version_3_id, 'V3 (active)')):
+                row = next(s for s in storyboard.get_version(ws_id, vid)['shots']
+                          if str(s['shot_key']) == shot_s_key)
+                assert row['state'] == 'video_review', (label, row)
+                assert row['selected_video_asset_id'], (label, row)
+
+            # the user re-approves the ORIGINAL version from the dropdown — the exact
+            # real-world sequence. V2 becomes active/approved again; its copy of S must
+            # show video_review, never the video_generating it was stuck in before this fix.
+            storyboard.approve_version(ws_id, version_2_id)
+            reapproved = client.get(f'/api/versions/{version_2_id}').json()
+            reapproved_shot = next(s for s in reapproved['shots'] if s['shot_key'] == shot_s_key)
+            assert reapproved_shot['state'] == 'video_review', reapproved_shot
+            assert reapproved_shot['selected_video_url'], reapproved_shot
+
+            print('ads_flow: multi-version job completion (the real-bug repro) ok')
+
             # --- the OLD single-clip flow's own offer is untouched by widening the ad
             #     video providers' own durations ------------------------------------------
             options = client.get('/api/video-options').json()
             assert sorted(options['durations']) == [5, 10], options['durations']
         finally:
-            video.get, video.generate, video.check_fidelity, hf._fetch_bytes = (
-                real_video_get, real_video_generate, real_video_check_fidelity,
+            video.get, video.generate, orchestrator.check_shot_clip, hf._fetch_bytes = (
+                real_video_get, real_video_generate, real_check_shot_clip,
                 real_hf_fetch_bytes)
+
+        # --- 17/18) music + final render: music.generate is stubbed (a real 20s sine
+        #     mp3 — no fal call), but render.render() runs FOR REAL against real tiny
+        #     ffmpeg testsrc clips stored through storage.put in local mode, so the
+        #     actual ffmpeg pipeline (normalise, end card, join, mux) is genuinely
+        #     exercised, not mocked away. ------------------------------------------------
+        credits.grant(ws_id, 20, 'ads-music-render-fund')
+        real_music_generate = music.generate
+        music.generate = fake_music_generate
+        try:
+            mr_created = storyboard.create_storyboard(
+                ws_id, campaign_id, {'target_duration': 5.5, 'title': 'Music+render board',
+                                     'aspect_ratio': '9:16'},
+                [{'duration': 2.0, 'character_ids': [character['id']],
+                 'product_ids': [product_row_id],
+                 'spec': {'product_visibility': 'hero', 'transition_out': 'cut'}},
+                 {'duration': 1.5, 'character_ids': [character['id']],
+                 'spec': {'transition_out': 'cut'}},
+                 {'duration': 2.0, 'kind': 'end_card',
+                 'spec': {'brand_text': 'MEHTA JEWELLER', 'tagline': 'Since 1952'}}])
+            mr_version_id = mr_created['version_id']
+            mr_storyboard_id = mr_created['storyboard_id']
+            mr_shots = storyboard.get_version(ws_id, mr_version_id)['shots']
+            mr_shot_a, mr_shot_b = [s for s in mr_shots if s['kind'] == 'shot']
+            mr_end_card = next(s for s in mr_shots if s['kind'] == 'end_card')
+
+            for sid in (str(mr_shot_a['id']), str(mr_shot_b['id']), str(mr_end_card['id'])):
+                storyboard.apply_event(ws_id, sid, 'approve_instructions')
+            assert client.post(f'/api/versions/{mr_version_id}/approve').status_code == 200
+
+            # render refused: no clip approved yet (422 + a problem naming a missing clip)
+            early_render = client.post(f'/api/versions/{mr_version_id}/render',
+                                       data={'idempotency_key': 'mr-early'})
+            assert early_render.status_code == 422, early_render.text
+            assert 'clip' in early_render.json()['detail'], early_render.json()
+
+            # drive both ordinary shots to video_approved with REAL tiny ffmpeg clips —
+            # one carries a 'probe' in its metadata (the run_video_shot-shaped case),
+            # the other has none, so validate_for_render's fetch-and-probe fallback is
+            # exercised too.
+            mr_clip_ids = {}
+            for shot, clip_seconds, with_probe in (
+                    (mr_shot_a, 2.2, True), (mr_shot_b, 1.7, False)):
+                shot_id, shot_key = str(shot['id']), shot['shot_key']
+                frame_key = f'ads/{campaign_id}/{shot_key}/frame-fake.jpg'
+                storage.put(FIXTURE_FRAME, frame_key)
+                storyboard.apply_event(ws_id, shot_id, 'start_frame')
+                storyboard.apply_event(ws_id, shot_id, 'frame_done')
+                frame_asset = storyboard.add_asset(
+                    ws_id, campaign_id, mr_storyboard_id, mr_version_id, 'storyboard_image',
+                    frame_key, shot_id=shot_id, shot_key=shot_key)
+                storyboard.select_asset(ws_id, shot_id, frame_asset['id'])
+                storyboard.apply_event(ws_id, shot_id, 'approve_frame',
+                                       asset_id=frame_asset['id'])
+
+                clip_path = pathlib.Path(f'out/ads_test_fixtures/mr-clip-{shot_key}.mp4')
+                render._make_clip(clip_path, (480, 854), clip_seconds)
+                clip_key = f'ads/{campaign_id}/{shot_key}/clip-fake.mp4'
+                storage.put(clip_path, clip_key)
+                metadata = {'probe': video._probe(clip_path)} if with_probe else {}
+                clip_asset = storyboard.add_asset(
+                    ws_id, campaign_id, mr_storyboard_id, mr_version_id, 'video_clip',
+                    clip_key, shot_id=shot_id, shot_key=shot_key, metadata=metadata)
+                storyboard.select_asset(ws_id, shot_id, clip_asset['id'])
+                storyboard.apply_event(ws_id, shot_id, 'start_video')
+                storyboard.apply_event(ws_id, shot_id, 'video_done')
+                storyboard.apply_event(ws_id, shot_id, 'approve_video',
+                                       asset_id=clip_asset['id'])
+                mr_clip_ids[shot_id] = clip_asset['id']
+
+            # render still refused: every clip is approved, but no music decision yet
+            no_music_render = client.post(f'/api/versions/{mr_version_id}/render',
+                                          data={'idempotency_key': 'mr-nomusic'})
+            assert no_music_render.status_code == 422, no_music_render.text
+            assert 'music' in no_music_render.json()['detail'].lower(), no_music_render.json()
+
+            # music: a stale confirm_credits is refused with a fresh estimate (409)
+            music_estimate = client.get(f'/api/versions/{mr_version_id}/estimate',
+                                        params={'stage': 'music'}).json()
+            assert music_estimate['credits'] > 0, music_estimate
+            music_mismatch = client.post(f'/api/versions/{mr_version_id}/music',
+                                         data={'confirm_credits': 999,
+                                              'idempotency_key': 'music-bad'})
+            assert music_mismatch.status_code == 409, music_mismatch.text
+
+            # music: generate for real (stubbed provider) -> succeeds, auto-selected
+            balance_before_music = credits.balance(ws_id)
+            music_resp = client.post(f'/api/versions/{mr_version_id}/music', data={
+                'confirm_credits': str(music_estimate['credits']),
+                'idempotency_key': 'music-1'})
+            assert music_resp.status_code == 200, music_resp.text
+            music_job = _await_job(client, music_resp.json()['job_id'])
+            assert music_job['status'] == 'succeeded', music_job
+            assert credits.balance(ws_id) == \
+                balance_before_music - music_estimate['credits'], credits.balance(ws_id)
+
+            mr_v = client.get(f'/api/versions/{mr_version_id}').json()
+            assert len(mr_v['music']['variants']) == 1, mr_v['music']
+            music_asset_id = mr_v['music']['variants'][0]['id']
+            assert mr_v['music']['selected_id'] == music_asset_id, mr_v['music']
+            assert mr_v['music']['approved'] is False, mr_v['music']
+
+            # render still refused: music is selected but not yet approved
+            unapproved = client.post(f'/api/versions/{mr_version_id}/render',
+                                     data={'idempotency_key': 'mr-unapproved'})
+            assert unapproved.status_code == 422, unapproved.text
+
+            # approve the music -> ready_for_render/render_ready both flip true
+            approve_music_resp = client.post(
+                f'/api/versions/{mr_version_id}/music/approve', data={})
+            assert approve_music_resp.status_code == 200, approve_music_resp.text
+            mr_v = client.get(f'/api/versions/{mr_version_id}').json()
+            assert mr_v['music']['approved'] is True, mr_v['music']
+            assert mr_v['render_ready']['ready'] is True, mr_v['render_ready']
+
+            print('ads_flow: music estimate/generate/select/approve ok')
+
+            # --- render: the real thing --------------------------------------------------
+            render_resp = client.post(f'/api/versions/{mr_version_id}/render',
+                                      data={'idempotency_key': 'mr-render-1'})
+            assert render_resp.status_code == 200, render_resp.text
+            render_job = _await_job(client, render_resp.json()['job_id'], timeout_s=60)
+            assert render_job['status'] == 'succeeded', render_job
+
+            mr_v = client.get(f'/api/versions/{mr_version_id}').json()
+            assert len(mr_v['renders']) == 1, mr_v['renders']
+            render_row = mr_v['renders'][0]
+            assert render_row['status'] == 'succeeded', render_row
+            assert render_row['url'], render_row
+            assert render_row['resolution'] == '1080x1920', render_row
+
+            render_detail = client.get(f"/api/renders/{render_row['id']}").json()
+            manifest = render_detail['manifest']
+            expected_clip_ids = [mr_clip_ids[str(mr_shot_a['id'])],
+                                mr_clip_ids[str(mr_shot_b['id'])]]
+            assert manifest['clip_asset_ids'] == expected_clip_ids, manifest['clip_asset_ids']
+            assert manifest['music_asset_id'] == music_asset_id, manifest
+            assert manifest['shot_durations'] == [2.0, 1.5, 2.0], manifest['shot_durations']
+
+            total_duration = 2.0 + 1.5 + 2.0    # all-cut transitions: no dissolve shrink
+            assert abs(float(manifest['duration']) - total_duration) <= 0.15, \
+                manifest['duration']
+            assert (manifest['width'], manifest['height']) == (1080, 1920), manifest
+
+            # GET /renders/{id}/download redirects to a presigned URL named
+            # <campaign>-v<version_number>.mp4 — storage.presign only honours that
+            # filename hint in S3 mode (local mode serves straight from /media/ with
+            # no Content-Disposition, see storage.py), so in this local-mode test the
+            # filename itself isn't inspectable; what's checked here is that the
+            # redirect fires and the target URL genuinely serves the mp4 bytes.
+            download_resp = client.get(f"/api/renders/{render_row['id']}/download",
+                                       follow_redirects=False)
+            assert download_resp.status_code == 307, download_resp.text
+            followed = client.get(f"/api/renders/{render_row['id']}/download")
+            assert followed.status_code == 200 and followed.content, \
+                'the presigned download URL must actually serve the mp4 bytes'
+
+            print('ads_flow: render download redirect (named <campaign>-v<n>.mp4) ok')
+
+            completed_storyboard = db.query(
+                'SELECT status FROM storyboards WHERE id = %s', (mr_storyboard_id,),
+                one=True)
+            assert completed_storyboard['status'] == 'completed', completed_storyboard
+
+            asset_row = db.query(
+                """SELECT ga.key FROM final_renders fr
+                     JOIN generated_assets ga ON ga.id = fr.asset_id
+                    WHERE fr.id = %s""", (render_row['id'],), one=True)
+            local_render = pathlib.Path('out/ads_test_fixtures/mr-render.mp4')
+            storage.fetch(asset_row['key'], local_render)
+            render_streams = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type', '-of',
+                 'csv=p=0', str(local_render)], capture_output=True, text=True,
+                check=True).stdout.split()
+            assert 'audio' in render_streams and 'video' in render_streams, render_streams
+
+            print('ads_flow: final render (real ffmpeg, real music mux) ok')
+
+            # --- silent path: skip music -> the render still carries an audio stream ----
+            silent_created = storyboard.create_storyboard(
+                ws_id, campaign_id, {'target_duration': 4, 'title': 'Silent render board',
+                                     'aspect_ratio': '9:16'},
+                [{'duration': 2.0, 'spec': {'transition_out': 'cut'}},
+                 {'duration': 2.0, 'kind': 'end_card', 'spec': {'brand_text': 'ACME'}}])
+            silent_version_id = silent_created['version_id']
+            silent_storyboard_id = silent_created['storyboard_id']
+            silent_shots = storyboard.get_version(ws_id, silent_version_id)['shots']
+            silent_shot = next(s for s in silent_shots if s['kind'] == 'shot')
+            silent_shot_id = str(silent_shot['id'])
+            silent_shot_key = silent_shot['shot_key']
+            silent_end_card_id = str(next(s for s in silent_shots
+                                          if s['kind'] == 'end_card')['id'])
+
+            storyboard.apply_event(ws_id, silent_shot_id, 'approve_instructions')
+            storyboard.apply_event(ws_id, silent_end_card_id, 'approve_instructions')
+            storyboard.approve_version(ws_id, silent_version_id)
+
+            silent_frame_key = f'ads/{campaign_id}/{silent_shot_key}/frame-fake.jpg'
+            storage.put(FIXTURE_FRAME, silent_frame_key)
+            storyboard.apply_event(ws_id, silent_shot_id, 'start_frame')
+            storyboard.apply_event(ws_id, silent_shot_id, 'frame_done')
+            silent_frame_asset = storyboard.add_asset(
+                ws_id, campaign_id, silent_storyboard_id, silent_version_id,
+                'storyboard_image', silent_frame_key, shot_id=silent_shot_id,
+                shot_key=silent_shot_key)
+            storyboard.select_asset(ws_id, silent_shot_id, silent_frame_asset['id'])
+            storyboard.apply_event(ws_id, silent_shot_id, 'approve_frame',
+                                   asset_id=silent_frame_asset['id'])
+
+            silent_clip_path = pathlib.Path('out/ads_test_fixtures/silent-clip.mp4')
+            render._make_clip(silent_clip_path, (480, 854), 2.2)
+            silent_clip_key = f'ads/{campaign_id}/{silent_shot_key}/clip-fake.mp4'
+            storage.put(silent_clip_path, silent_clip_key)
+            silent_clip_asset = storyboard.add_asset(
+                ws_id, campaign_id, silent_storyboard_id, silent_version_id, 'video_clip',
+                silent_clip_key, shot_id=silent_shot_id, shot_key=silent_shot_key,
+                metadata={'probe': video._probe(silent_clip_path)})
+            storyboard.select_asset(ws_id, silent_shot_id, silent_clip_asset['id'])
+            storyboard.apply_event(ws_id, silent_shot_id, 'start_video')
+            storyboard.apply_event(ws_id, silent_shot_id, 'video_done')
+            storyboard.apply_event(ws_id, silent_shot_id, 'approve_video',
+                                   asset_id=silent_clip_asset['id'])
+
+            skip_resp = client.post(f'/api/versions/{silent_version_id}/music/skip',
+                                    data={'skipped': 'true'})
+            assert skip_resp.status_code == 200, skip_resp.text
+            silent_v = client.get(f'/api/versions/{silent_version_id}').json()
+            assert silent_v['music']['skipped'] is True, silent_v['music']
+            assert silent_v['render_ready']['ready'] is True, silent_v['render_ready']
+
+            silent_render_resp = client.post(f'/api/versions/{silent_version_id}/render',
+                                             data={'idempotency_key': 'mr-silent'})
+            assert silent_render_resp.status_code == 200, silent_render_resp.text
+            silent_job = _await_job(client, silent_render_resp.json()['job_id'],
+                                    timeout_s=60)
+            assert silent_job['status'] == 'succeeded', silent_job
+
+            silent_v = client.get(f'/api/versions/{silent_version_id}').json()
+            silent_render_row = silent_v['renders'][0]
+            silent_asset_row = db.query(
+                """SELECT ga.key FROM final_renders fr
+                     JOIN generated_assets ga ON ga.id = fr.asset_id
+                    WHERE fr.id = %s""", (silent_render_row['id'],), one=True)
+            silent_local = pathlib.Path('out/ads_test_fixtures/silent-render.mp4')
+            storage.fetch(silent_asset_row['key'], silent_local)
+            silent_streams = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type', '-of',
+                 'csv=p=0', str(silent_local)], capture_output=True, text=True,
+                check=True).stdout.split()
+            assert 'audio' in silent_streams, 'a silent render must still have an audio stream'
+
+            print('ads_flow: silent render (no music, still has an audio stream) ok')
+
+            # --- a render that blows up mid-job still records status='failed' -----------
+            real_render_render = render.render
+
+            def exploding_render(*_a, **_k):
+                raise RuntimeError('render exploded')
+
+            render.render = exploding_render
+            try:
+                fail_job_id = orchestrator.start_render(ws_id, mr_version_id, 'mr-fail-1',
+                                                        str(admin_account['id']))
+                orchestrator.run_render(fail_job_id)
+            finally:
+                render.render = real_render_render
+            fail_job_row = db.query('SELECT status FROM jobs WHERE id = %s',
+                                    (fail_job_id,), one=True)
+            assert fail_job_row['status'] == 'failed', fail_job_row
+            failed_render_row = db.query(
+                "SELECT status FROM final_renders WHERE job_id = %s", (fail_job_id,),
+                one=True)
+            assert failed_render_row['status'] == 'failed', failed_render_row
+
+            print('ads_flow: a render that raises mid-job still records status=failed ok')
+        finally:
+            music.generate = real_music_generate
 
         print('ads_flow ok')
 
     finally:
         for ws_id in made_workspaces:
+            # final_renders.asset_id/.job_id both RESTRICT deleting the row they
+            # reference, so it must go before generated_assets and jobs, not after —
+            # this order used to run it last and every render this file's own music+
+            # render section now creates hit final_renders_asset_id_fkey on cleanup.
+            db.query("""DELETE FROM final_renders WHERE campaign_id IN
+                        (SELECT id FROM campaigns WHERE workspace_id = %s)""", (ws_id,))
             db.query("DELETE FROM approvals WHERE workspace_id = %s", (ws_id,))
             db.query("DELETE FROM generated_assets WHERE workspace_id = %s", (ws_id,))
             db.query("DELETE FROM credit_ledger WHERE workspace_id = %s", (ws_id,))
             db.query("DELETE FROM jobs WHERE workspace_id = %s", (ws_id,))
-            db.query("""DELETE FROM final_renders WHERE campaign_id IN
-                        (SELECT id FROM campaigns WHERE workspace_id = %s)""", (ws_id,))
             db.query("DELETE FROM campaigns WHERE workspace_id = %s", (ws_id,))
             db.query("DELETE FROM pieces WHERE workspace_id = %s", (ws_id,))
             db.query("DELETE FROM memberships WHERE workspace_id = %s", (ws_id,))

@@ -22,6 +22,7 @@ import os
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Form, HTTPException
+from fastapi.responses import RedirectResponse
 
 import auth
 import credits
@@ -40,7 +41,8 @@ router = APIRouter(prefix='/api')
 
 # Labelled "typical", never promised — see jobs.progress()/static/app.js's
 # progressComponent, which shows these next to real elapsed time, not instead of it.
-TYPICAL_SECONDS = {'ad_concepts': 30, 'ad_board': 75, 'ad_frame': 35, 'ad_video': 180}
+TYPICAL_SECONDS = {'ad_concepts': 30, 'ad_board': 75, 'ad_frame': 35, 'ad_video': 180,
+                  'ad_music': 60, 'ad_render': 45}
 
 
 def ads_enabled(session: dict = Depends(auth.current_session)) -> dict:
@@ -71,6 +73,24 @@ def _video_variant(asset: dict) -> dict:
             'poster_url': storage.presign(asset['thumb_key']) if asset.get('thumb_key') else None,
             'fidelity': metadata.get('fidelity'), 'clip_seconds': settings.get('clip_seconds'),
             'created_at': asset['created_at']}
+
+
+def _music_variant(asset: dict) -> dict:
+    metadata = asset.get('metadata') or {}
+    return {'id': str(asset['id']), 'variant': asset['variant'],
+            'url': storage.presign(asset['key']), 'duration': metadata.get('duration'),
+            'created_at': asset['created_at']}
+
+
+def _render_summary(row: dict) -> dict:
+    manifest = row.get('manifest') or {}
+    return {
+        'id': str(row['id']), 'status': row['status'], 'created_at': row['created_at'],
+        'aspect_ratio': row['aspect_ratio'], 'resolution': row['resolution'],
+        'url': storage.presign(row['asset_key']) if row.get('asset_key') else None,
+        'poster_url': storage.presign(row['thumb_key']) if row.get('thumb_key') else None,
+        'duration': manifest.get('duration'), 'version_number': manifest.get('version_number'),
+    }
 
 
 def _jobs_by_shot(version_id: str, kind: str) -> dict:
@@ -434,6 +454,11 @@ def get_job(job_id: str, session: dict = Depends(ads_enabled)):
 def get_version_detail(version_id: str, session: dict = Depends(ads_enabled)):
     workspace_id = auth.current_workspace(session)
     try:
+        # Self-heal before reading: a shot stuck in frame_generating/video_generating
+        # with no job actually able to complete it any more (see
+        # storyboard.reconcile_generating) must not sit that way forever just because
+        # nobody happened to load this version while its job was still alive.
+        storyboard.reconcile_generating(workspace_id, version_id)
         state = storyboard.get_version(workspace_id, version_id)
     except storyboard.NotFound as error:
         raise _not_found(error)
@@ -445,12 +470,58 @@ def get_version_detail(version_id: str, session: dict = Depends(ads_enabled)):
     ordinary_shots = [s for s in state['shots'] if s['kind'] == 'shot']
     ready_for_render = bool(ordinary_shots) and all(
         s['state'] == 'video_approved' for s in ordinary_shots)
+
+    music_info = storyboard.music_state(workspace_id, version_id)
+    music_running_job = db.query(
+        """SELECT id, status, params, started_at, heartbeat_at FROM jobs
+            WHERE storyboard_version_id = %s AND kind = 'ad_music'
+              AND status IN ('queued', 'running')
+         ORDER BY created_at DESC LIMIT 1""", (version_id,), one=True)
+    # The most recent ad_music job regardless of status — music_running_job above only
+    # ever carries queued/running, so a FAILED job (the user clicked Generate music,
+    # nothing came back) was previously invisible: the page just showed no music, with
+    # no explanation. Kept separate from the running-job summary rather than widening
+    # _job_progress_summary's own filter, since every OTHER caller of that helper still
+    # wants "only while it's actually in flight".
+    music_last_job = db.query(
+        """SELECT id, status, error FROM jobs
+            WHERE storyboard_version_id = %s AND kind = 'ad_music'
+         ORDER BY created_at DESC LIMIT 1""", (version_id,), one=True)
+    try:
+        music_estimate = orchestrator.estimate(workspace_id, version_id, 'music')
+    except Exception:                          # noqa: BLE001 - never break the page over pricing
+        music_estimate = None
+
+    render_problems = orchestrator.validate_for_render(workspace_id, version_id)
+    render_rows = db.query(
+        """SELECT fr.id, fr.status, fr.created_at, fr.aspect_ratio, fr.resolution,
+                  fr.manifest, ga.key AS asset_key, ga.thumb_key
+             FROM final_renders fr LEFT JOIN generated_assets ga ON ga.id = fr.asset_id
+            WHERE fr.version_id = %s ORDER BY fr.created_at DESC LIMIT 10""", (version_id,))
+    render_running_job = db.query(
+        """SELECT id, status, params, started_at, heartbeat_at FROM jobs
+            WHERE storyboard_version_id = %s AND kind = 'ad_render'
+              AND status IN ('queued', 'running')
+         ORDER BY created_at DESC LIMIT 1""", (version_id,), one=True)
+
     return {**state, 'versions': versions,
             'active_jobs': storyboard.active_jobs(workspace_id, version_id),
             'frame_estimate': orchestrator.estimate(workspace_id, version_id, 'frames'),
             'video_estimate': orchestrator.estimate(workspace_id, version_id, 'videos'),
             'ready_for_render': ready_for_render,
-            'warnings': state['version'].get('warnings') or []}
+            'warnings': state['version'].get('warnings') or [],
+            'music': {
+                'variants': [_music_variant(a) for a in music_info['variants']],
+                'selected_id': music_info['selected_id'], 'approved': music_info['approved'],
+                'skipped': music_info['skipped'], 'estimate': music_estimate,
+                'job': _job_progress_summary(music_running_job, 'ad_music'),
+                'last_job': ({'status': music_last_job['status'],
+                             'error': music_last_job['error']}
+                            if music_last_job else None),
+            },
+            'render_ready': {'ready': not render_problems, 'problems': render_problems},
+            'renders': [_render_summary(r) for r in render_rows],
+            'render_job': _job_progress_summary(render_running_job, 'ad_render')}
 
 
 @router.post('/versions/{version_id}/approve')
@@ -728,3 +799,118 @@ def approve_video(shot_id: str, asset_id: str = Form(''), session: dict = Depend
     except (ValueError, shot_state.IllegalTransition) as error:
         raise HTTPException(409, str(error))
     return {'version_id': version_id, 'shot_id': effective_shot_id, 'state': state}
+
+
+# --- music -------------------------------------------------------------------------------
+
+@router.post('/versions/{version_id}/music')
+def generate_music(version_id: str, background: BackgroundTasks,
+                   confirm_credits: int = Form(...), idempotency_key: str = Form(''),
+                   session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    key = idempotency_key or f'ad-music:{uuid.uuid4()}'
+    try:
+        job_id = orchestrator.start_music(workspace_id, version_id, confirm_credits, key,
+                                          session['user_id'])
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except orchestrator.EstimateMismatch as mismatch:
+        raise HTTPException(409, f'the price changed to {mismatch.estimate["credits"]} '
+                                 'credits — refresh the estimate and confirm again')
+    except orchestrator.NotApproved as error:
+        raise HTTPException(409, str(error))
+    except credits.Insufficient as error:
+        raise HTTPException(402, f'not enough credits — {error}')
+    background.add_task(orchestrator.run_music, job_id)
+    return {'job_id': job_id, 'status': 'running'}
+
+
+@router.post('/versions/{version_id}/music/select')
+def select_music(version_id: str, asset_id: str = Form(...),
+                 session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        storyboard.select_music(workspace_id, version_id, asset_id)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return {'version_id': version_id}
+
+
+@router.post('/versions/{version_id}/music/approve')
+def approve_music(version_id: str, asset_id: str = Form(''),
+                  session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        storyboard.approve_music(workspace_id, version_id, asset_id or None)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return {'version_id': version_id}
+
+
+@router.post('/versions/{version_id}/music/skip')
+def skip_music(version_id: str, skipped: bool = Form(True),
+              session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        storyboard.set_music_skipped(workspace_id, version_id, skipped)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return {'version_id': version_id}
+
+
+# --- final render --------------------------------------------------------------------------
+
+@router.post('/versions/{version_id}/render')
+def render_version(version_id: str, background: BackgroundTasks,
+                   idempotency_key: str = Form(''), session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    key = idempotency_key or f'ad-render:{uuid.uuid4()}'
+    try:
+        job_id = orchestrator.start_render(workspace_id, version_id, key, session['user_id'])
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except orchestrator.NotApproved as error:
+        raise HTTPException(409, str(error))
+    except orchestrator.NotRenderable as error:
+        # A plain string, not {'problems': [...]} — static/app.js's api() helper reads
+        # `detail` straight into an Error's message, so a dict here would stringify to
+        # the useless "[object Object]" for anyone who somehow reaches this (the client
+        # disables the button until GET .../versions/{id}'s own render_ready.ready is
+        # true, so this is a race-condition backstop, not the normal path).
+        raise HTTPException(422, '; '.join(error.problems))
+    background.add_task(orchestrator.run_render, job_id)
+    return {'job_id': job_id, 'status': 'running'}
+
+
+@router.get('/renders/{render_id}')
+def get_render(render_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    row = db.query(
+        """SELECT fr.*, ga.key AS asset_key, ga.thumb_key
+             FROM final_renders fr JOIN campaigns c ON c.id = fr.campaign_id
+             LEFT JOIN generated_assets ga ON ga.id = fr.asset_id
+            WHERE fr.id = %s AND c.workspace_id = %s""", (render_id, workspace_id), one=True)
+    if row is None:
+        raise HTTPException(404, 'no such render')
+    return {**_render_summary(row), 'manifest': row.get('manifest') or {}}
+
+
+@router.get('/renders/{render_id}/download')
+def download_render(render_id: str, session: dict = Depends(ads_enabled)):
+    workspace_id = auth.current_workspace(session)
+    row = db.query(
+        """SELECT fr.*, ga.key AS asset_key, c.name AS campaign_name
+             FROM final_renders fr JOIN campaigns c ON c.id = fr.campaign_id
+             LEFT JOIN generated_assets ga ON ga.id = fr.asset_id
+            WHERE fr.id = %s AND c.workspace_id = %s""", (render_id, workspace_id), one=True)
+    if row is None or not row.get('asset_key'):
+        raise HTTPException(404, 'no such render')
+    manifest = row.get('manifest') or {}
+    filename = f"{row['campaign_name']}-v{manifest.get('version_number', '')}.mp4"
+    return RedirectResponse(storage.presign(row['asset_key'], filename), status_code=307)

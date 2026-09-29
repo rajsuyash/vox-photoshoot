@@ -169,6 +169,9 @@
   .shot-card .product-tag { display: inline-block; margin-top: 4px; font-size: 10px;
     text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px;
     background: var(--raised); border: 1px solid var(--line); color: var(--faint); }
+  .shot-card .fidelity-warn-tag { display: inline-block; margin-top: 4px; font-size: 10px;
+    letter-spacing: .02em; padding: 2px 7px; border-radius: 999px; cursor: help;
+    color: #e0b060; border: 1px solid rgba(224,176,96,.35); background: rgba(224,176,96,.1); }
   .shot-card .clip-generating-badge { position: absolute; bottom: 6px; left: 6px; font-size: 10px;
     color: var(--copper-light); background: rgba(0,0,0,.6); border-radius: 999px; padding: 2px 8px; }
   .shot-card .row { display: flex; gap: 4px; padding: 0 9px 9px; }
@@ -176,6 +179,19 @@
     background: var(--raised); border: 1px solid var(--line); color: var(--muted);
     cursor: pointer; }
   .shot-card .row button:hover { color: var(--ink); }
+  /* The state-specific "what to do next" action(s) — approve/regenerate/make video/retry —
+     sit above Dup/Split/Delete so the next step never requires opening the inspector. */
+  .shot-card .card-actions { display: flex; flex-direction: column; gap: 4px;
+    padding: 0 9px 6px; }
+  .shot-card .card-actions button { font: inherit; font-size: 11px; padding: 6px 0;
+    border-radius: 7px; cursor: pointer; background: var(--raised); border: 1px solid var(--line);
+    color: var(--muted); }
+  .shot-card .card-actions button:hover:not(:disabled) { color: var(--ink); }
+  .shot-card .card-actions button:disabled { opacity: .5; cursor: not-allowed; }
+  .shot-card .card-actions button.primary { background: var(--copper); border-color: var(--copper);
+    color: var(--bg); font-weight: 600; }
+  .shot-card .card-actions button.primary:hover:not(:disabled) { background: var(--copper-light);
+    color: var(--bg); }
   .add-between { flex: none; width: 26px; display: flex; align-items: center;
     justify-content: center; }
   .add-between button { width: 22px; height: 22px; border-radius: 999px; border: 1px dashed
@@ -315,6 +331,27 @@
   .tl-seg:last-child { border-right: 0; }
   .tl-seg.end-card { background: var(--copper-soft); color: var(--copper-light); }
   .tl-seg.selected { outline: 2px solid var(--copper); outline-offset: -2px; }
+
+  /* --- music & final render ----------------------------------------------------------- */
+  .check-line { display: flex; align-items: center; gap: 8px; list-style: none; }
+  .check-line.ok { color: var(--ok); }
+  .check-line.bad { color: var(--error); }
+  .audio-variant { display: flex; flex-direction: column; gap: 8px; padding: 10px;
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+    width: 240px; }
+  .audio-variant audio { width: 100%; }
+  .audio-variant .v-label { font-size: 11px; color: var(--faint); }
+  .audio-variant .v-row { display: flex; gap: 6px; }
+  .audio-variant .v-row button { flex: 1; font-size: 11px; padding: 6px 0; border-radius: 999px;
+    background: var(--raised); border: 1px solid var(--line); color: var(--muted); cursor: pointer;
+    font: inherit; }
+  .audio-variant .v-row button:hover:not(:disabled) { color: var(--ink); }
+  .audio-variant .v-row button:disabled { opacity: .5; cursor: not-allowed; }
+  .render-player { max-width: 340px; }
+  .render-player video { width: 100%; border-radius: var(--radius); display: block; background: #000; }
+  .past-render-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px;
+    color: var(--muted); padding: 6px 0; border-top: 1px solid var(--line); }
+  .past-render-row a { color: var(--copper-light); }
 
   @media (max-width: 900px) {
     .wbody { grid-template-columns: 1fr; }
@@ -480,9 +517,10 @@
     </div>
     <div class="wtop-actions">
       <button class="ghost small" id="wApproveAll" type="button">Approve all instructions</button>
-      <button class="ghost small" id="wFork" type="button">Fork</button>
+      <button class="ghost small" id="wFork" type="button">New version</button>
       <button class="go small" id="wApprove" type="button">Approve storyboard</button>
       <button class="go small" id="wGenerateFrames" type="button">Generate all frames</button>
+      <button class="ghost small hidden" id="wApproveAllFrames" type="button">Approve all frames</button>
       <button class="go small" id="wGenerateVideos" type="button">Generate all videos</button>
     </div>
   </div>
@@ -499,6 +537,36 @@
   </div>
 
   <div class="wtimeline" id="wTimeline"></div>
+
+  <!-- Only shown once the version is approved — see renderMusicRender(). -->
+  <section id="wMusicRender" class="hidden" style="margin-top:28px">
+    <h3 style="font-size:15px;margin:0 0 12px">Music &amp; final ad</h3>
+
+    <div class="card-box" id="musicBox">
+      <h4 style="margin:0 0 10px;font-size:13px">Music</h4>
+      <div class="go-row" style="margin-bottom:10px;flex-wrap:wrap">
+        <button class="go small" id="musicGenerate" type="button">Generate music</button>
+        <span class="frame-price" id="musicPrice"></span>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
+          <input type="checkbox" id="musicSkip"> No music (silent)
+        </label>
+      </div>
+      <div id="musicProgress"></div>
+      <div class="added-list" id="musicVariants"></div>
+    </div>
+
+    <div class="card-box" id="readyBox" style="margin-top:14px">
+      <h4 style="margin:0 0 10px;font-size:13px">Readiness</h4>
+      <ul id="readyChecklist" style="margin:0;padding:0;display:grid;gap:6px;font-size:13px"></ul>
+    </div>
+
+    <div class="go-row" style="margin-top:16px">
+      <button class="go" id="renderGo" type="button" disabled>Render final ad</button>
+    </div>
+    <div id="renderProgress"></div>
+    <div id="renderResult"></div>
+    <div id="pastRenders"></div>
+  </section>
 </section>
 
 </main>
@@ -1185,7 +1253,15 @@ function renderWorkspace() {
   $('wApprove').disabled = v.version.status === 'approved';
   $('wApprove').textContent = v.version.status === 'approved' ? 'Approved' : 'Approve storyboard';
 
+  // A draft is already editable in place — "New version" only makes sense once
+  // editing it would fork (approved/superseded).
+  $('wFork').classList.toggle('hidden', v.version.status === 'draft');
+
   $('wReady').classList.toggle('hidden', !v.ready_for_render);
+
+  const ordinaryShots = v.shots.filter((s) => s.kind === 'shot');
+  const notInstructionApproved = ordinaryShots.some((s) => s.state === 'draft');
+  $('wApproveAll').classList.toggle('hidden', !notInstructionApproved);
 
   const estimate = v.frame_estimate;
   const genBtn = $('wGenerateFrames');
@@ -1195,6 +1271,16 @@ function renderWorkspace() {
     genBtn.classList.remove('hidden');
     genBtn.textContent = `Generate all frames — ${estimate.credits} credit`
       + (estimate.credits === 1 ? '' : 's');
+  }
+
+  // Approving a frame is otherwise buried in the inspector's Frames tab — this is the
+  // one-click path once a shot already has a frame picked to review.
+  const reviewableShots = ordinaryShots.filter(
+    (s) => s.state === 'frame_review' && s.selected_frame_asset_id);
+  const approveAllBtn = $('wApproveAllFrames');
+  approveAllBtn.classList.toggle('hidden', reviewableShots.length === 0);
+  if (reviewableShots.length) {
+    approveAllBtn.textContent = `Approve all frames (${reviewableShots.length})`;
   }
 
   const videoEstimate = v.video_estimate;
@@ -1209,9 +1295,16 @@ function renderWorkspace() {
 
   // One clear "what happens next" line instead of two stacked hints that used to say
   // the same "approve the storyboard first" thing twice — it changes with state, rather
-  // than describing why each individual button is hidden.
-  const ordinaryShots = v.shots.filter((s) => s.kind === 'shot');
-  const notInstructionApproved = ordinaryShots.some((s) => s.state === 'draft');
+  // than describing why each individual button is hidden. Checked in priority order:
+  // an in-flight job beats everything, then whichever actionable state exists first.
+  const generatingShots = ordinaryShots.filter(
+    (s) => s.state === 'frame_generating' || s.state === 'video_generating');
+  const failedShots = ordinaryShots.filter(
+    (s) => s.state === 'frame_failed' || s.state === 'video_failed');
+  const videoReviewShots = ordinaryShots.filter((s) => s.state === 'video_review');
+  const allVideoApproved = ordinaryShots.length > 0
+    && ordinaryShots.every((s) => s.state === 'video_approved');
+
   const nextHint = $('wFramesHint');
   let nextText = '';
   if (v.version.status !== 'approved') {
@@ -1222,11 +1315,26 @@ function renderWorkspace() {
   } else if (estimate && estimate.shots.length) {
     nextText = `Next: Generate all frames — ${estimate.credits} credit`
       + (estimate.credits === 1 ? '' : 's') + '.';
+  } else if (generatingShots.length) {
+    nextText = `Working… ${generatingShots.length} shot`
+      + (generatingShots.length === 1 ? '' : 's') + ' generating.';
+  } else if (reviewableShots.length) {
+    nextText = 'Next: approve the frames you like — use ✓ Approve on each card, '
+      + 'or Approve all frames.';
+  } else if (failedShots.length) {
+    nextText = `Next: retry ${failedShots.length} failed shot`
+      + (failedShots.length === 1 ? '' : 's') + ' — use Retry on the card.';
   } else if (videoEstimate && videoEstimate.shots.length) {
     nextText = `Next: Generate all videos — ${videoEstimate.credits} credit`
       + (videoEstimate.credits === 1 ? '' : 's') + '.';
-  } else if (!v.ready_for_render && ordinaryShots.length) {
+  } else if (videoReviewShots.length) {
     nextText = 'Next: review each clip and approve it.';
+  } else if ((v.renders || []).some((r) => r.status === 'succeeded')) {
+    nextText = 'Your ad is ready — download it below.';
+  } else if (allVideoApproved && v.render_ready && v.render_ready.ready) {
+    nextText = 'Next: Render final ad.';
+  } else if (allVideoApproved) {
+    nextText = 'Next: add music (or choose silent), then Render final ad.';
   }
   if (nextText) {
     nextHint.textContent = nextText;
@@ -1239,6 +1347,7 @@ function renderWorkspace() {
   renderStrip();
   renderTimeline();
   renderInspector();
+  renderMusicRender(v);
 }
 
 $('wVersionSelect').addEventListener('change', (e) => {
@@ -1254,13 +1363,19 @@ $('wApprove').addEventListener('click', async () => {
   } catch (error) { say('error', String(error.message || error)); }
 });
 
-$('wFork').addEventListener('click', async () => {
-  try {
-    const result = await api(`/api/versions/${state.version.version.id}/fork`,
-                             { method: 'POST' });
-    setURL({ campaign: state.campaign.id, version: result.version_id }, true);
-    await openVersion(result.version_id);
-  } catch (error) { say('error', String(error.message || error)); }
+$('wFork').addEventListener('click', () => {
+  const n = state.version.version.version_number;
+  confirmDialog('Start a new version?',
+    `Start an editable copy (V${n + 1}) of this storyboard? V${n} stays as it is. `
+    + `You'll need to approve the new version before generating more.`,
+    async () => {
+      try {
+        const result = await api(`/api/versions/${state.version.version.id}/fork`,
+                                 { method: 'POST' });
+        setURL({ campaign: state.campaign.id, version: result.version_id }, true);
+        await openVersion(result.version_id);
+      } catch (error) { say('error', String(error.message || error)); }
+    });
 });
 
 $('wApproveAll').addEventListener('click', async () => {
@@ -1274,6 +1389,29 @@ $('wApproveAll').addEventListener('click', async () => {
       }
     }
     await openVersion(state.version.version.id);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('wApproveAllFrames').addEventListener('click', async () => {
+  const btn = $('wApproveAllFrames');
+  const shots = state.version.shots.filter(
+    (s) => s.kind === 'shot' && s.state === 'frame_review' && s.selected_frame_asset_id);
+  if (!shots.length) return;
+  btn.disabled = true;
+  const errors = [];
+  try {
+    for (let i = 0; i < shots.length; i += 1) {
+      btn.textContent = `Approving ${i + 1}/${shots.length}…`;
+      try {
+        await api(`/api/shots/${shots[i].id}/approve-frame`, { method: 'POST', body: new FormData() });
+      } catch (error) {
+        errors.push(String(error.message || error));   // one shot's failure never stops the rest
+      }
+    }
+    await openVersion(state.version.version.id);   // re-renders the button's label/visibility
+    if (errors.length) say('error', `${errors.length} frame(s) could not be approved: ${errors.join('; ')}`);
   } finally {
     btn.disabled = false;
   }
@@ -1386,6 +1524,70 @@ function frameThumb(shot) {
   return div;
 }
 
+// The selected clip's own fidelity verdict ({ok, reason} or null) — shared by the card's
+// action buttons and its ⚠ tag so both agree on what "this clip looks wrong" means.
+function selectedVideoFidelity(shot) {
+  const variant = (shot.video_variants || []).find(
+    (v) => v.id === String(shot.selected_video_asset_id));
+  return (variant && variant.fidelity) || null;
+}
+
+// The state-specific action(s) for a shot card — the one-click path to "what's next"
+// without opening the inspector. Every button stops propagation so it never also
+// triggers the card's own select-on-click handler.
+function cardActionButtons(shot) {
+  const buttons = [];
+  if (shot.kind === 'end_card') return buttons;
+
+  const makeBtn = (text, primary, onClick, disabled) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    if (primary) btn.className = 'primary';
+    btn.textContent = text;
+    btn.disabled = Boolean(disabled);
+    btn.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+    return btn;
+  };
+
+  if (shot.state === 'frame_review' && shot.selected_frame_asset_id) {
+    const price = (state.version.frame_estimate || {}).per_shot || 1;
+    buttons.push(makeBtn('✓ Approve frame', true, async () => {
+      try {
+        await api(`/api/shots/${shot.id}/approve-frame`, { method: 'POST', body: new FormData() });
+        await openVersion(state.version.version.id);
+      } catch (error) { say('error', String(error.message || error)); }
+    }));
+    buttons.push(makeBtn(`↻ New frame · ${price} cr`, false,
+      () => generateFrame(shot.id), Boolean(shot.frame_job)));
+  } else if (shot.state === 'frame_approved') {
+    const price = ((state.version.video_estimate || {}).per_shot || {})[shot.id];
+    buttons.push(makeBtn(`▶ Make video${price ? ` · ${price} cr` : ''}`, true,
+      () => generateVideo(shot.id), Boolean(shot.video_job)));
+  } else if (shot.state === 'video_review') {
+    const price = ((state.version.video_estimate || {}).per_shot || {})[shot.id];
+    const fidelity = selectedVideoFidelity(shot);
+    const fidelityBad = fidelity && fidelity.ok === false;
+    buttons.push(makeBtn('✓ Approve clip', !fidelityBad, async () => {
+      try {
+        await api(`/api/shots/${shot.id}/approve-video`, { method: 'POST', body: new FormData() });
+        await openVersion(state.version.version.id);
+      } catch (error) { say('error', String(error.message || error)); }
+    }));
+    buttons.push(makeBtn(`↻ New clip${price ? ` · ${price} cr` : ''}`, fidelityBad,
+      () => generateVideo(shot.id), Boolean(shot.video_job)));
+  } else if (shot.state === 'video_approved') {
+    const price = ((state.version.video_estimate || {}).per_shot || {})[shot.id];
+    buttons.push(makeBtn(`↻ New clip${price ? ` · ${price} cr` : ''}`, false,
+      () => generateVideo(shot.id), Boolean(shot.video_job)));
+  } else if (shot.state === 'frame_failed' || shot.state === 'video_failed') {
+    const isVideo = shot.state === 'video_failed';
+    buttons.push(makeBtn('Retry', false,
+      () => (isVideo ? generateVideo(shot.id) : generateFrame(shot.id)),
+      Boolean(isVideo ? shot.video_job : shot.frame_job)));
+  }
+  return buttons;
+}
+
 function shotCard(shot, index) {
   const card = document.createElement('div');
   card.className = 'shot-card' + (shot.shot_key === state.selectedShotKey ? ' selected' : '');
@@ -1395,6 +1597,7 @@ function shotCard(shot, index) {
     <div class="meta">
       <span class="num"></span>
     </div>
+    <div class="card-actions"></div>
     <div class="row"></div>`);
   card.querySelector('.num').textContent =
     `#${index + 1} · ${Number(shot.duration)}s`;
@@ -1406,6 +1609,19 @@ function shotCard(shot, index) {
     tag.textContent = `Product: ${spec.product_visibility}`;
     meta.appendChild(tag);
   }
+  if (shot.state === 'video_review' || shot.state === 'video_approved') {
+    const fidelity = selectedVideoFidelity(shot);
+    if (fidelity && fidelity.ok === false) {
+      const warn = document.createElement('span');
+      warn.className = 'fidelity-warn-tag';
+      warn.textContent = '⚠ clip may need a redo';
+      warn.title = fidelity.reason || '';
+      meta.appendChild(warn);
+    }
+  }
+
+  const actions = card.querySelector('.card-actions');
+  actions.append(...cardActionButtons(shot));
 
   const row = card.querySelector('.row');
   const dup = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Dup' });
@@ -1548,6 +1764,282 @@ function renderTimeline() {
   }));
 }
 
+// --- music & final render --------------------------------------------------------------
+// Only rendered once the version is approved (renderMusicRender's own gate). Watches its
+// own ad_music/ad_render job by id (rather than leaning on openVersion's generic
+// active_jobs poll, which has no shot_id to patch a live progress component onto for a
+// version-level job) so Generate music / Render final ad show a genuinely ticking
+// progressComponent, not a frozen one until the whole page re-fetches.
+
+let watchedMusicJobId = null;
+let watchedRenderJobId = null;
+
+function jobFromPoll(detail) {
+  if (detail.status !== 'queued' && detail.status !== 'running') return null;
+  return { id: detail.job_id, status: detail.status, progress: detail.progress,
+          started_at: detail.started_at, heartbeat_at: detail.heartbeat_at,
+          typical_seconds: detail.typical_seconds };
+}
+
+function watchMusicJob(jobId) {
+  pollJob(`/api/jobs/${jobId}`, {
+    onUpdate: (detail) => {
+      if (!state.version) return;
+      state.version.music = state.version.music || {};
+      state.version.music.job = jobFromPoll(detail);
+      renderMusicPanel(state.version);
+    },
+  }).then(() => openVersion(state.version.version.id))
+    .catch((error) => say('error', String(error.message || error)))
+    .finally(() => { watchedMusicJobId = null; });
+}
+
+function watchRenderJob(jobId) {
+  pollJob(`/api/jobs/${jobId}`, {
+    onUpdate: (detail) => {
+      if (!state.version) return;
+      state.version.render_job = jobFromPoll(detail);
+      renderRenderPanel(state.version);
+    },
+  }).then(() => openVersion(state.version.version.id))
+    .catch((error) => say('error', String(error.message || error)))
+    .finally(() => { watchedRenderJobId = null; });
+}
+
+// The stored error for a failed ad_music job is a Python repr of fal's validator
+// response (single-quoted, not valid JSON) — e.g. "[{'loc': ['body'], 'msg': '...'}]".
+// Shown raw, that reads as a stack trace, not an explanation; this pulls out just the
+// 'msg' value. Any other error shape (a plain exception string) passes through as-is.
+function musicJobErrorText(raw) {
+  if (typeof raw === 'string' && raw.startsWith("[{'loc'")) {
+    const match = raw.match(/'msg':\s*'([^']*)'/);
+    if (match) return match[1];
+  }
+  return raw || 'The job failed.';
+}
+
+function renderMusicPanel(v) {
+  const music = v.music || {};
+  const genBtn = $('musicGenerate');
+  const skipBox = $('musicSkip');
+  const priceEl = $('musicPrice');
+  const progHost = $('musicProgress');
+  const busy = Boolean(music.job);
+
+  skipBox.checked = Boolean(music.skipped);
+  skipBox.disabled = busy;
+  const price = (music.estimate || {}).credits;
+  priceEl.textContent = price != null ? `${price} credit${price === 1 ? '' : 's'}` : '';
+  genBtn.disabled = busy || Boolean(music.skipped);
+  genBtn.textContent = (music.variants || []).length ? 'Regenerate music' : 'Generate music';
+
+  // A failed job with no variant on record means the user asked for music and got
+  // nothing back — without this, the page just looked like music was never requested.
+  // Covers both a live failure (this panel re-rendering right after the job fails) and
+  // a fresh page load against a version whose last attempt failed.
+  const failedWithNothingToShow = !busy && (music.variants || []).length === 0
+    && music.last_job && music.last_job.status === 'failed';
+  progHost.replaceChildren(...(
+    music.job ? [progressComponent(music.job)]
+    : failedWithNothingToShow
+      ? [jobErrorComponent(musicJobErrorText(music.last_job.error), generateMusic)]
+      : []
+  ));
+
+  $('musicVariants').replaceChildren(...(music.variants || []).map((variant) => {
+    const isSelected = music.selected_id === variant.id;
+    const wrap = document.createElement('div');
+    wrap.className = 'audio-variant';
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.src = variant.url;
+    wrap.appendChild(audio);
+    const label = document.createElement('span');
+    label.className = 'v-label';
+    label.textContent = `V${variant.variant}`
+      + (isSelected ? (music.approved ? ' · approved' : ' · selected') : '');
+    wrap.appendChild(label);
+    const row = document.createElement('div');
+    row.className = 'v-row';
+    const selectBtn = Object.assign(document.createElement('button'),
+      { type: 'button', textContent: 'Select', disabled: isSelected });
+    selectBtn.addEventListener('click', () => selectMusic(variant.id));
+    const approveBtn = Object.assign(document.createElement('button'),
+      { type: 'button', textContent: 'Approve', disabled: isSelected && music.approved });
+    approveBtn.addEventListener('click', () => approveMusic(variant.id));
+    row.append(selectBtn, approveBtn);
+    wrap.appendChild(row);
+    return wrap;
+  }));
+}
+
+// The three named lines the brief asks for ("N/M clips approved", "Music approved" /
+// "Silent ad", "End card: <brand>"), plus any other server-reported problem these three
+// summaries don't already say (a specific shot's missing/short clip) — the checklist is
+// meant to show exactly what's missing, not just a pass/fail bit.
+function renderReadyChecklist(v) {
+  const ready = v.render_ready || { ready: false, problems: [] };
+  const ordinary = v.shots.filter((s) => s.kind === 'shot');
+  const approvedCount = ordinary.filter((s) => s.state === 'video_approved').length;
+  const endCard = v.shots.find((s) => s.kind === 'end_card');
+  const music = v.music || {};
+  const brandText = endCard && (endCard.spec || {}).brand_text;
+
+  const lines = [
+    { ok: ordinary.length > 0 && approvedCount === ordinary.length,
+      text: `${approvedCount}/${ordinary.length} clip${ordinary.length === 1 ? '' : 's'} approved` },
+    { ok: Boolean(music.skipped || music.approved),
+      text: music.skipped ? 'Silent ad' : (music.approved ? 'Music approved' : 'Music not ready') },
+    { ok: Boolean(brandText), text: brandText ? `End card: ${brandText}` : 'End card needs brand text' },
+  ];
+  (ready.problems || []).forEach((p) => {
+    if (!/clip.*approved|Music (not ready|approved)|End card/i.test(p)) {
+      lines.push({ ok: false, text: p });
+    }
+  });
+
+  $('readyChecklist').replaceChildren(...lines.map((line) => Object.assign(
+    document.createElement('li'),
+    { className: `check-line ${line.ok ? 'ok' : 'bad'}`,
+      textContent: `${line.ok ? '✓' : '✗'} ${line.text}` })));
+
+  $('renderGo').disabled = !ready.ready || Boolean(v.render_job);
+}
+
+function renderRenderPanel(v) {
+  $('renderProgress').replaceChildren(...(v.render_job ? [progressComponent(v.render_job)] : []));
+
+  const [latest, ...past] = v.renders || [];
+  if (latest && latest.status === 'succeeded' && latest.url) {
+    const wrap = document.createElement('div');
+    wrap.className = 'render-player';
+    const video = document.createElement('video');
+    video.controls = true; video.playsInline = true;
+    video.src = latest.url;
+    if (latest.poster_url) video.poster = latest.poster_url;
+    const dl = Object.assign(document.createElement('a'),
+      { className: 'ghost small', href: `/api/renders/${latest.id}/download`,
+        textContent: 'Download MP4',
+        style: 'display:inline-block;margin-top:8px;text-decoration:none;text-align:center' });
+    wrap.append(video, dl);
+    $('renderResult').replaceChildren(wrap);
+  } else {
+    $('renderResult').replaceChildren();
+  }
+
+  $('pastRenders').replaceChildren(...past.map((r) => {
+    const row = document.createElement('div');
+    row.className = 'past-render-row';
+    const when = r.created_at ? new Date(r.created_at).toLocaleString() : '';
+    const left = document.createElement('span');
+    left.textContent = `V${r.version_number || '?'} · ${when} · ${r.status}`;
+    row.appendChild(left);
+    if (r.url) {
+      row.appendChild(Object.assign(document.createElement('a'),
+        { href: `/api/renders/${r.id}/download`, textContent: 'Download' }));
+    }
+    return row;
+  }));
+}
+
+function renderMusicRender(v) {
+  const host = $('wMusicRender');
+  const isApproved = v.version.status === 'approved';
+  host.classList.toggle('hidden', !isApproved);
+  if (!isApproved) return;
+
+  renderMusicPanel(v);
+  renderReadyChecklist(v);
+  renderRenderPanel(v);
+
+  const musicJobId = v.music && v.music.job && v.music.job.id;
+  if (musicJobId && musicJobId !== watchedMusicJobId) {
+    watchedMusicJobId = musicJobId;
+    watchMusicJob(musicJobId);
+  }
+  const renderJobId = v.render_job && v.render_job.id;
+  if (renderJobId && renderJobId !== watchedRenderJobId) {
+    watchedRenderJobId = renderJobId;
+    watchRenderJob(renderJobId);
+  }
+}
+
+// Shared by the "Generate/Regenerate music" button and the failed-job panel's own
+// "Try again" (jobErrorComponent's onRetry) — same confirm dialog either way, since a
+// retry after a failure still spends credits just like the first attempt did.
+function generateMusic() {
+  const price = ((state.version.music || {}).estimate || {}).credits || 0;
+  confirmDialog('Generate music?',
+    `Generate a music bed for this ad — ${price} credit${price === 1 ? '' : 's'}. `
+    + 'This runs against your balance immediately.',
+    async () => {
+      try {
+        const body = new FormData();
+        body.append('confirm_credits', String(price));
+        body.append('idempotency_key', `music:${state.version.version.id}:${Date.now()}`);
+        const job = await api(`/api/versions/${state.version.version.id}/music`,
+                              { method: 'POST', body });
+        await openVersion(state.version.version.id);
+        if (job.job_id && job.job_id !== watchedMusicJobId) {
+          watchedMusicJobId = job.job_id;
+          watchMusicJob(job.job_id);
+        }
+      } catch (error) { say('error', String(error.message || error)); }
+    });
+}
+
+$('musicGenerate').addEventListener('click', generateMusic);
+
+async function selectMusic(assetId) {
+  try {
+    const body = new FormData();
+    body.append('asset_id', assetId);
+    await api(`/api/versions/${state.version.version.id}/music/select`, { method: 'POST', body });
+    await openVersion(state.version.version.id);
+  } catch (error) { say('error', String(error.message || error)); }
+}
+
+async function approveMusic(assetId) {
+  try {
+    const body = new FormData();
+    body.append('asset_id', assetId);
+    await api(`/api/versions/${state.version.version.id}/music/approve`, { method: 'POST', body });
+    await openVersion(state.version.version.id);
+  } catch (error) { say('error', String(error.message || error)); }
+}
+
+$('musicSkip').addEventListener('change', async (e) => {
+  const checked = e.target.checked;
+  try {
+    const body = new FormData();
+    body.append('skipped', checked ? 'true' : 'false');
+    await api(`/api/versions/${state.version.version.id}/music/skip`, { method: 'POST', body });
+    await openVersion(state.version.version.id);
+  } catch (error) {
+    e.target.checked = !checked;
+    say('error', String(error.message || error));
+  }
+});
+
+$('renderGo').addEventListener('click', async () => {
+  const btn = $('renderGo');
+  btn.disabled = true;
+  try {
+    const body = new FormData();
+    body.append('idempotency_key', `render:${state.version.version.id}:${Date.now()}`);
+    const job = await api(`/api/versions/${state.version.version.id}/render`,
+                          { method: 'POST', body });
+    await openVersion(state.version.version.id);
+    if (job.job_id && job.job_id !== watchedRenderJobId) {
+      watchedRenderJobId = job.job_id;
+      watchRenderJob(job.job_id);
+    }
+  } catch (error) {
+    say('error', String(error.message || error));
+    btn.disabled = false;
+  }
+});
+
 function currentShot() {
   return state.version.shots.find((s) => s.shot_key === state.selectedShotKey) || null;
 }
@@ -1602,7 +2094,7 @@ function renderInspector() {
   const approveBtn = document.createElement('button');
   approveBtn.type = 'button';
   approveBtn.className = 'go small';
-  approveBtn.textContent = shot.state === 'draft' ? 'Approve instructions' : 'Instructions approved';
+  approveBtn.textContent = shot.state === 'draft' ? 'Approve instructions' : 'Shot plan approved ✓';
   approveBtn.disabled = shot.state !== 'draft';
   approveBtn.addEventListener('click', async () => {
     try {
@@ -1613,6 +2105,26 @@ function renderInspector() {
   });
   approveRow.appendChild(approveBtn);
   host.appendChild(approveRow);
+
+  // The inspector's first view (Creative tab) otherwise gives no clue that a frame is
+  // waiting to be approved — surface the same Frames-tab action right here.
+  if (shot.state === 'frame_review') {
+    const frameApproveBtn = document.createElement('button');
+    frameApproveBtn.type = 'button';
+    frameApproveBtn.className = 'go small';
+    frameApproveBtn.textContent = 'Approve this frame';
+    frameApproveBtn.disabled = !shot.selected_frame_asset_id;
+    frameApproveBtn.addEventListener('click', async () => {
+      try {
+        await api(`/api/shots/${shot.id}/approve-frame`, { method: 'POST', body: new FormData() });
+        await openVersion(state.version.version.id);
+      } catch (error) { say('error', String(error.message || error)); }
+    });
+    const frameApproveRow = document.createElement('div');
+    frameApproveRow.className = 'approve-row';
+    frameApproveRow.appendChild(frameApproveBtn);
+    host.appendChild(frameApproveRow);
+  }
 }
 
 function framesPanel(shot) {
@@ -1811,6 +2323,23 @@ function fieldValue(shot, key) {
   return (shot.spec || {})[key] ?? '';
 }
 
+// Mirrors storyboard.py's _values_equal: strings are trimmed, '' counts the same as a
+// missing value, and anything that parses as a number is compared numerically. Used to
+// skip a PATCH that would not actually change anything on the server.
+function valuesEqual(current, next) {
+  const norm = (v) => {
+    if (typeof v === 'string') { const t = v.trim(); return t === '' ? null : t; }
+    return v === undefined ? null : v;
+  };
+  const a = norm(current);
+  const b = norm(next);
+  if (a === null || b === null) return a === b;
+  const na = Number(a);
+  const nb = Number(b);
+  if (!Number.isNaN(na) && !Number.isNaN(nb)) return na === nb;
+  return a === b;
+}
+
 function fieldRow(shot, key, type, label, options) {
   return buildFieldRow(shot, key, type, label, options, fieldValue(shot, key));
 }
@@ -1840,8 +2369,10 @@ function buildFieldRow(shot, key, type, label, options, value) {
     if (type === 'number') input.step = '0.5';
     input.value = value ?? '';
   }
-  input.addEventListener('change', () => patchShot(shot, key, type === 'number'
-    ? Number(input.value) : input.value));
+  input.addEventListener('change', () => {
+    const next = type === 'number' ? Number(input.value) : input.value;
+    if (!valuesEqual(value, next)) patchShot(shot, key, next);
+  });
   wrap.appendChild(input);
   return wrap;
 }

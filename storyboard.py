@@ -27,10 +27,17 @@ approvals rows, generated assets). Production state is mutable in place on both 
 approved versions: apply_event() and select_asset() never fork, so a background job
 finishing frame_done/video_done against an approved version updates it directly instead
 of spawning a new version underneath the customer's approved plan. A SUPERSEDED version's
-shots are read-only for production events (apply_event/select_asset raise ValueError) —
-nothing points at a superseded version as "the" version to generate against any more.
-complete_generation() is how a job started against one version routes its result to the
-matching shot in whatever version is active by the time it finishes.
+shots are read-only for user-driven production events (apply_event/select_asset raise
+ValueError) — nothing points at a superseded version as "the" version to generate
+against any more. complete_generation() is the one exception: it is a SYSTEM completion,
+not a user action, so it bypasses that guard on purpose and routes a job's result to
+EVERY shot row sharing its shot_key that is still sitting in the state the job's event
+expects — the row it started against, plus every fork made while it was still running
+(a fork copies *_generating verbatim). reconcile_generating() is the other half: a
+freshly-copied *_generating row with no job actually in flight for it (the job already
+finished before the fork, or never existed) is healed from the shot_key's own job/asset
+history instead of waiting forever — called right after every fork and at the start of
+GET /api/versions/{id}.
 
     .venv/bin/python storyboard.py     # self-check against DATABASE_URL
 """
@@ -345,6 +352,14 @@ def get_version(workspace_id: str, version_id: str) -> dict:
 # --- Versioning ------------------------------------------------------------------
 
 def _fork_version(workspace_id: str, version_id: str) -> str:
+    """A fork copies a shot's *_generating state verbatim (see the INSERT below) even
+    though no job is necessarily still running for it in this new version — the job may
+    finish and heal it via complete_generation, but if it already finished (or never
+    existed) before this fork was made, nothing will ever transition this copy again.
+    reconcile_generating() right after commit heals that case immediately (a no-op, one
+    query, when a job genuinely is still in flight) rather than leaving the copy stuck
+    until the next GET /api/versions/{id} happens to run reconcile itself.
+    """
     scope = _version_scope(workspace_id, version_id)
     with db.tx() as conn:
         next_number = conn.execute(
@@ -352,8 +367,10 @@ def _fork_version(workspace_id: str, version_id: str) -> str:
             'WHERE storyboard_id = %s', (scope['storyboard_id'],)).fetchone()[0]
         new_version = conn.execute(
             """INSERT INTO storyboard_versions (storyboard_id, version_number,
-                    creative_summary, status, created_from_version_id)
-               SELECT storyboard_id, %s, creative_summary, 'draft', id
+                    creative_summary, status, created_from_version_id,
+                    selected_music_asset_id, music_skipped)
+               SELECT storyboard_id, %s, creative_summary, 'draft', id,
+                      selected_music_asset_id, music_skipped
                  FROM storyboard_versions WHERE id = %s
                RETURNING id""", (next_number, version_id)).fetchone()
         new_version_id = new_version[0]
@@ -371,6 +388,7 @@ def _fork_version(workspace_id: str, version_id: str) -> str:
             (new_version_id, version_id))
         conn.execute('UPDATE storyboards SET active_version_id = %s, updated_at = now() '
                     'WHERE id = %s', (new_version_id, scope['storyboard_id']))
+    reconcile_generating(workspace_id, str(new_version_id))
     return str(new_version_id)
 
 
@@ -537,17 +555,62 @@ def set_duration(workspace_id: str, shot_id: str, duration) -> tuple[str, str, s
     return update_spec(workspace_id, shot_id, {'duration': duration})
 
 
+def _values_equal(current, new) -> bool:
+    """True if `new` is not actually a change from `current` — strings are stripped,
+    '' is treated the same as a missing/None value, and anything that parses as a
+    number is compared numerically (so '2' == 2 == 2.0)."""
+    def norm(v):
+        if isinstance(v, str):
+            v = v.strip() or None
+        return v
+    current, new = norm(current), norm(new)
+    if current is None or new is None:
+        return current is new
+    try:
+        return float(current) == float(new)
+    except (TypeError, ValueError):
+        return current == new
+
+
+def _patch_is_noop(shot: dict, patch: dict) -> bool:
+    """Whether every key in `patch` already holds the value being written. A patch that
+    changes nothing must not fork a version or touch the shot — re-saving a field with
+    its own current value (e.g. an unrelated field's PATCH carrying the whole form) is
+    not an edit."""
+    spec = shot.get('spec') or {}
+    for field, value in patch.items():
+        if field in ('character_ids', 'product_ids'):
+            current = [str(x) for x in (shot.get(field) or [])]
+            if sorted(current) != sorted(str(x) for x in (value or [])):
+                return False
+        elif field in COLUMN_FIELDS:
+            if not _values_equal(shot.get(field), value):
+                return False
+        elif not _values_equal(spec.get(field), value):
+            return False
+    return True
+
+
 def update_spec(workspace_id: str, shot_id: str, patch: dict) -> tuple[str, str, str]:
     """Apply `patch` to a shot's fields, then apply shot_state.after_edit so the shot's
     state reflects what still matches what was actually generated. This is a
     CREATIVE-PLAN op, so it still forks an approved version like any other spec edit
     (via _resolve_shot) — unlike apply_event/select_asset, which never fork.
 
+    A no-op patch (every value already matches, see _patch_is_noop) skips the fork and
+    the write entirely and returns the shot's CURRENT (unresolved) version/state — a
+    PATCH that changes nothing must never invalidate an approval or bump the version
+    count.
+
     after_edit only ever holds state or demotes it, so any state change here is by
     definition a rollback: if it drops the shot out of frame_approved or video_approved,
     that lost approval is logged as an approvals row (decision='reset'), on whichever
     shot row the edit actually landed on (the fork's, if this edit forked).
     """
+    shot = _shot_scope(workspace_id, shot_id)
+    if _patch_is_noop(shot, patch):
+        return str(shot['version_id']), str(shot_id), shot['state']
+
     effective_version_id, effective_shot_id = _resolve_shot(workspace_id, shot_id)
     shot = db.query('SELECT state FROM storyboard_shots WHERE id = %s',
                     (effective_shot_id,), one=True)
@@ -660,11 +723,26 @@ def add_asset(workspace_id: str, campaign_id: str, storyboard_id: str, version_i
               prompt: str = '', settings: dict | None = None, thumb_key: str | None = None,
               job_id: str | None = None, metadata: dict | None = None) -> dict:
     """variant = max(existing variant for this shot_key+type) + 1, computed inside the
-    transaction so two concurrent generations for one shot never collide on a number."""
+    transaction so two concurrent generations for one shot never collide on a number.
+
+    Version-level types (music, final_render) carry no shot_key (NULL), and `shot_key =
+    NULL` never matches any row in SQL — a query keyed on it would silently hand every
+    such asset variant 1 forever, colliding row after row (UNIQUE (shot_key, type,
+    variant) does not catch it either: Postgres treats every NULL as distinct). Those
+    types are scoped by storyboard_id instead — the same "survives a version fork" scope
+    shot_key gives the shot-level types, since a fork never gets its own copy of a
+    version-level asset.
+    """
     with db.tx() as conn:
-        next_variant = conn.execute(
-            'SELECT COALESCE(MAX(variant), 0) + 1 FROM generated_assets '
-            'WHERE shot_key = %s AND type = %s', (shot_key, type_)).fetchone()[0]
+        if shot_key is not None:
+            next_variant = conn.execute(
+                'SELECT COALESCE(MAX(variant), 0) + 1 FROM generated_assets '
+                'WHERE shot_key = %s AND type = %s', (shot_key, type_)).fetchone()[0]
+        else:
+            next_variant = conn.execute(
+                'SELECT COALESCE(MAX(variant), 0) + 1 FROM generated_assets '
+                'WHERE storyboard_id = %s AND type = %s AND shot_key IS NULL',
+                (storyboard_id, type_)).fetchone()[0]
         row = conn.execute(
             """INSERT INTO generated_assets (workspace_id, campaign_id, storyboard_id,
                     version_id, shot_id, shot_key, type, provider, provider_model,
@@ -711,6 +789,97 @@ def list_assets(workspace_id: str, shot_key: str, type_: str | None = None) -> l
     return db.query(sql, tuple(args))
 
 
+# --- Music (version-level, no shot_key) ---------------------------------------------
+#
+# Music has no shot to scope it by, so it borrows storyboard_id the way a shot-level
+# asset borrows shot_key: "the same storyboard" is what survives a version fork, and
+# what select_music below checks an asset against — a version's music choice is not
+# locked to the exact version it was generated against, only to the storyboard it
+# belongs to (mirrors select_asset's shot_key check, one level up).
+
+def select_music(workspace_id: str, version_id: str, asset_id: str) -> str:
+    """Point this version at a music asset from the SAME STORYBOARD (any version's
+    generation — see module note above). Never forks (production state, like
+    select_asset); raises ValueError on a superseded version."""
+    scope = _version_scope(workspace_id, version_id)
+    if scope['version_status'] == 'superseded':
+        raise ValueError('cannot change music on a superseded version')
+    asset = _row_or_404(db.query(
+        'SELECT id, storyboard_id, type FROM generated_assets WHERE id = %s '
+        'AND workspace_id = %s', (asset_id, workspace_id), one=True), 'asset not found')
+    if str(asset['storyboard_id']) != str(scope['storyboard_id']):
+        raise ValueError('asset does not belong to this storyboard')
+    if asset['type'] != 'music':
+        raise ValueError('asset is not a music track')
+    db.query('UPDATE storyboard_versions SET selected_music_asset_id = %s WHERE id = %s',
+             (asset_id, version_id))
+    return version_id
+
+
+def approve_music(workspace_id: str, version_id: str, asset_id: str | None = None) -> str:
+    """Record a stage='music' approvals row for `asset_id` (selecting it first if given)
+    or for whatever is already selected. Raises ValueError if nothing is selected, or on
+    a superseded version."""
+    scope = _version_scope(workspace_id, version_id)
+    if scope['version_status'] == 'superseded':
+        raise ValueError('cannot approve music on a superseded version')
+    if asset_id:
+        select_music(workspace_id, version_id, asset_id)
+        selected = asset_id
+    else:
+        row = db.query('SELECT selected_music_asset_id FROM storyboard_versions '
+                       'WHERE id = %s', (version_id,), one=True)
+        selected = str(row['selected_music_asset_id']) if row and row['selected_music_asset_id'] \
+            else None
+        if not selected:
+            raise ValueError('select a music track before approving it')
+    db.query(
+        """INSERT INTO approvals (workspace_id, version_id, stage, decision, asset_id)
+           VALUES (%s, %s, 'music', 'approved', %s)""", (workspace_id, version_id, selected))
+    return version_id
+
+
+def set_music_skipped(workspace_id: str, version_id: str, skipped: bool) -> str:
+    """The "no music, silent ad" toggle. Production state, like select_music — never
+    forks, raises ValueError on a superseded version."""
+    scope = _version_scope(workspace_id, version_id)
+    if scope['version_status'] == 'superseded':
+        raise ValueError('cannot change music on a superseded version')
+    db.query('UPDATE storyboard_versions SET music_skipped = %s WHERE id = %s',
+             (bool(skipped), version_id))
+    return version_id
+
+
+def music_state(workspace_id: str, version_id: str) -> dict:
+    """{'variants': every music asset ever generated for this STORYBOARD (any version —
+    see module note), 'selected_id', 'approved', 'skipped'}.
+
+    'approved' is true only when the LATEST stage='music' decision on this version is
+    'approved' AND it names the currently selected asset — selecting a different track
+    after an approval un-approves it without needing a separate reset row, since the
+    latest decision now names a stale asset_id.
+    """
+    scope = _version_scope(workspace_id, version_id)
+    variants = db.query(
+        """SELECT * FROM generated_assets WHERE storyboard_id = %s AND type = 'music'
+         ORDER BY variant""", (scope['storyboard_id'],))
+    version = db.query(
+        'SELECT selected_music_asset_id, music_skipped FROM storyboard_versions '
+        'WHERE id = %s', (version_id,), one=True)
+    selected_id = (str(version['selected_music_asset_id'])
+                  if version and version['selected_music_asset_id'] else None)
+    approved = False
+    if selected_id:
+        latest = db.query(
+            """SELECT decision, asset_id FROM approvals
+                WHERE version_id = %s AND stage = 'music'
+             ORDER BY created_at DESC LIMIT 1""", (version_id,), one=True)
+        approved = bool(latest and latest['decision'] == 'approved'
+                        and str(latest['asset_id']) == selected_id)
+    return {'variants': variants, 'selected_id': selected_id, 'approved': approved,
+            'skipped': bool(version['music_skipped']) if version else False}
+
+
 def active_jobs(workspace_id: str, version_id: str) -> list[dict]:
     """Running/queued jobs for this version — how the UI recovers after a refresh."""
     _version_scope(workspace_id, version_id)
@@ -731,24 +900,143 @@ def shot_in_active_version(workspace_id: str, shot_key: str,
         (storyboard['active_version_id'], shot_key), one=True)
 
 
+_DONE_SELECT_COLUMN = {'frame_done': 'selected_frame_asset_id',
+                       'video_done': 'selected_video_asset_id'}
+
+
 def complete_generation(workspace_id: str, storyboard_id: str, shot_key: str,
-                         event: str) -> str | None:
+                         event: str, asset_id: str | None = None) -> list[str]:
     """A background job started against whatever version was active when it launched —
-    which may since have been forked (an edit against the approved version it was
-    running on) or moved on by a fresh regenerate. Route the job's result to the
-    shot_key's counterpart in the version that is active NOW: if that shot is still
-    sitting in the *_generating state this event expects, apply the event there and
-    return the shot id it transitioned. Otherwise the active shot has already moved past
-    what this job was for, so this result is history only — the caller still records the
-    asset via add_asset() (keyed by shot_key, so it attaches regardless of which version
-    row is active), but no state transition happens and None is returned.
+    which may since have been forked one or more times (an edit against the approved
+    version it was running on, or a fork that copied the shot while still generating —
+    see _fork_version). A fork never clears the copy's *_generating state, so by the time
+    the job finishes there can be MORE THAN ONE shot row sharing this shot_key still
+    sitting in the state this event expects, across draft/approved/superseded versions
+    alike: the row the job actually started against, plus every fork made while it was in
+    flight. All of them were waiting on this exact job, so all of them are this job's
+    result, regardless of which version is active now or whether some are superseded —
+    this is a system completion, not a user-driven production event, so it bypasses the
+    superseded-version guard that apply_event/select_asset enforce (_reject_superseded).
+
+    Apply the event to every one of them, and for a *_done event with an asset_id, select
+    that asset on each — every matching row is, by definition, in the *_generating state,
+    i.e. still waiting on exactly this asset, so the selection always applies (never only
+    when the slot happens to be empty; a regenerate that was in flight IS what the shot
+    was waiting for). Returns the list of shot ids transitioned — empty if none matched
+    (e.g. a repeat call after every matching row already moved on).
     """
-    shot = shot_in_active_version(workspace_id, shot_key, storyboard_id)
+    _row_or_404(db.query(
+        """SELECT 1 FROM storyboards sb JOIN campaigns c ON c.id = sb.campaign_id
+            WHERE sb.id = %s AND c.workspace_id = %s""",
+        (storyboard_id, workspace_id), one=True), 'storyboard not found')
+
     expected_state = _GENERATING_STATE_FOR_EVENT.get(event)
-    if shot is None or expected_state is None or shot['state'] != expected_state:
-        return None
-    _, transitioned_shot_id, _ = apply_event(workspace_id, str(shot['id']), event)
-    return transitioned_shot_id
+    if expected_state is None:
+        return []
+    rows = db.query(
+        """SELECT sh.id FROM storyboard_shots sh
+             JOIN storyboard_versions sv ON sv.id = sh.version_id
+            WHERE sv.storyboard_id = %s AND sh.shot_key = %s AND sh.state = %s""",
+        (storyboard_id, shot_key, expected_state))
+    if not rows:
+        return []
+
+    new_state = shot_state.transition(expected_state, event, kind='shot')
+    select_column = _DONE_SELECT_COLUMN.get(event)
+    shot_ids = [str(r['id']) for r in rows]
+    with db.tx() as conn:
+        for shot_id in shot_ids:
+            if select_column and asset_id:
+                conn.execute(
+                    f"""UPDATE storyboard_shots SET state = %s, {select_column} = %s,
+                            updated_at = now() WHERE id = %s""",
+                    (new_state, asset_id, shot_id))
+            else:
+                conn.execute(
+                    'UPDATE storyboard_shots SET state = %s, updated_at = now() '
+                    'WHERE id = %s', (new_state, shot_id))
+    return shot_ids
+
+
+# job kind / asset type / selection column / event names, per *_generating state —
+# reconcile_generating's one source of truth for how each generating state resolves.
+_RECONCILE = {
+    'frame_generating': {'job_kind': 'ad_frame', 'asset_type': 'storyboard_image',
+                          'select_column': 'selected_frame_asset_id',
+                          'done_event': 'frame_done', 'failed_event': 'frame_failed'},
+    'video_generating': {'job_kind': 'ad_video', 'asset_type': 'video_clip',
+                          'select_column': 'selected_video_asset_id',
+                          'done_event': 'video_done', 'failed_event': 'video_failed'},
+}
+
+
+def reconcile_generating(workspace_id: str, version_id: str) -> list[str]:
+    """Self-heal shots this version's own jobs will never complete — most often a shot
+    that was copied into a fork while *_generating (see _fork_version) and then had its
+    job finish against a DIFFERENT fork (complete_generation only reaches rows still
+    sitting in the matching *_generating state at the moment the job finishes; a fork
+    made from an already-superseded snapshot, or a version re-approved after the job
+    settled, can be left holding a row nothing will ever transition again).
+
+    For each shot in this version sitting in frame_generating/video_generating with no
+    queued/running job of the matching kind for its shot_key, look at the most recent
+    TERMINAL job of that kind for the shot_key: succeeded, with an asset it created ->
+    apply the matching *_done event and select that asset (only if the shot's slot for
+    that type is still empty — a shot already holding a selection from some other row's
+    resolution must not be overwritten). Failed, or no terminal job at all -> apply the
+    matching *_failed event.
+
+    One query to find stuck shots; a version with none is a no-op past that point. Called
+    at the start of GET /api/versions/{id}, and once right after a fork (see
+    _fork_version) so a freshly-copied *_generating row that no job is actually running
+    for is healed immediately rather than left to the next page load.
+    """
+    _version_scope(workspace_id, version_id)
+    stuck = db.query(
+        """SELECT id, shot_key, state, selected_frame_asset_id, selected_video_asset_id
+             FROM storyboard_shots
+            WHERE version_id = %s AND state IN ('frame_generating', 'video_generating')""",
+        (version_id,))
+    if not stuck:
+        return []
+
+    healed = []
+    for shot in stuck:
+        rule = _RECONCILE[shot['state']]
+        shot_key = str(shot['shot_key'])
+        running = db.query(
+            """SELECT 1 FROM jobs WHERE kind = %s AND status IN ('queued', 'running')
+                AND params->>'shot_key' = %s LIMIT 1""",
+            (rule['job_kind'], shot_key), one=True)
+        if running:
+            continue   # genuinely still in flight — not stuck, just slow
+
+        last_job = db.query(
+            """SELECT id, status FROM jobs WHERE kind = %s AND status IN ('succeeded', 'failed')
+                AND params->>'shot_key' = %s ORDER BY finished_at DESC LIMIT 1""",
+            (rule['job_kind'], shot_key), one=True)
+
+        asset = None
+        if last_job and last_job['status'] == 'succeeded':
+            asset = db.query(
+                """SELECT id FROM generated_assets WHERE job_id = %s AND shot_key = %s
+                    AND type = %s ORDER BY variant DESC LIMIT 1""",
+                (last_job['id'], shot_key, rule['asset_type']), one=True)
+        event = rule['done_event'] if asset else rule['failed_event']
+        new_state = shot_state.transition(shot['state'], event, kind='shot')
+
+        with db.tx() as conn:
+            if asset and not shot.get(rule['select_column']):
+                conn.execute(
+                    f"""UPDATE storyboard_shots SET state = %s, {rule['select_column']} = %s,
+                            updated_at = now() WHERE id = %s""",
+                    (new_state, asset['id'], str(shot['id'])))
+            else:
+                conn.execute(
+                    'UPDATE storyboard_shots SET state = %s, updated_at = now() '
+                    'WHERE id = %s', (new_state, str(shot['id'])))
+        healed.append(str(shot['id']))
+    return healed
 
 
 def demo() -> None:
@@ -930,6 +1218,21 @@ def demo() -> None:
             (prod_shot_id,))]
         assert reset_stages == ['frame'], reset_stages
 
+        # --- update_spec is a no-op when the patch changes nothing: no fork, no write, --
+        # --- no state demotion, even on an approved version -----------------------------
+        versions_before_noop = count_versions()
+        prod_shot_row = db.query('SELECT duration, spec FROM storyboard_shots WHERE id = %s',
+                                 (prod_shot_id,), one=True)
+        noop_version, noop_shot, noop_state = update_spec(ws, prod_shot_id, {
+            'duration': str(prod_shot_row['duration']),   # numeric string == number
+            'lighting': '',                               # '' == a never-set spec key
+        })
+        assert noop_version == second_fork_version, noop_version
+        assert noop_shot == prod_shot_id, noop_shot
+        assert noop_state == 'video_approved', noop_state   # not demoted by after_edit
+        assert count_versions() == versions_before_noop, \
+            'a no-op patch must not fork the version'
+
         # --- update_spec demoting an approved shot still forks, and logs the reset ----
         # --- on the fork's shot, never on the frozen original --------------------------
         versions_before = count_versions()
@@ -984,41 +1287,129 @@ def demo() -> None:
         assert original_row['spec'].get('camera_angle') != 'zz', \
             'the frozen superseded shot row must be untouched by the edit'
 
-        # --- complete_generation routes a job's result to the ACTIVE version's shot ---
+        # --- complete_generation routes a job's result to EVERY shot row still waiting on
+        # --- it, not just the version active when the job finishes (the real bug: a fork
+        # --- made while a job is in flight copies the *_generating state, and both the
+        # --- pre-fork row and the fork's copy are waiting on the SAME job) --------------
         job_created = create_storyboard(ws, campaign_id,
             {'target_duration': 4, 'title': 'job-routing'}, [{'duration': 4}])
         job_storyboard_id = job_created['storyboard_id']
         job_version_id = job_created['version_id']
         job_shot = get_version(ws, job_version_id)['shots'][0]
-        job_shot_id, job_shot_key = str(job_shot['id']), job_shot['shot_key']
+        job_shot_id, job_shot_key = str(job_shot['id']), str(job_shot['shot_key'])
 
         apply_event(ws, job_shot_id, 'approve_instructions')
         apply_event(ws, job_shot_id, 'start_frame')   # the "job" starts running here
+        # a real (still-queued) job row, so the fork below's own reconcile_generating
+        # sees a job genuinely in flight for this shot_key and leaves the copy alone —
+        # without this, reconcile would (correctly) heal the copy to frame_failed itself,
+        # since nothing here would look like a job still running.
+        job_row = jobs.create(ws, user, 'ad_frame', f'idem-jobrouting-{uuid.uuid4().hex[:8]}',
+                              {'shot_key': job_shot_key}, reserved_credits=1)
         approve_version(ws, job_version_id)
 
-        # an unrelated edit forks the version while that job is still in flight
+        # an unrelated edit forks the version while that job is still in flight — the
+        # fork copies job_shot_id's row, frame_generating and all, under a new id
         forked_job_version_id, forked_job_shot_id = _resolve_shot(ws, job_shot_id)
         assert forked_job_version_id != job_version_id
         sb_row = db.query('SELECT active_version_id FROM storyboards WHERE id = %s',
                           (job_storyboard_id,), one=True)
         assert str(sb_row['active_version_id']) == forked_job_version_id
 
+        fake_frame_asset = add_asset(ws, campaign_id, job_storyboard_id,
+                                     forked_job_version_id, 'storyboard_image',
+                                     's3://fake/job-routing', shot_id=forked_job_shot_id,
+                                     shot_key=job_shot_key)
+        fake_frame_asset_id = fake_frame_asset['id']
         transitioned = complete_generation(ws, job_storyboard_id, job_shot_key,
-                                           'frame_done')
-        assert transitioned == forked_job_shot_id, transitioned
-        landed = db.query('SELECT state FROM storyboard_shots WHERE id = %s',
-                          (forked_job_shot_id,), one=True)
-        assert landed['state'] == 'frame_review', landed['state']
+                                           'frame_done', asset_id=fake_frame_asset_id)
+        assert set(transitioned) == {job_shot_id, forked_job_shot_id}, transitioned
 
-        # the pre-fork row the job actually started against is untouched
-        stale = db.query('SELECT state FROM storyboard_shots WHERE id = %s',
-                         (job_shot_id,), one=True)
-        assert stale['state'] == 'frame_generating', stale['state']
+        # BOTH rows transitioned — the pre-fork one (nothing else will ever complete it,
+        # since nothing points at its version any more) and the fork's copy — and both
+        # got the new asset selected, because both were sitting in frame_generating,
+        # i.e. both were waiting on exactly this asset.
+        for row_id in (job_shot_id, forked_job_shot_id):
+            row = db.query(
+                'SELECT state, selected_frame_asset_id FROM storyboard_shots WHERE id = %s',
+                (row_id,), one=True)
+            assert row['state'] == 'frame_review', (row_id, row)
+            assert str(row['selected_frame_asset_id']) == fake_frame_asset_id, (row_id, row)
 
-        # the active shot has moved past frame_generating now -> a repeat call is a no-op
+        # every matching row already moved past frame_generating -> a repeat call is a
+        # true no-op: nothing to transition, nothing (re-)selected
         assert complete_generation(ws, job_storyboard_id, job_shot_key,
-                                   'frame_done') is None
+                                   'frame_done', asset_id=str(uuid.uuid4())) == []
+        unmoved = db.query(
+            'SELECT selected_frame_asset_id FROM storyboard_shots WHERE id = %s',
+            (job_shot_id,), one=True)
+        assert str(unmoved['selected_frame_asset_id']) == fake_frame_asset_id, \
+            'a repeat call must not clobber an already-resolved selection'
         assert shot_in_active_version(ws, uuid.uuid4(), job_storyboard_id) is None
+
+        # --- reconcile_generating: a shot with no job in flight and a succeeded job +
+        # --- asset for it heals to *_review with that asset selected; a failed job (or
+        # --- none at all) heals to *_failed. Never touches a shot with a job still
+        # --- queued/running for its shot_key. -------------------------------------------
+        reconcile_created = create_storyboard(ws, campaign_id,
+            {'target_duration': 9, 'title': 'reconcile-check'},
+            [{'duration': 3}, {'duration': 3}, {'duration': 3}])
+        reconcile_version_id = reconcile_created['version_id']
+        reconcile_shots = get_version(ws, reconcile_version_id)['shots']
+        healed_shot, running_shot, failed_shot = reconcile_shots
+        healed_shot_id, healed_shot_key = str(healed_shot['id']), str(healed_shot['shot_key'])
+        running_shot_id, running_shot_key = str(running_shot['id']), str(running_shot['shot_key'])
+        failed_shot_id, failed_shot_key = str(failed_shot['id']), str(failed_shot['shot_key'])
+
+        for sid in (healed_shot_id, running_shot_id, failed_shot_id):
+            apply_event(ws, sid, 'approve_instructions')
+            apply_event(ws, sid, 'start_frame')
+
+        # healed_shot: a job that already succeeded and produced an asset, but nothing
+        # ever called complete_generation for it (simulating the real failure mode: the
+        # active-version row this job's own complete_generation call reached was some
+        # OTHER version's fork, not this one).
+        healed_job = jobs.create(ws, user, 'ad_frame', f'idem-heal-{uuid.uuid4().hex[:8]}',
+                                 {'shot_key': healed_shot_key}, reserved_credits=1)
+        db.query("UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = %s",
+                (healed_job['id'],))
+        healed_asset = add_asset(ws, campaign_id, reconcile_created['storyboard_id'],
+                                 reconcile_version_id, 'storyboard_image', 's3://fake/heal',
+                                 shot_id=healed_shot_id, shot_key=healed_shot_key,
+                                 job_id=str(healed_job['id']))
+
+        # running_shot: a job for the same kind of work that is still genuinely queued —
+        # reconcile must leave this one alone.
+        jobs.create(ws, user, 'ad_frame', f'idem-running-{uuid.uuid4().hex[:8]}',
+                   {'shot_key': running_shot_key}, reserved_credits=1)
+
+        # failed_shot: a job that failed outright, no asset.
+        failed_job = jobs.create(ws, user, 'ad_frame', f'idem-failed-{uuid.uuid4().hex[:8]}',
+                                 {'shot_key': failed_shot_key}, reserved_credits=1)
+        db.query("UPDATE jobs SET status = 'failed', finished_at = now() WHERE id = %s",
+                (failed_job['id'],))
+
+        healed_ids = reconcile_generating(ws, reconcile_version_id)
+        assert set(healed_ids) == {healed_shot_id, failed_shot_id}, healed_ids
+
+        healed_row = db.query(
+            'SELECT state, selected_frame_asset_id FROM storyboard_shots WHERE id = %s',
+            (healed_shot_id,), one=True)
+        assert healed_row['state'] == 'frame_review', healed_row
+        assert str(healed_row['selected_frame_asset_id']) == healed_asset['id'], healed_row
+
+        failed_row = db.query('SELECT state FROM storyboard_shots WHERE id = %s',
+                              (failed_shot_id,), one=True)
+        assert failed_row['state'] == 'frame_failed', failed_row
+
+        still_running_row = db.query('SELECT state FROM storyboard_shots WHERE id = %s',
+                                     (running_shot_id,), one=True)
+        assert still_running_row['state'] == 'frame_generating', \
+            'a shot with a job still queued must not be touched'
+
+        # idempotent: every matching shot already moved past *_generating (or its job is
+        # still queued, untouched by design) -> a repeat call heals nothing further
+        assert reconcile_generating(ws, reconcile_version_id) == []
 
         # --- regenerating a VIDEO (a new clip from the SAME approved frame) is a --------
         # --- rollback of the VIDEO approval only, never the frame's, and never forks ---
