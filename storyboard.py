@@ -77,6 +77,12 @@ VIDEO_ASSET_TYPES = {'video_clip'}
 COLUMN_FIELDS = {'image_prompt', 'motion_prompt', 'negative_prompt', 'duration',
                  'character_ids', 'product_ids'}
 
+# Mirrors endcard.STYLES -- duplicated rather than imported, because this module
+# deliberately takes no provider imports (see the module docstring) and endcard.py pulls
+# in video.py's; three literal style names are worth the small duplication risk over
+# blurring that boundary. set_end_card_style() validates against this.
+END_CARD_STYLES = ('heritage', 'modern', 'minimal')
+
 # Which apply_event() events record an approvals row, and under what stage name.
 APPROVE_STAGE = {'approve_frame': 'frame', 'approve_video': 'video'}
 
@@ -328,6 +334,14 @@ def create_storyboard(workspace_id: str, campaign_id: str, fields: dict,
         conn.execute('UPDATE storyboards SET active_version_id = %s WHERE id = %s',
                     (version_id, storyboard_id))
     return {'storyboard_id': str(storyboard_id), 'version_id': str(version_id)}
+
+
+def get_shot(workspace_id: str, shot_id: str) -> dict:
+    """One shot (every storyboard_shots column, plus its version_id/storyboard_id and
+    the version's own status), workspace-scoped. Raises NotFound. A thin public wrapper
+    over _shot_scope for callers (e.g. ads_api.py's endcard preview) that need to read a
+    single shot without a structural or production op attached to it."""
+    return dict(_shot_scope(workspace_id, shot_id))
 
 
 def get_version(workspace_id: str, version_id: str) -> dict:
@@ -640,6 +654,45 @@ def update_spec(workspace_id: str, shot_id: str, patch: dict) -> tuple[str, str,
         _record_reset(conn, workspace_id, effective_version_id, effective_shot_id,
                       old_state, new_state)
     return effective_version_id, effective_shot_id, new_state
+
+
+def _set_end_card_field(workspace_id: str, shot_id: str, field: str, value) -> str:
+    """Shared guard + write for the end_card shot's own production-level toggles
+    (style, keep-case, ...). Despite living in `spec` and sitting in
+    shot_state.FIELD_GROUPS' 'none' group like brand_text/tagline, these are
+    deliberately NOT routed through update_spec: update_spec forks an approved version
+    unconditionally (ensure_editable() forks on EVERY spec write regardless of
+    invalidation group — confirmed by reading it; the 'none' group only ever protected
+    the shot's *state*, not whether the write forks). A style/case pick is exactly the
+    kind of production-level choice that should behave like select_music/
+    set_music_skipped instead: mutate the shot in place, never fork, never bump the
+    version count for changing how the end card looks at the creative-review stage.
+    Raises ValueError for a shot that isn't the end_card, or a superseded version (its
+    shots are read-only for user-driven changes, same guard apply_event/select_asset/
+    select_music already use)."""
+    shot = _shot_scope(workspace_id, shot_id)
+    if shot['kind'] != 'end_card':
+        raise ValueError(f'{field} only applies to the end_card shot')
+    if shot['version_status'] == 'superseded':
+        raise ValueError(f'cannot change {field} on a superseded version')
+    db.query("UPDATE storyboard_shots SET spec = spec || %s::jsonb, updated_at = now() "
+             'WHERE id = %s', (json.dumps({field: value}), shot_id))
+    return str(shot['version_id'])
+
+
+def set_end_card_style(workspace_id: str, shot_id: str, style: str) -> str:
+    """Which of endcard.STYLES the end card uses. See _set_end_card_field for why this
+    never forks. Raises ValueError for an unknown style too."""
+    if style not in END_CARD_STYLES:
+        raise ValueError(f'unknown end_card_style {style!r}; use one of {END_CARD_STYLES}')
+    return _set_end_card_field(workspace_id, shot_id, 'end_card_style', style)
+
+
+def set_end_card_keep_case(workspace_id: str, shot_id: str, keep_case: bool) -> str:
+    """Whether heritage/modern keep the brand text's typed capitalisation instead of
+    their default uppercase display transform (spelling is never altered either way —
+    see endcard.py). See _set_end_card_field for why this never forks."""
+    return _set_end_card_field(workspace_id, shot_id, 'end_card_keep_case', bool(keep_case))
 
 
 # --- Shot state events -----------------------------------------------------------
@@ -1139,6 +1192,47 @@ def demo() -> None:
         sb_row = db.query('SELECT active_version_id FROM storyboards WHERE id = %s',
                           (storyboard_id,), one=True)
         assert str(sb_row['active_version_id']) == version_id
+
+        # --- set_end_card_style: a production-level choice, never forks (unlike
+        # update_spec, which forks EVERY spec write on an approved version regardless of
+        # invalidation group) ------------------------------------------------------------
+        end_card_row = next(s for s in state['shots'] if s['kind'] == 'end_card')
+        end_card_id = str(end_card_row['id'])
+        returned_version = set_end_card_style(ws, end_card_id, 'modern')
+        assert returned_version == version_id, 'set_end_card_style must never fork'
+        still_approved = db.query('SELECT status FROM storyboard_versions WHERE id = %s',
+                                  (version_id,), one=True)
+        assert still_approved['status'] == 'approved', 'the version must still read as approved'
+        after_style = get_version(ws, version_id)
+        after_card = next(s for s in after_style['shots'] if str(s['id']) == end_card_id)
+        assert after_card['spec']['end_card_style'] == 'modern', after_card['spec']
+        try:
+            set_end_card_style(ws, end_card_id, 'not-a-style')
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('an unknown end_card_style should have raised ValueError')
+        try:
+            set_end_card_style(ws, target_id, 'modern')          # target_id is an ordinary shot
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('end_card_style on a non-end_card shot should have raised')
+        print('storyboard: set_end_card_style is a non-forking production choice ok')
+
+        # --- set_end_card_keep_case: same non-forking shape ------------------------------
+        returned_version_kc = set_end_card_keep_case(ws, end_card_id, True)
+        assert returned_version_kc == version_id, 'set_end_card_keep_case must never fork'
+        after_kc = get_version(ws, version_id)
+        after_kc_card = next(s for s in after_kc['shots'] if str(s['id']) == end_card_id)
+        assert after_kc_card['spec']['end_card_keep_case'] is True, after_kc_card['spec']
+        try:
+            set_end_card_keep_case(ws, target_id, True)          # target_id is an ordinary shot
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('end_card_keep_case on a non-end_card shot should have raised')
+        print('storyboard: set_end_card_keep_case is a non-forking production choice ok')
 
         forked_version_id, forked_shot_id = _resolve_shot(ws, target_id)
         assert forked_version_id != version_id, 'editing an approved version must fork'

@@ -644,9 +644,9 @@ def main() -> None:
         hf.download = fake_hf_download
         fidelity_calls = []
 
-        def fake_check_fidelity(product_path, frame_path, description=''):
-            fidelity_calls.append((product_path, frame_path, description))
-            return True, 'looks right'
+        def fake_check_fidelity(product_paths, frame_path, description='', max_edge=None):
+            fidelity_calls.append((product_paths, frame_path, description))
+            return True, 'looks right', {'pieces': [], 'verdict': 'pass'}
         orchestrator.check_frame_fidelity = fake_check_fidelity
         credits.grant(ws_id, 20, 'ads-frame-test-fund')
 
@@ -702,7 +702,7 @@ def main() -> None:
             v1_asset_id = shot0['frame_variants'][0]['id']
             assert shot0['selected_frame_url'], 'the new frame was not auto-selected'
             assert shot0['frame_variants'][0]['fidelity'] == \
-                {'ok': True, 'reason': 'looks right'}, shot0['frame_variants']
+                {'ok': True, 'reason': 'looks right', 'pieces': []}, shot0['frame_variants']
             assert fidelity_calls, 'the fidelity check never ran for a hero-visibility shot'
             assert credits.balance(ws_id) == balance_before - 1, credits.balance(ws_id)
 
@@ -867,10 +867,12 @@ def main() -> None:
 
         fidelity_control = {'sequence': None}
 
-        def fake_check_shot_clip(frame_path, mp4_path, description='', has_person=False):
+        def fake_check_shot_clip(product_paths, frame_path, mp4_path, description='',
+                                 has_person=False):
             if fidelity_control['sequence']:
-                return fidelity_control['sequence'].pop(0)
-            return True, 'looks right'
+                ok, reason = fidelity_control['sequence'].pop(0)
+                return ok, reason, {}
+            return True, 'looks right', {}
 
         video.get = lambda *a, **k: fake_video_provider
         video.generate = fake_video_generate
@@ -965,7 +967,7 @@ def main() -> None:
             video_v = client.get(f'/api/versions/{video_version_id}').json()
             video_shot = next(s for s in video_v['shots'] if s['id'] == video_shot_id)
             v2 = next(v for v in video_shot['video_variants'] if v['id'] != v1['id'])
-            assert v2['fidelity'] == {'ok': True, 'reason': 'now matches'}, v2
+            assert v2['fidelity'] == {'ok': True, 'reason': 'now matches', 'pieces': []}, v2
 
             # --- both attempts fail -> still delivered, fidelity ok False recorded -------
             fidelity_control['sequence'] = [(False, 'first attempt bad'),
@@ -981,7 +983,7 @@ def main() -> None:
             video_shot = next(s for s in video_v['shots'] if s['id'] == video_shot_id)
             latest_variant = video_shot['video_variants'][-1]
             assert latest_variant['fidelity'] == \
-                {'ok': False, 'reason': 'second attempt bad'}, latest_variant
+                {'ok': False, 'reason': 'second attempt bad', 'pieces': []}, latest_variant
             fidelity_control['sequence'] = None
 
             # --- a clip with a real hard cut -> caught by the REAL detect_cuts (no LLM,
@@ -1457,6 +1459,140 @@ def main() -> None:
             assert failed_render_row['status'] == 'failed', failed_render_row
 
             print('ads_flow: a render that raises mid-job still records status=failed ok')
+
+            # --- end-card style: preview endpoint, non-forking PATCH, style in the
+            #     render manifest, and two styles actually painting different pixels ----
+
+            # 404 before any ordinary shot has a frame/clip -- a fresh end_card-only board.
+            empty_created = storyboard.create_storyboard(
+                ws_id, campaign_id, {'target_duration': 4, 'title': 'Style preview board'},
+                [{'duration': 2.0}, {'duration': 2.0, 'kind': 'end_card',
+                                     'spec': {'brand_text': 'Style Co'}}])
+            empty_shots = storyboard.get_version(ws_id, empty_created['version_id'])['shots']
+            empty_end_card_id = str(next(s for s in empty_shots if s['kind'] == 'end_card')['id'])
+            no_source = client.get(f'/api/shots/{empty_end_card_id}/endcard-preview',
+                                   params={'style': 'heritage'})
+            assert no_source.status_code == 404, no_source.text
+
+            # Reuse the fully-set-up silent-render board (frame AND clip both selected/
+            # approved on its one ordinary shot) for the rest.
+            previews = {}
+            for style in ('heritage', 'modern', 'minimal'):
+                resp = client.get(f'/api/shots/{silent_end_card_id}/endcard-preview',
+                                  params={'style': style, 'brand_text': 'Style Co',
+                                         'tagline': 'Look closer'})
+                assert resp.status_code == 200, (style, resp.text)
+                assert resp.headers['content-type'] == 'image/png', resp.headers
+                assert len(resp.content) > 500, f'{style} preview is suspiciously small'
+                previews[style] = resp.content
+            assert previews['heritage'] != previews['modern'] != previews['minimal'], \
+                'all three style previews rendered byte-identical images'
+            print('ads_flow: endcard-preview PNG per style, 404 before a source frame exists ok')
+
+            # An unknown style is a 400, not a 500 or a silent fallback.
+            bad_style = client.get(f'/api/shots/{silent_end_card_id}/endcard-preview',
+                                   params={'style': 'nope'})
+            assert bad_style.status_code == 400, bad_style.text
+
+            # --- PATCH style never forks / never demotes state, draft AND approved -------
+            before_state = client.get(f'/api/versions/{silent_version_id}').json()
+            before_card = next(s for s in before_state['shots'] if s['kind'] == 'end_card')
+            assert before_card['state'] == 'video_approved', before_card
+            style_resp = client.post(f'/api/shots/{silent_end_card_id}/end-card-style',
+                                     data={'style': 'modern'})
+            assert style_resp.status_code == 200, style_resp.text
+            assert style_resp.json()['version_id'] == silent_version_id, \
+                'set_end_card_style must never fork a draft version either'
+            after_state = client.get(f'/api/versions/{silent_version_id}').json()
+            after_card = next(s for s in after_state['shots'] if s['kind'] == 'end_card')
+            assert after_card['spec']['end_card_style'] == 'modern', after_card['spec']
+            assert after_card['state'] == 'video_approved', \
+                'a style change must never demote production state'
+
+            # silent_version_id is already 'approved' at this point (the silent render
+            # above only succeeds against an approved version) -- prove the SAME call
+            # still doesn't fork now that the version is frozen.
+            version_row = db.query('SELECT status FROM storyboard_versions WHERE id = %s',
+                                   (silent_version_id,), one=True)
+            assert version_row['status'] == 'approved', version_row
+            style_resp_2 = client.post(f'/api/shots/{silent_end_card_id}/end-card-style',
+                                       data={'style': 'minimal'})
+            assert style_resp_2.status_code == 200, style_resp_2.text
+            assert style_resp_2.json()['version_id'] == silent_version_id, \
+                'set_end_card_style must never fork an APPROVED version'
+            print('ads_flow: PATCH end-card style never forks or demotes state ok')
+
+            # --- keep_case: same non-forking shape, and it changes the preview's SPELLING
+            #     case without altering spelling itself ------------------------------------
+            upper_resp = client.get(f'/api/shots/{silent_end_card_id}/endcard-preview',
+                                    params={'style': 'heritage', 'brand_text': 'Mehta Jeweller',
+                                           'tagline': 'x', 'keep_case': 'false'})
+            kept_resp = client.get(f'/api/shots/{silent_end_card_id}/endcard-preview',
+                                   params={'style': 'heritage', 'brand_text': 'Mehta Jeweller',
+                                          'tagline': 'x', 'keep_case': 'true'})
+            assert upper_resp.status_code == 200 and kept_resp.status_code == 200
+            assert upper_resp.content != kept_resp.content, \
+                'keep_case=true/false must render visibly different (case) previews'
+
+            keep_case_resp = client.post(f'/api/shots/{silent_end_card_id}/end-card-keep-case',
+                                         data={'keep_case': 'true'})
+            assert keep_case_resp.status_code == 200, keep_case_resp.text
+            assert keep_case_resp.json()['version_id'] == silent_version_id, \
+                'set_end_card_keep_case must never fork an approved version'
+            kc_state = client.get(f'/api/versions/{silent_version_id}').json()
+            kc_card = next(s for s in kc_state['shots'] if s['kind'] == 'end_card')
+            assert kc_card['spec']['end_card_keep_case'] is True, kc_card['spec']
+            assert kc_card['state'] == 'video_approved', \
+                'a keep_case change must never demote production state'
+            print('ads_flow: PATCH end-card keep_case never forks; changes rendered case only ok')
+
+            # --- render with style=modern records it, and its pixels differ from minimal's
+            client.post(f'/api/shots/{silent_end_card_id}/end-card-style',
+                       data={'style': 'modern'})
+            modern_render = client.post(f'/api/versions/{silent_version_id}/render',
+                                        data={'idempotency_key': 'style-modern'})
+            assert modern_render.status_code == 200, modern_render.text
+            modern_job = _await_job(client, modern_render.json()['job_id'], timeout_s=60)
+            assert modern_job['status'] == 'succeeded', modern_job
+            modern_render_id = client.get(
+                f'/api/versions/{silent_version_id}').json()['renders'][0]['id']
+            modern_manifest = client.get(f'/api/renders/{modern_render_id}').json()['manifest']
+            assert modern_manifest['end_card']['style'] == 'modern', modern_manifest['end_card']
+
+            client.post(f'/api/shots/{silent_end_card_id}/end-card-style',
+                       data={'style': 'minimal'})
+            minimal_render = client.post(f'/api/versions/{silent_version_id}/render',
+                                         data={'idempotency_key': 'style-minimal'})
+            assert minimal_render.status_code == 200, minimal_render.text
+            minimal_job = _await_job(client, minimal_render.json()['job_id'], timeout_s=60)
+            assert minimal_job['status'] == 'succeeded', minimal_job
+            minimal_render_id = client.get(
+                f'/api/versions/{silent_version_id}').json()['renders'][0]['id']
+            minimal_manifest = client.get(f'/api/renders/{minimal_render_id}').json()['manifest']
+            assert minimal_manifest['end_card']['style'] == 'minimal', minimal_manifest['end_card']
+
+            def _end_card_last_frame(render_id, out_path):
+                asset_row = db.query(
+                    """SELECT ga.key FROM final_renders fr
+                         JOIN generated_assets ga ON ga.id = fr.asset_id
+                        WHERE fr.id = %s""", (render_id,), one=True)
+                local = pathlib.Path(f'out/ads_test_fixtures/{out_path}')
+                storage.fetch(asset_row['key'], local)
+                probe = video._probe(local)
+                video._extract_frame(local, max(probe['duration'] - 0.1, 0),
+                                     local.with_suffix('.png'))
+                return local.with_suffix('.png')
+
+            modern_frame = _end_card_last_frame(modern_render_id, 'style-modern.mp4')
+            minimal_frame = _end_card_last_frame(minimal_render_id, 'style-minimal.mp4')
+            from PIL import Image, ImageChops
+            diff = ImageChops.difference(
+                Image.open(modern_frame).convert('L'), Image.open(minimal_frame).convert('L'))
+            bbox = diff.point(lambda p: 255 if p > 25 else 0).getbbox()
+            assert bbox is not None, \
+                'modern and minimal end cards rendered pixel-identical end frames'
+            print('ads_flow: render(style=modern) vs render(style=minimal) -- manifest '
+                 'records each style, and their end-card pixels actually differ ok')
         finally:
             music.generate = real_music_generate
 

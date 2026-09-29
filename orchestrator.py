@@ -10,13 +10,17 @@ to providers and turning the result back into storyboard.py calls.
                                           # (DB parts skip without DATABASE_URL; no network)
 """
 
+import base64
+import concurrent.futures
 import hashlib
+import io
 import json
 import logging
 import math
 import os
 import pathlib
 import re
+import statistics
 import subprocess
 import tempfile
 
@@ -43,13 +47,87 @@ MAX_REFERENCE_IMAGES = 4
 MAX_PROMPT_CHARS = 4000          # "keep it readable" — plenty for a shot prompt, never hit
                                   # in practice; a hard cap rather than a token-accurate budget.
 
-FRAME_FIDELITY_MODEL = 'claude-haiku-4-5'          # matches video.FIDELITY_MODEL
+# One-line switchable: fidelity_eval.py overrides this via the FIDELITY_MODEL_ADS env var
+# to A/B a stricter/pricier model without touching this file.
+FIDELITY_MODEL_ADS = os.environ.get('FIDELITY_MODEL_ADS', 'claude-haiku-4-5')
+
+# A generic "is it the same piece" yes/no (the old FRAME_FIDELITY_SCHEMA) passed a frame
+# that swapped a coin-link Lakshmi temple necklace + jhumka earrings for a plain chain and
+# generic studs — the model had nothing to anchor "same" against beyond a vague impression.
+# Itemizing per piece (chain construction, pendant motif, earring type, metal colour) before
+# asking for a verdict is what actually caught it in the 2026-09-29 eval — see fidelity_eval.py.
+FIDELITY_VISION_MAX_EDGE = 1024   # smaller than product.VISION_MAX_EDGE (1568): these checks
+                                   # send several images per call and only need to compare
+                                   # overall design, not fine print.
+
+# check_shot_clip's per-sampled-frame jewellery checks (via check_frame_fidelity's max_edge
+# param) can use a different resolution than the primary frame check — env-overridable, same
+# pattern as FIDELITY_MODEL_ADS, so fidelity_eval.py can A/B it without a code change.
+CLIP_FRAME_VISION_MAX_EDGE = int(os.environ.get('CLIP_FRAME_VISION_MAX_EDGE',
+                                                 FIDELITY_VISION_MAX_EDGE))
+
+ITEMIZED_PIECES_SCHEMA = {
+    'type': 'array',
+    'items': {
+        'type': 'object',
+        'properties': {
+            'piece': {'type': 'string'},
+            'visible': {'type': 'boolean'},
+            'matches': {'type': 'boolean'},
+            'difference': {'type': 'string'},
+        },
+        'required': ['piece', 'visible', 'matches', 'difference'],
+        'additionalProperties': False,
+    },
+}
 FRAME_FIDELITY_SCHEMA = {
     'type': 'object',
-    'properties': {'same_design': {'type': 'boolean'}, 'reason': {'type': 'string'}},
-    'required': ['same_design', 'reason'],
+    'properties': {
+        'pieces': ITEMIZED_PIECES_SCHEMA,
+        'verdict': {'type': 'string', 'enum': ['pass', 'fail']},
+        'reason': {'type': 'string'},
+    },
+    'required': ['pieces', 'verdict', 'reason'],
     'additionalProperties': False,
 }
+
+FRAME_FIDELITY_SYSTEM = (
+    'You are a strict jewellery QC inspector. You will be shown the client\'s product '
+    'reference photo(s) (the ground truth) followed by a generated ad frame. First list '
+    'each distinct piece across the product photo(s) (e.g. necklace, earrings). For each, '
+    'judge from the ad frame whether it is visible and whether it is the SAME design: '
+    'chain/link construction, pendant shape and motif, earring type (stud/drop/jhumka) and '
+    'motif, metal colour, proportions. A generic or simpler piece of the same category is '
+    'NOT a match. Pieces not visible are not failures unless a clearly different piece is '
+    'worn in their place. verdict=fail if any visible piece does not match or a different '
+    'piece is worn instead.'
+)
+
+
+def _fidelity_image_b64(path, max_edge: int = FIDELITY_VISION_MAX_EDGE) -> str:
+    """base64 JPEG for a fidelity-check image, downscaled to `max_edge` (defaults to
+    FIDELITY_VISION_MAX_EDGE; check_shot_clip's per-frame jewellery checks can override
+    it via CLIP_FRAME_VISION_MAX_EDGE to test finer detail on clip-extracted frames).
+
+    Reuses product.encode() for its HEIC handling and decompression-bomb guard rather than
+    duplicating them, then re-thumbnails its output down from product's own 1568px cap to
+    this module's smaller one — these checks send several images per call.
+    """
+    from PIL import Image
+
+    import product as product_module
+
+    raw = base64.standard_b64decode(product_module.encode(path))
+    with Image.open(io.BytesIO(raw)) as image:
+        image.thumbnail((max_edge, max_edge))
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG', quality=90)
+    return base64.standard_b64encode(buffer.getvalue()).decode()
+
+
+def _fidelity_image_block(path, max_edge: int = FIDELITY_VISION_MAX_EDGE) -> dict:
+    return {'type': 'image', 'source': {'type': 'base64',
+            'media_type': 'image/jpeg', 'data': _fidelity_image_b64(path, max_edge)}}
 
 NEGATIVE_CLAUSE = (
     'The jewellery must match the reference image exactly in shape, proportion, stone '
@@ -877,7 +955,9 @@ def run_render(job_id: str) -> None:
         end_card = render.EndCard(duration=float(end_card_shot['duration']),
                                   brand_text=(end_spec.get('brand_text') or '').strip(),
                                   tagline=(end_spec.get('tagline') or '').strip(),
-                                  logo=_workspace_logo_path(workspace_id))
+                                  logo=_workspace_logo_path(workspace_id),
+                                  style=end_spec.get('end_card_style') or render.EndCard.style,
+                                  keep_case=bool(end_spec.get('end_card_keep_case')))
 
         music_info = storyboard.music_state(workspace_id, version_id)
         music_path, music_asset_id = None, None
@@ -939,49 +1019,50 @@ def run_render(job_id: str) -> None:
 
 # --- the background job body ------------------------------------------------------------
 
-def check_frame_fidelity(product_path, frame_path, description: str = '') -> tuple[bool, str]:
-    """Did the generated frame keep the product's real design? Mirrors video.py's
-    check_fidelity: never raises (a checker outage must not fail a paid job), and asks a
-    strict yes/no with a reason rather than trusting a self-graded description.
+def check_frame_fidelity(product_paths: list, frame_path, description: str = '',
+                         max_edge: int = FIDELITY_VISION_MAX_EDGE) -> tuple[bool, str, dict]:
+    """Did the generated frame keep every referenced product's real design? Mirrors
+    video.py's check_fidelity: never raises (a checker outage must not fail a paid job).
+
+    Accepts every one of the shot's product photos (not just the first) — a shot with a
+    necklace AND earrings needs both checked, or a redesigned second piece ships silently.
+    `max_edge` lets a caller (check_shot_clip, via CLIP_FRAME_VISION_MAX_EDGE) send finer-
+    detail images than the frame-check default — this same function is reused per sampled
+    clip frame, where fine jewellery detail matters more than for a single approved frame.
+    Returns (ok, reason, detail); detail['pieces'] is the itemized per-piece judgement, for
+    storing in the asset's metadata so the UI can show which piece failed.
     """
+    if not product_paths:
+        return True, 'no product reference photo to check against', {}
     try:
         import anthropic
 
-        import product as product_module
+        content = []
+        for i, path in enumerate(product_paths, 1):
+            label = ('the client\'s product reference photo' if len(product_paths) == 1
+                     else f'client product reference photo {i} of {len(product_paths)}')
+            content.append({'type': 'text', 'text': f'{label} (ground truth):'})
+            content.append(_fidelity_image_block(path, max_edge))
+        content.append({'type': 'text', 'text': 'The generated ad frame to inspect:'})
+        content.append(_fidelity_image_block(frame_path, max_edge))
+        piece_clause = f'Context: {description}.' if description else ''
+        content.append({'type': 'text', 'text': (
+            f'{piece_clause} List each distinct piece from the product photo(s) above, '
+            'then judge each against the ad frame per the instructions.')})
 
-        def image_block(path):
-            return {'type': 'image', 'source': {'type': 'base64',
-                    'media_type': product_module.VISION_MEDIA_TYPE,
-                    'data': product_module.encode(path)}}
-
-        piece_clause = f'The piece is: {description}.' if description else ''
         reply = anthropic.Anthropic().messages.create(
-            model=FRAME_FIDELITY_MODEL, max_tokens=300,
-            system=(
-                'You are a strict jewellery QC inspector. Catch a generated frame that '
-                'silently redesigned the piece — a different silhouette, metal colour or '
-                'stone layout — even if the frame is well composed. When unsure, answer '
-                'same_design=false: a false pass ships a wrong ad, a false fail only '
-                'costs one regenerate.'
-            ),
-            messages=[{'role': 'user', 'content': [
-                {'type': 'text', 'text': 'Image 1 — the product reference photo (ground truth).'},
-                image_block(product_path),
-                {'type': 'text', 'text': 'Image 2 — the generated ad frame.'},
-                image_block(frame_path),
-                {'type': 'text', 'text': (
-                    f'{piece_clause} Does Image 2 show the same piece as Image 1 — same '
-                    'outline/shape, metal colour and stone layout? Give a one-sentence '
-                    'reason.')},
-            ]}],
+            model=FIDELITY_MODEL_ADS, max_tokens=800,
+            system=FRAME_FIDELITY_SYSTEM,
+            messages=[{'role': 'user', 'content': content}],
             output_config={'format': {'type': 'json_schema', 'schema': FRAME_FIDELITY_SCHEMA}},
         )
         text = next(block.text for block in reply.content if block.type == 'text')
         answer = json.loads(text)
-        return bool(answer['same_design']), answer['reason']
+        ok = answer['verdict'] == 'pass'
+        return ok, answer['reason'], {'pieces': answer['pieces'], 'verdict': answer['verdict']}
     except Exception as error:                       # noqa: BLE001 - never fail a paid job
         logging.warning('orchestrator.check_frame_fidelity unavailable: %r', error)
-        return True, f'fidelity check unavailable: {error!r}'
+        return True, f'fidelity check unavailable: {error!r}', {}
 
 
 # --- cut detector: free, deterministic, no LLM -----------------------------------------
@@ -1048,110 +1129,234 @@ def detect_cuts(mp4_path) -> list[float]:
         return []
 
 
+# --- pose/composition jump detector: free, deterministic, complements detect_cuts -------
+#
+# detect_cuts only catches a hard scene-boundary cut (ffmpeg's own scene-change score,
+# confirmed by a pixel diff). It does NOT catch a jump WITHIN the same nominal scene — a
+# body or product snapping to a different pose/framing without a scene-detected boundary.
+# This samples every JUMP_SAMPLE_INTERVAL seconds and flags a step whose greyscale frame
+# diff is an outlier for the CLIP'S OWN motion level (JUMP_RATIO x its median step) and
+# above an absolute floor (JUMP_ABS_FLOOR), so a near-static clip's largest step never
+# trips on noise alone.
+#
+# Calibrated 2026-09-29 against the real clips this change's report measures (see the
+# report for the full numbers): abb7ce48 (no product, no jump) maxed at ~8.4, e2e's two
+# ring clips (normal rotation, no jump) maxed at ~26.8 and ~14.2, and 8a87bd1a (the clip
+# with wrong jewellery + a described "pose jump ~2.5s") maxed at ~17.4 — LOWER than the
+# ring clips' ordinary motion. A synthetic hard-splice fixture (two different images joined
+# by a 3-frame crossfade) maxed at ~94.6. There is no threshold that flags 8a87bd1a without
+# also flagging the good ring clips: this detector's signal cannot separate that specific
+# subtle drift from normal continuous motion. JUMP_ABS_FLOOR is set above every real clip's
+# measured max (so it never false-flags a real, good clip) and still catches a genuinely
+# large discontinuity like the synthetic fixture — it is a backstop for a gross jump, not
+# a substitute for check_shot_clip's itemized, product-photo-anchored piece check, which is
+# what actually caught 8a87bd1a's real defect (wrong jewellery throughout).
+JUMP_SAMPLE_INTERVAL = 0.25
+JUMP_ABS_FLOOR = 30.0
+JUMP_RATIO = 3.5
+
+
+def detect_pose_jump(mp4_path) -> list[float]:
+    """Timestamps (seconds) where this clip's composition jumps abruptly, within what
+    detect_cuts still considers one scene. Never raises: degrades to "no jump detected",
+    same policy as detect_cuts."""
+    try:
+        info = video._probe(pathlib.Path(mp4_path))
+        duration = info['duration'] or 0.0
+        if duration <= JUMP_SAMPLE_INTERVAL:
+            return []
+        timestamps = []
+        t = 0.0
+        while t < duration:
+            timestamps.append(t)
+            t += JUMP_SAMPLE_INTERVAL
+        frames = [_grey_frame(mp4_path, t) for t in timestamps]
+        diffs = []
+        for a, b in zip(frames, frames[1:]):
+            n = min(len(a), len(b))
+            diffs.append(sum(abs(x - y) for x, y in zip(a[:n], b[:n])) / n if n else 0.0)
+        if not diffs:
+            return []
+        threshold = max(JUMP_ABS_FLOOR, JUMP_RATIO * statistics.median(diffs))
+        jumps = []
+        for i, diff in enumerate(diffs):
+            t = timestamps[i + 1]
+            if diff > threshold and CUT_EDGE_GUARD <= t <= duration - CUT_EDGE_GUARD:
+                jumps.append(round(t, 2))
+        return jumps
+    except Exception as error:                       # noqa: BLE001 - degrade, don't fail
+        logging.warning('orchestrator.detect_pose_jump unavailable: %r', error)
+        return []
+
+
 # --- vision check for storyboard ad clips -----------------------------------------------
 
-SHOT_CLIP_MODEL = 'claude-haiku-4-5'          # matches video.FIDELITY_MODEL
-SHOT_CLIP_SCHEMA = {
+CLIP_SCENE_SCHEMA = {
     'type': 'object',
     'properties': {
         'same_scene': {'type': 'boolean'},
-        'same_design': {'type': 'boolean'},
         'person_appears': {'type': 'boolean'},
         'person_matches_frame': {'anyOf': [{'type': 'boolean'}, {'type': 'null'}]},
         'reason': {'type': 'string'},
     },
-    'required': ['same_scene', 'same_design', 'person_appears', 'person_matches_frame',
-                'reason'],
+    'required': ['same_scene', 'person_appears', 'person_matches_frame', 'reason'],
     'additionalProperties': False,
 }
 
+# Fractions of clip duration sampled for the jewellery verdict — 0.5, 0.85, and the last
+# frame, plus 0.25 for clips >= CLIP_LONG_ENOUGH_FOR_QUARTER_FRAME. 2026-09-29's combined
+# single-call check (product photos + approved frame + all clip frames in one prompt) missed
+# a6e0d95e's earring morph and 8a87bd1a's wrong-jewellery-throughout — both had been caught
+# correctly by check_frame_fidelity run per-frame earlier the same day. Reusing that proven
+# per-frame check against each sampled clip frame, rather than asking one combined prompt to
+# reason about design fidelity AND scene continuity AND several images at once, is the fix.
+CLIP_FRAME_SAMPLE_FRACTIONS = (0.5, 0.85, 1.0)
+CLIP_LONG_ENOUGH_FOR_QUARTER_FRAME = 4.0
 
-def check_shot_clip(frame_path, mp4_path, description: str = '',
-                    has_person: bool = False) -> tuple[bool, str]:
-    """Did this storyboard shot's clip stay faithful to its approved frame?
 
-    Mirrors video.check_fidelity's never-raise pattern (a checker outage must never fail
-    a paid job), comparing the approved frame against the clip's midpoint and its last
-    frame. Unlike video.check_fidelity — written for the old single-model flow, whose
-    schema only ever asked person questions ("is her whole face in frame") — this also
-    asks same_scene, so a product-only shot that grew an invented person fails here even
-    when video.check_fidelity would have passed it on jewellery design alone (the exact
-    2026-09-27 spike this change fixes).
+def _clip_sample_timestamps(duration: float) -> list[float]:
+    fractions = list(CLIP_FRAME_SAMPLE_FRACTIONS)
+    if duration >= CLIP_LONG_ENOUGH_FOR_QUARTER_FRAME:
+        fractions.insert(0, 0.25)
+    near_end = max(duration - 0.1, 0.0)
+    return [near_end if f == 1.0 else duration * f for f in fractions]
+
+
+def check_shot_clip(product_paths: list, frame_path, mp4_path, description: str = '',
+                    has_person: bool = False) -> tuple[bool, str, dict]:
+    """Did this storyboard shot's clip stay faithful to BOTH its approved frame (scene/
+    composition ground truth) AND the product photo(s) (jewellery design ground truth)?
+
+    Two separate judgements, not one combined prompt:
+      1. Jewellery verdict: extract frames at CLIP_FRAME_SAMPLE_FRACTIONS (+25% for a long
+         clip), run the PROVEN check_frame_fidelity on each concurrently (a small
+         ThreadPoolExecutor — each call is itself never-raising, so a single frame's outage
+         degrades to a pass for that frame rather than failing the whole clip), and fail if
+         ANY sampled frame fails. This reuses exactly the itemized per-piece logic that
+         correctly caught 8a87bd1a's frame and a6e0d95e's frame earlier — asking one combined
+         prompt to also judge design fidelity across several images at once is what caused
+         the 2026-09-29 regression on those same two clips.
+      2. Scene/person judgement: a small separate call, approved frame vs. the same sampled
+         clip frames, asking only same_scene/person_appears/person_matches_frame — unchanged
+         in spirit from before 2026-09-29 (the fix for a product-only shot that grew an
+         invented person mid-clip).
 
     `has_person` comes from the shot's own spec (_shot_has_person) — for a product-only
-    shot, person_matches_frame is meaningless (there is no person in the approved frame to
-    match), so it is only consulted when has_person is True.
+    shot, person_matches_frame is meaningless, so it is only consulted when has_person is
+    True. Never raises (a checker outage must never fail a paid job). Returns (ok, reason,
+    detail); detail['per_frame'] lists each sampled timestamp's (ok, reason, pieces) and
+    detail['scene'] is the scene/person call's raw answer, for the asset's metadata.
     """
     try:
         info = video._probe(pathlib.Path(mp4_path))
         duration = info['duration'] or 0.0
-        midpoint = duration / 2
-        near_end = max(duration - 0.1, 0.0)
+        timestamps = _clip_sample_timestamps(duration)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_dir = pathlib.Path(tmp_dir)
-            mid_frame = tmp_dir / 'mid.jpg'
-            end_frame = tmp_dir / 'end.jpg'
-            video._extract_frame(mp4_path, midpoint, mid_frame)
-            video._extract_frame(mp4_path, near_end, end_frame)
+            sample_paths = []
+            for i, t in enumerate(timestamps):
+                p = tmp_dir / f'sample-{i}.jpg'
+                video._extract_frame(mp4_path, t, p)
+                sample_paths.append(p)
 
-            import anthropic
+            # 1. jewellery verdict — check_frame_fidelity per sampled frame, concurrently.
+            per_frame = []
+            if product_paths:
+                with concurrent.futures.ThreadPoolExecutor(
+                        max_workers=len(sample_paths)) as pool:
+                    futures = [pool.submit(check_frame_fidelity, product_paths, str(p),
+                                           description, CLIP_FRAME_VISION_MAX_EDGE)
+                              for p in sample_paths]
+                    per_frame = [(t, *future.result())
+                                for t, future in zip(timestamps, futures)]
+            else:
+                per_frame = [(t, True, 'no product reference photo to check against', {})
+                            for t in timestamps]
 
-            import product as product_module
-
-            def image_block(path):
-                return {'type': 'image', 'source': {'type': 'base64',
-                        'media_type': product_module.VISION_MEDIA_TYPE,
-                        'data': product_module.encode(path)}}
-
-            piece_clause = f'The piece is: {description}.' if description else ''
+            # 2. scene/person judgement — its own small call vs. the approved frame. Its own
+            # try/except: a truncated/malformed reply here (seen with a more verbose model
+            # blowing past max_tokens mid-string) must not discard step 1's already-good,
+            # already-computed jewellery verdict — degrade ONLY this half of the check.
             person_clause = (
                 'This shot is meant to show a person; person_matches_frame: does the '
-                'person in the clip match the one in the approved frame (same identity)? '
+                'person in the clip frames match the one in the approved frame (same '
+                'identity)? '
                 if has_person else
                 'This shot is meant to be PRODUCT-ONLY — no person should appear anywhere '
-                'in the clip. Set person_matches_frame to null.'
+                'in the clip frames. Set person_matches_frame to null.'
             )
-            reply = anthropic.Anthropic().messages.create(
-                model=SHOT_CLIP_MODEL, max_tokens=400,
-                system=(
-                    'You are a strict jewellery ad QC inspector. Catch a clip that '
-                    'drifted away from its approved frame — cut to a different scene, '
-                    'silently redesigned the piece, or (for a product-only shot) '
-                    'invented a person who was never in the approved frame. When unsure, '
-                    'answer the stricter (failing) value: a false pass ships a wrong ad, '
-                    'a false fail only costs one retry.'
-                ),
-                messages=[{'role': 'user', 'content': [
-                    {'type': 'text', 'text': 'Image 1 — the APPROVED FRAME (ground truth).'},
-                    image_block(frame_path),
-                    {'type': 'text', 'text': "Image 2 — the clip's middle frame."},
-                    image_block(mid_frame),
-                    {'type': 'text', 'text': "Image 3 — the clip's FINAL frame."},
-                    image_block(end_frame),
-                    {'type': 'text', 'text': (
-                        f'{piece_clause} same_scene: do Images 2 and 3 show the SAME '
-                        'setting/composition as Image 1 — not a hard cut to a different '
-                        'scene? same_design: same jewellery shape, metal colour and stone '
-                        'layout as Image 1? person_appears: does a person (face, hands or '
-                        f'body) appear anywhere in Image 2 or Image 3? {person_clause} '
-                        'Give a one-sentence reason.')},
-                ]}],
-                output_config={'format': {'type': 'json_schema', 'schema': SHOT_CLIP_SCHEMA}},
-            )
-            text = next(block.text for block in reply.content if block.type == 'text')
-            answer = json.loads(text)
+            try:
+                import anthropic
 
-        if not answer['same_scene'] or not answer['same_design']:
-            return False, answer['reason']
-        if not has_person and answer['person_appears']:
-            return False, answer['reason']
-        if has_person and answer['person_matches_frame'] is False:
-            return False, answer['reason']
-        return True, answer['reason']
+                content = [{'type': 'text',
+                           'text': 'The APPROVED FRAME (ground truth for scene/composition):'},
+                          _fidelity_image_block(frame_path)]
+                for t, p in zip(timestamps, sample_paths):
+                    content.append({'type': 'text', 'text': f"the clip's frame at {t:.2f}s:"})
+                    content.append(_fidelity_image_block(p))
+
+                reply = anthropic.Anthropic().messages.create(
+                    model=FIDELITY_MODEL_ADS, max_tokens=700,
+                    system=(
+                        'You are a strict ad QC inspector judging ONLY scene continuity '
+                        'and who appears — a separate check already judges jewellery '
+                        'design. same_scene: do the clip frames show the SAME setting/'
+                        'composition as the approved frame — not a hard cut to a '
+                        'different scene? person_appears: does a person (face, hands or '
+                        'body) appear anywhere in the clip frames? When unsure, answer '
+                        'the stricter (failing) value: a false pass ships a wrong ad, a '
+                        'false fail only costs one retry.'
+                    ),
+                    messages=[{'role': 'user', 'content': content + [
+                        {'type': 'text', 'text': f'{person_clause} Give a one-sentence '
+                                                 'reason.'},
+                    ]}],
+                    output_config={'format': {'type': 'json_schema',
+                                              'schema': CLIP_SCENE_SCHEMA}},
+                )
+                text = next(block.text for block in reply.content if block.type == 'text')
+                scene = json.loads(text)
+            except Exception as scene_error:          # noqa: BLE001 - degrade this half only
+                logging.warning('orchestrator.check_shot_clip scene check unavailable: %r',
+                               scene_error)
+                scene = {'same_scene': True, 'person_appears': has_person,
+                         'person_matches_frame': True if has_person else None,
+                         'reason': f'scene check unavailable: {scene_error!r}'}
+
+        detail = {
+            'per_frame': [{'t': t, 'ok': ok, 'reason': reason, 'pieces': d.get('pieces', [])}
+                         for t, ok, reason, d in per_frame],
+            'scene': scene,
+        }
+        failing = next(((t, reason, d) for t, ok, reason, d in per_frame if not ok), None)
+        if failing:
+            t, reason, d = failing
+            bad_piece = next((p for p in d.get('pieces', [])
+                              if p['visible'] and not p['matches']), None)
+            piece_txt = bad_piece['difference'] if bad_piece else reason
+            return False, f'at {t:.2f}s: {piece_txt}', detail
+        if not scene['same_scene']:
+            return False, scene['reason'], detail
+        if not has_person and scene['person_appears']:
+            return False, scene['reason'], detail
+        if has_person and scene['person_matches_frame'] is False:
+            return False, scene['reason'], detail
+        return True, 'looks right', detail
     except Exception as error:                       # noqa: BLE001 - never fail a paid job
         logging.warning('orchestrator.check_shot_clip unavailable: %r', error)
-        return True, f'fidelity check unavailable: {error!r}'
+        return True, f'fidelity check unavailable: {error!r}', {}
+
+
+def _shot_products(ctx: dict, shot: dict) -> tuple[list[str], str]:
+    """This shot's product reference photo paths (every one with a local file, not just
+    the first) and a combined description, for check_frame_fidelity/check_shot_clip.
+    Shared by run_frame and run_video_shot."""
+    product_ctxs = [ctx['products'][str(pid)] for pid in shot.get('product_ids') or []
+                    if str(pid) in ctx['products']]
+    paths = [p['local_path'] for p in product_ctxs if p.get('local_path')]
+    description = '; '.join(p['description'] for p in product_ctxs if p.get('description'))
+    return paths, description
 
 
 def run_frame(job_id: str) -> None:
@@ -1200,17 +1405,17 @@ def run_frame(job_id: str) -> None:
         storage.put(local_path, key)
 
         fidelity = None
-        visibility = (shot.get('spec') or {}).get('product_visibility')
-        product_ids = shot.get('product_ids') or []
-        if product_ids and visibility in ('medium', 'hero'):
+        # Runs for every shot with a product reference, regardless of product_visibility —
+        # a 'small' shot can still silently redesign the piece; visibility only affects how
+        # prominent the product is in frame, not whether it must match. Checks EVERY
+        # product photo the shot references, not just the first (a necklace+earrings shot
+        # needs both checked).
+        product_paths, description = _shot_products(ctx, shot)
+        if product_paths:
             jobs.progress(job_id, 'checking the piece matches', None,
                          'checking the piece matches…', force=True)
-            product_ctx = ctx['products'].get(str(product_ids[0]))
-            product_path = product_ctx.get('local_path') if product_ctx else None
-            if product_path:
-                ok, reason = check_frame_fidelity(product_path, local_path,
-                                                  product_ctx.get('description', ''))
-                fidelity = {'ok': ok, 'reason': reason}
+            ok, reason, detail = check_frame_fidelity(product_paths, local_path, description)
+            fidelity = {'ok': ok, 'reason': reason, 'pieces': detail.get('pieces', [])}
 
         jobs.progress(job_id, 'saving', 0.98, 'saving the image…', force=True)
 
@@ -1284,11 +1489,7 @@ def run_video_shot(job_id: str) -> None:
         working_frame = video.reframe(local_frame, aspect, out_dir)
 
         prompt, negative = compose_motion_prompt(ctx, shot)
-        product_ids = shot.get('product_ids') or []
-        description = ''
-        if product_ids:
-            product_ctx = ctx['products'].get(str(product_ids[0]))
-            description = product_ctx.get('description', '') if product_ctx else ''
+        product_paths, description = _shot_products(ctx, shot)
 
         attempt_count = 0
 
@@ -1320,8 +1521,8 @@ def run_video_shot(job_id: str) -> None:
         has_person = _shot_has_person(shot)
 
         def check_clip(path):
-            """Cut detector first (free, no LLM) — a hard cut fails outright without
-            spending a vision call; only a clean, single-scene clip goes on to
+            """Cut detector, then pose-jump detector, both free/no-LLM — either fails the
+            clip outright without spending a vision call; only a clean clip goes on to
             check_shot_clip. Replaces video.check_fidelity here: that checker's schema
             only ever asked person questions, so it passed the 2026-09-27 spike's clip
             (a product-only shot that hard-cut to an invented woman) on jewellery design
@@ -1329,23 +1530,27 @@ def run_video_shot(job_id: str) -> None:
             video.check_fidelity, untouched."""
             cuts = detect_cuts(path)
             if cuts:
-                return False, f'the clip cuts to a different scene at {cuts[0]:.1f}s'
-            return check_shot_clip(working_frame, path, description, has_person)
+                return False, f'the clip cuts to a different scene at {cuts[0]:.1f}s', {}
+            jumps = detect_pose_jump(path)
+            if jumps:
+                return False, f'the clip jumps to a different pose at {jumps[0]:.2f}s', {}
+            return check_shot_clip(product_paths, working_frame, path, description,
+                                   has_person)
 
         attempts = []
         mp4_path = one_attempt()
         jobs.progress(job_id, 'checking fidelity', None, 'checking the piece matches…',
                      force=True)
-        ok, reason = check_clip(mp4_path)
-        attempts.append({'ok': ok, 'reason': reason})
+        ok, reason, detail = check_clip(mp4_path)
+        attempts.append({'ok': ok, 'reason': reason, 'pieces': detail.get('pieces', [])})
         if not ok:
             jobs.progress(job_id, 'retrying — the clip changed the piece', 0.0,
                          'retrying — the clip changed the piece…', force=True)
             mp4_path = one_attempt()                            # one free retry
             jobs.progress(job_id, 'checking fidelity', None,
                          'checking the piece matches…', force=True)
-            ok2, reason2 = check_clip(mp4_path)
-            attempts.append({'ok': ok2, 'reason': reason2})
+            ok2, reason2, detail2 = check_clip(mp4_path)
+            attempts.append({'ok': ok2, 'reason': reason2, 'pieces': detail2.get('pieces', [])})
             # The second result is kept regardless of its own verdict, same as
             # app.run_video — there is no third try.
 
@@ -1621,7 +1826,66 @@ def demo() -> None:
         continuous_result = detect_cuts(continuous_fixture)
         assert continuous_result == [], continuous_result
 
-    print('orchestrator.detect_cuts ok')
+        # --- detect_pose_jump: free, deterministic, no LLM -----------------------------
+        # Continuous motion (the same fixture as above, no jump) must not flag. A hard
+        # splice between two different images, blended by a 3-frame crossfade (so it's
+        # NOT a hard cut ffmpeg's scene score would catch — that's exactly the gap this
+        # detector fills) must flag. Measured this change's report: this synthetic splice
+        # reads ~95 mean abs diff at its blend step vs continuous motion's ~27 max step —
+        # comfortably either side of JUMP_ABS_FLOOR=30. See the report for why the naive
+        # magnitude signal does NOT separate the real-world 8a87bd1a clip from a normal
+        # ring-rotation clip — this fixture proves the detector catches a GROSS jump, not
+        # that subtler one.
+        crossfade_fixture = tmp_dir / 'crossfade.mp4'
+        subprocess.run(
+            [video.FFMPEG, '-y', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25:duration=1.56',
+             '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=25:duration=1.56',
+             '-filter_complex', '[0:v][1:v]xfade=transition=fade:duration=0.12:offset=1.5',
+             str(crossfade_fixture)],
+            capture_output=True, check=True)
+        no_jump = detect_pose_jump(continuous_fixture)
+        assert no_jump == [], no_jump
+        jump_result = detect_pose_jump(crossfade_fixture)
+        # The 0.25s sampling grid lands the flagged step at 1.75s (the sample straddling
+        # the 1.5-1.62s blend window), not exactly at the 1.5s offset — a coarser grid
+        # than detect_cuts' frame-accurate ffmpeg scene score, and an accepted tradeoff
+        # for a free, no-LLM detector.
+        assert len(jump_result) == 1 and 1.3 <= jump_result[0] <= 1.8, jump_result
+
+    print('orchestrator.detect_cuts / detect_pose_jump ok')
+
+    # --- new fidelity schemas: this codebase's stricter policy (zero optional properties,
+    # additionalProperties: False everywhere, no unsupported keywords) --------------------
+    try:
+        from director import _assert_schema_supported
+    except ImportError:
+        _assert_schema_supported = None
+    for schema in (FRAME_FIDELITY_SCHEMA, CLIP_SCENE_SCHEMA):
+        if _assert_schema_supported:
+            _assert_schema_supported(schema)          # raises on any unsupported keyword
+
+        def _assert_all_required(node):
+            if isinstance(node, list):
+                for sub in node:
+                    _assert_all_required(sub)
+                return
+            if not isinstance(node, dict):
+                return
+            if node.get('type') == 'object':
+                properties = node.get('properties') or {}
+                required = set(node.get('required') or [])
+                assert not (set(properties) - required), (node.get('properties'), required)
+                assert node.get('additionalProperties') is False, node
+                for sub in properties.values():
+                    _assert_all_required(sub)
+            if 'items' in node:
+                _assert_all_required(node['items'])
+            for key in ('anyOf', 'allOf'):
+                if key in node:
+                    _assert_all_required(node[key])
+
+        _assert_all_required(schema)
+    print('orchestrator fidelity schemas ok (all required, additionalProperties: False)')
 
     # --- _clip_seconds: smallest supported duration >= max(min(durations), ceil(shot)) -
     kling_provider = video.get('higgsfield', 'kling')        # durations 3-15

@@ -402,10 +402,20 @@ def _probe(path: pathlib.Path) -> dict:
         capture_output=True, text=True, check=True)
     data = json.loads(out.stdout)
     video_stream = next((s for s in data['streams'] if s['codec_type'] == 'video'), {})
+    fps = None
+    for key in ('avg_frame_rate', 'r_frame_rate'):
+        raw = video_stream.get(key)
+        if raw and raw != '0/0':
+            num, _, den = raw.partition('/')
+            den = den or '1'
+            if float(den):
+                fps = float(num) / float(den)
+                break
     return {
         'width': video_stream.get('width'),
         'height': video_stream.get('height'),
         'duration': float(data.get('format', {}).get('duration', 0)),
+        'fps': fps,
     }
 
 

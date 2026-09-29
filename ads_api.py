@@ -18,24 +18,29 @@ the money.
     .venv/bin/python -c "import ads_api"     # import-only sanity check
 """
 
+import hashlib
 import os
+import pathlib
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Form, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
 import auth
 import credits
 import db
 import director
+import endcard
 import jobs
 import orchestrator
 import pieces
+import render
 import shoot
 import shot_state
 import storage
 import storyboard
 import talent
+import video
 
 router = APIRouter(prefix='/api')
 
@@ -43,6 +48,8 @@ router = APIRouter(prefix='/api')
 # progressComponent, which shows these next to real elapsed time, not instead of it.
 TYPICAL_SECONDS = {'ad_concepts': 30, 'ad_board': 75, 'ad_frame': 35, 'ad_video': 180,
                   'ad_music': 60, 'ad_render': 45}
+
+ENDCARD_CACHE_DIR = pathlib.Path('out/ads/endcard_cache')
 
 
 def ads_enabled(session: dict = Depends(auth.current_session)) -> dict:
@@ -156,12 +163,18 @@ def _enrich_shots_with_frames(workspace_id: str, version_id: str, shots: list[di
 # --- director inputs: the same product/character shape for the API and the two jobs ---
 
 def _products_for_director(campaign_id: str) -> list[dict]:
+    """`sku` and `description` are passed through SEPARATELY — a manufacturer catalogue
+    piece has both (see LEARNINGS.md: SKU is the identifier, description is what it
+    actually looks like), and collapsing them with `or` silently dropped whichever one
+    lost. `name` stays as a display-only convenience for callers that just want a single
+    label (falls back through sku -> description -> category)."""
     rows = db.query(
         """SELECT cp.id, cp.fidelity_instructions, p.category, p.description, p.sku
              FROM campaign_products cp JOIN pieces p ON p.id = cp.piece_id
             WHERE cp.campaign_id = %s ORDER BY cp.id""", (campaign_id,))
     return [
         {'id': str(r['id']), 'category': r['category'],
+         'sku': (r['sku'] or '').strip(), 'description': (r['description'] or '').strip(),
          'name': (r['sku'] or r['description'] or r['category'] or '').strip(),
          'fidelity_instructions': r['fidelity_instructions']}
         for r in rows]
@@ -180,7 +193,11 @@ def _characters_for_director(campaign_id: str, workspace_id: str) -> list[dict]:
             description = cast_entries.get(r['cast_key'], {}).get('description', '')
         else:
             description = (r['appearance'] or {}).get('description', '')
-        out.append({'id': str(r['id']), 'name': r['name'], 'description': description})
+        # House cast.json entries can carry a literal, unfilled '{EXPRESSION}' token (see
+        # orchestrator._clean_description's docstring) -- reused here rather than
+        # duplicated, so a director-facing prompt never leaks the placeholder either.
+        out.append({'id': str(r['id']), 'name': r['name'],
+                    'description': orchestrator._clean_description(description)})
     return out
 
 
@@ -588,6 +605,139 @@ def patch_shot(shot_id: str, patch: dict = Body(...), session: dict = Depends(ad
     except ValueError as error:
         raise HTTPException(422, str(error))
     return {'version_id': version_id, 'shot_id': effective_shot_id, 'state': state}
+
+
+@router.post('/shots/{shot_id}/end-card-style')
+def set_end_card_style(shot_id: str, style: str = Form(...),
+                       session: dict = Depends(ads_enabled)):
+    """Which end-card look renders: heritage/modern/minimal. A PRODUCTION-level choice
+    (routed through storyboard.set_end_card_style, never storyboard.update_spec) — picking
+    a different look must not fork an approved version or demote its state, the same way
+    choosing a different music track doesn't. See storyboard.set_end_card_style's
+    docstring for why update_spec would have forked here even though brand_text/tagline
+    (the 'none' invalidation group end_card_style also sits in) never advance/demote state."""
+    workspace_id = auth.current_workspace(session)
+    try:
+        version_id = storyboard.set_end_card_style(workspace_id, shot_id, style)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return {'version_id': version_id, 'style': style}
+
+
+@router.post('/shots/{shot_id}/end-card-keep-case')
+def set_end_card_keep_case(shot_id: str, keep_case: bool = Form(...),
+                           session: dict = Depends(ads_enabled)):
+    """Whether heritage/modern keep the brand text's typed capitalisation instead of
+    displaying it uppercase. Same non-forking shape as end-card-style — see
+    storyboard.set_end_card_keep_case."""
+    workspace_id = auth.current_workspace(session)
+    try:
+        version_id = storyboard.set_end_card_keep_case(workspace_id, shot_id, keep_case)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return {'version_id': version_id, 'keep_case': keep_case}
+
+
+def _endcard_source_frame(workspace_id: str, end_card_shot: dict):
+    """(source_asset_id, local_png_path) for the frame the real render will actually use
+    — the LAST frame of the last ordinary shot's selected clip if one exists, else that
+    shot's selected frame image, else None. Mirrors orchestrator.run_render's own
+    end_card_shot/ordinary-shots resolution so the preview never shows a different frame
+    than the one the render will freeze."""
+    version = storyboard.get_version(workspace_id, str(end_card_shot['version_id']))
+    ordinary = sorted((s for s in version['shots'] if s['kind'] == 'shot'),
+                      key=lambda s: s['position'])
+    if not ordinary:
+        return None
+    last = ordinary[-1]
+    if last.get('selected_video_asset_id'):
+        asset_id = str(last['selected_video_asset_id'])
+        local_clip = orchestrator._local_asset_path(asset_id)
+        if not local_clip:
+            return None
+        cache_dir = ENDCARD_CACHE_DIR / 'sources'
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        frame_path = cache_dir / f'{asset_id}-last-frame.png'
+        if not frame_path.exists():
+            probe = video._probe(pathlib.Path(local_clip))
+            # render._truncate_ms, not a bare `- 1/fps`: -ss landing AT or a hair past the
+            # clip's true last decodable frame makes ffmpeg write nothing at all (exit 0,
+            # zero bytes) -- exactly the failure render.py's own end-card extraction
+            # already had to guard against (see its docstring). UNLIKE render.py's own
+            # segments (always re-encoded to a known fps by _normalize before this kind
+            # of seek), this reads the asset's ORIGINAL clip directly -- a real provider
+            # clip measured 24fps here, not render.py's usual 30, so the margin must come
+            # from the clip's own probed fps, not a hardcoded one.
+            fps = probe.get('fps') or 24
+            near_end = render._truncate_ms(max((probe['duration'] or 0) - 1 / fps, 0))
+            # Extract to a per-request temp name, then atomically rename into place --
+            # three concurrent preview requests (one per style, exactly what the UI's
+            # Style row fires on first paint) all race this same shared frame_path; two
+            # ffmpeg processes writing the SAME destination path concurrently produced a
+            # truncated, unreadable PNG the very first time this ran against a browser.
+            tmp_path = cache_dir / f'{asset_id}-last-frame-{uuid.uuid4().hex}.png'
+            video._extract_frame(local_clip, near_end, tmp_path)
+            os.replace(tmp_path, frame_path)
+        return asset_id, frame_path
+    if last.get('selected_frame_asset_id'):
+        asset_id = str(last['selected_frame_asset_id'])
+        local_frame = orchestrator._local_asset_path(asset_id)
+        if not local_frame:
+            return None
+        return asset_id, pathlib.Path(local_frame)
+    return None
+
+
+def _endcard_cache_path(source_asset_id: str, style: str, brand: str, tagline: str,
+                        keep_case: bool) -> pathlib.Path:
+    digest = hashlib.sha256(
+        f'{source_asset_id}|{style}|{brand}|{tagline}|{keep_case}'.encode()).hexdigest()
+    return ENDCARD_CACHE_DIR / f'{digest[:32]}.png'
+
+
+@router.get('/shots/{shot_id}/endcard-preview')
+def endcard_preview(shot_id: str, style: str = endcard.DEFAULT_STYLE, brand_text: str = '',
+                    tagline: str = '', keep_case: bool | None = None,
+                    session: dict = Depends(ads_enabled)):
+    """A PNG preview of `style` on the frame the final render will actually freeze on.
+    Workspace-scoped; cached on disk keyed by (source asset, style, brand, tagline,
+    keep_case) so repeated views (switching styles back and forth, or the debounced
+    live-typing refresh) are instant. brand_text/tagline/keep_case default to the
+    end_card shot's own spec — the query params exist only so the UI can preview text/
+    the checkbox the user hasn't saved yet."""
+    workspace_id = auth.current_workspace(session)
+    if style not in endcard.STYLES:
+        raise HTTPException(400, f'unknown style {style!r}; use one of {endcard.STYLES}')
+    try:
+        shot = storyboard.get_shot(workspace_id, shot_id)
+    except storyboard.NotFound as error:
+        raise _not_found(error)
+    if shot['kind'] != 'end_card':
+        raise HTTPException(400, 'endcard-preview only applies to the end_card shot')
+
+    source = _endcard_source_frame(workspace_id, shot)
+    if source is None:
+        raise HTTPException(404, 'previews appear once the last shot has a frame or clip')
+    asset_id, frame_path = source
+
+    spec = shot.get('spec') or {}
+    brand = brand_text or (spec.get('brand_text') or '').strip()
+    tag = tagline or (spec.get('tagline') or '').strip()
+    kc = bool(spec.get('end_card_keep_case')) if keep_case is None else keep_case
+
+    cache_path = _endcard_cache_path(asset_id, style, brand, tag, kc)
+    if not cache_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        logo_path = orchestrator._workspace_logo_path(workspace_id)
+        tmp_path = cache_path.with_name(f'{cache_path.stem}-{uuid.uuid4().hex}.png')
+        endcard.preview(frame_path, style, brand, tag, tmp_path, logo_path=logo_path,
+                        keep_case=kc)
+        os.replace(tmp_path, cache_path)
+    return Response(cache_path.read_bytes(), media_type='image/png')
 
 
 @router.post('/shots/{shot_id}/duplicate')

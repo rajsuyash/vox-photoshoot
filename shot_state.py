@@ -109,11 +109,15 @@ FIELD_GROUPS = {
 
     # Audio and text fields don't feed any provider call in v1 (music is version-level;
     # VO/SFX rendering is a later phase) — editing them changes nothing about state.
-    # brand_text/tagline are the end_card's own text fields, same reasoning.
+    # brand_text/tagline/end_card_style/end_card_keep_case are the end_card's own fields,
+    # same reasoning: changing the style, or whether it keeps the typed capitalisation,
+    # never invalidates any provider-generated asset (there is nothing generated for an
+    # end_card shot at all).
     'dialogue': 'none', 'voiceover': 'none', 'ambient_sound': 'none',
     'sound_effects': 'none', 'music_cue': 'none', 'on_screen_text': 'none',
     'text_placement': 'none', 'transition_in': 'none', 'transition_out': 'none',
-    'brand_text': 'none', 'tagline': 'none',
+    'brand_text': 'none', 'tagline': 'none', 'end_card_style': 'none',
+    'end_card_keep_case': 'none',
 }
 
 # What "at most" means per group, ordered so index comparison gives severity.
@@ -201,7 +205,8 @@ def demo() -> None:
     assert after_edit('ready_for_frame', ['duration']) == 'ready_for_frame'  # below ceiling
 
     for field in ('dialogue', 'voiceover', 'ambient_sound', 'sound_effects', 'music_cue',
-                  'on_screen_text', 'text_placement', 'transition_in', 'transition_out'):
+                  'on_screen_text', 'text_placement', 'transition_in', 'transition_out',
+                  'brand_text', 'tagline', 'end_card_style', 'end_card_keep_case'):
         assert after_edit('video_approved', [field]) == 'video_approved', field
         assert after_edit('frame_generating', [field]) == 'frame_generating', field
 

@@ -18,7 +18,7 @@ both point at the same definition.
 import json
 import time
 
-MODEL = 'claude-sonnet-5'          # creative work; fidelity checks stay on Haiku (video.py)
+MODEL = 'claude-sonnet-5-5'        # creative work; fidelity checks stay on Haiku (video.py)
 
 # Expected output size, in characters of streamed JSON text, used only to turn "how much
 # has the model written" into a progress fraction (never a promise of exact size).
@@ -114,7 +114,7 @@ class DirectorError(Exception):
 
 def _reply_json(reply) -> dict:
     """Parse a structured-output reply's JSON payload, or raise DirectorError for
-    anything short of a clean, complete text reply. claude-sonnet-5 runs adaptive
+    anything short of a clean, complete text reply. claude-sonnet-5-5 runs adaptive
     thinking whenever `effort` is left unset, and thinking tokens count against
     max_tokens — so a reply can come back truncated mid-JSON, refused outright, or with
     no text block at all. All three have happened for real; generate_concepts and
@@ -325,8 +325,15 @@ def _brief_text(brief: dict) -> str:
 def _products_text(products: list[dict]) -> str:
     if not products:
         return 'No products given yet — invent nothing; the storyboard step requires them.'
+
+    def label(p):
+        sku, description = p.get('sku'), p.get('description')
+        if sku and description:                        # both known -- give the director both
+            return f'{sku} ({description})'
+        return sku or description or p.get('name') or p.get('category', 'a piece')
+
     return '\n'.join(
-        f"- id={p['id']}: {p.get('name') or p.get('category', 'a piece')}"
+        f"- id={p['id']}: {label(p)}"
         f"{' — ' + p['fidelity_instructions'] if p.get('fidelity_instructions') else ''}"
         for p in products)
 

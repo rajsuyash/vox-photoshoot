@@ -1,11 +1,11 @@
 """Compile an approved storyboard version into the final ad.
 
 Pure function over local files -- no DB, no storage; the orchestrator fetches assets
-(clips, logo, music) and calls `render()`. All end-card text is drawn with Pillow and
-composited with ffmpeg's `overlay`/`fade` -- never `drawtext`, since this machine's
-ffmpeg has no libfreetype. Reuses branding.py's font loading (Latin + Devanagari) and
-per-element halo/layout helpers for the end-card text, and video.py's `_probe` /
-`_extract_frame` rather than re-implementing either.
+(clips, logo, music) and calls `render()`. The end card is produced by endcard.animate()
+-- a frozen last frame with a slow push-in and style-specific branding motion, NEVER a
+gradient/scrim/box/vignette behind the text (see endcard.py for the placement/contrast/
+glow rules). Reuses video.py's `_probe` / `_extract_frame` rather than re-implementing
+either.
 
     .venv/bin/python render.py      # self-check, fully offline
 """
@@ -18,9 +18,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw
 
-import branding
+import endcard
 import video
 
 FFMPEG = video.FFMPEG
@@ -34,15 +34,6 @@ _REF_SIZES = {
     '1:1': (1080, 1080),
     '4:5': (1080, 1350),
 }
-
-# End-card layout, as fractions of the frame so a 1080-wide and a 2160-wide card get
-# branding of the same visual weight.
-_GAP_FRACTION = 0.02
-_BRAND_HEIGHT_FRACTION = 0.05
-_TAGLINE_HEIGHT_FRACTION = 0.03
-_TEXT_MAX_WIDTH_FRACTION = 0.62         # leaves real margin once the scrim pad + blur add to it
-_SCRIM_PAD_X_FRACTION = 0.05
-_SCRIM_PAD_Y_FRACTION = 0.04
 
 # ponytail: test-only escape hatch (see demo's red/green proof) -- skips the branding
 # overlay entirely so the composite check in scenario D has something real to catch.
@@ -62,6 +53,9 @@ class EndCard:
     brand_text: str
     tagline: str = ''
     logo: Path | None = None
+    style: str = endcard.DEFAULT_STYLE   # one of endcard.STYLES ('heritage'/'modern'/'minimal')
+    keep_case: bool = False              # keep brand_text's typed case (heritage/modern
+                                         # otherwise display it uppercase; see endcard.py)
 
 
 def _run(cmd: list) -> None:
@@ -111,92 +105,43 @@ def _normalize(segment: Segment, width: int, height: int, fps: int, out_path: Pa
           'yuv420p', out_path])
 
 
-# --- 2. end card: frozen last frame + a Pillow branding block ---------------------------
+# --- 2. end card: frozen last frame + endcard.animate()'s style-specific motion --------
 
-def _fit(text: str, size: int, max_width: int):
-    """Shrink-to-fit sizing on top of branding.font_for -- its own _fit_text is tuned
-    for a small corner watermark, this needs a much bigger centred headline."""
-    font = branding.font_for(text, size)
-    while size > 14 and font.getlength(text) > max_width:
-        size -= 1
-        font = branding.font_for(text, size)
-    box = font.getbbox(text)
-    return font, box[2] - box[0], box[3] - box[1]
-
-
-def _draw_scrim(layer: Image.Image, box: tuple, width: int, height: int) -> None:
-    """A soft dark backdrop behind the branding block, so white text stays legible
-    over any footage. Softened with a blur, the same halo technique branding.py uses."""
-    pad_x, pad_y = int(width * _SCRIM_PAD_X_FRACTION), int(height * _SCRIM_PAD_Y_FRACTION)
-    padded = (max(0, box[0] - pad_x), max(0, box[1] - pad_y),
-             min(width, box[2] + pad_x), min(height, box[3] + pad_y))
-    scrim = Image.new('RGBA', (width, height), (0, 0, 0, 0))
-    radius = max(4, min(padded[2] - padded[0], padded[3] - padded[1]) // 6)
-    ImageDraw.Draw(scrim).rounded_rectangle(padded, radius=radius, fill=(10, 10, 10, 165))
-    layer.alpha_composite(scrim.filter(ImageFilter.GaussianBlur(max(4, pad_x // 6))))
-
-
-def _branding_block(width: int, height: int, card: EndCard) -> Image.Image:
-    """One centred group -- optional logo, brand text, tagline -- on a soft scrim, as a
-    transparent WxH PNG. Composited (and faded in) by ffmpeg, drawn entirely with Pillow,
-    reusing branding.py's font/glyph handling and its logo + per-element halo helpers."""
-    layer = Image.new('RGBA', (width, height), (0, 0, 0, 0))
-    gap = int(height * _GAP_FRACTION)
-    max_width = int(width * _TEXT_MAX_WIDTH_FRACTION)
-
-    logo_bytes = card.logo.read_bytes() if card.logo else None
-    logo = branding._prepare_logo(logo_bytes, width)
-    brand_font, brand_w, brand_h = _fit(card.brand_text, int(height * _BRAND_HEIGHT_FRACTION),
-                                       max_width)
-    tag_font = tag_w = tag_h = None
-    if card.tagline:
-        tag_font, tag_w, tag_h = _fit(card.tagline, int(height * _TAGLINE_HEIGHT_FRACTION),
-                                      max_width)
-
-    block_width = max(logo.width if logo else 0, brand_w, tag_w or 0)
-    block_height = (logo.height + gap if logo else 0) + brand_h
-    if card.tagline:
-        block_height += gap + tag_h
-
-    left = (width - block_width) // 2
-    top = (height - block_height) // 2
-    _draw_scrim(layer, (left, top, left + block_width, top + block_height), width, height)
-
-    ink, halo = (255, 255, 255, 255), (0, 0, 0, 190)     # the scrim guarantees a dark bed
-    cursor = top
-    if logo is not None:
-        cursor = branding._draw_logo_block(layer, logo, left, block_width, cursor, gap)
-    branding._draw_text_block(layer, card.brand_text, brand_font, left, block_width,
-                              brand_w, cursor, ink, halo)
-    cursor += brand_h + gap
-    if card.tagline:
-        branding._draw_text_block(layer, card.tagline, tag_font, left, block_width,
-                                  tag_w, cursor, ink, halo)
-    return layer
+def _render_end_card_unbranded(last_frame: Path, duration: float, width: int, height: int,
+                               fps: int, out_path: Path) -> None:
+    """The SAME push-in (endcard.push_in_scale) with NO branding at all -- an
+    apples-to-apples baseline for the composite check's diff: without this, comparing an
+    early frame against a late one from the real branded output would also pick up the
+    push-in's own background motion and mistake it for (or let it mask) branding."""
+    raw = Image.open(last_frame).convert('RGB')
+    nframes = max(1, round(duration * fps))
+    with tempfile.TemporaryDirectory() as tmp_str:
+        frames_dir = Path(tmp_str)
+        for i in range(nframes):
+            t = i / fps
+            s = endcard.push_in_scale(t, duration)
+            nw, nh = round(width * s), round(height * s)
+            big = raw.resize((nw, nh), Image.LANCZOS)
+            left, top = (nw - width) // 2, (nh - height) // 2
+            big.crop((left, top, left + width, top + height)).save(frames_dir / f'f{i:04d}.png')
+        _run([FFMPEG, '-y', '-framerate', str(fps), '-i', str(frames_dir / 'f%04d.png'),
+             '-frames:v', str(nframes), '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
+             '-pix_fmt', 'yuv420p', out_path])
 
 
 def _render_end_card(last_frame: Path, card: EndCard, width: int, height: int, fps: int,
-                     out_path: Path, tmp: Path) -> None:
-    """Freeze `last_frame` for card.duration; overlay the branding block, fading in
-    over 0.5s starting 0.2s into the card."""
-    duration = f'{card.duration:.3f}'
-    cmd = [FFMPEG, '-y', '-loop', '1', '-t', duration, '-i', last_frame]
-
+                     out_path: Path) -> None:
+    """The end-card video segment for `card.style`: push-in + branding motion, NEVER a
+    gradient/scrim/box/vignette (see endcard.py). `_DEBUG_SKIP_OVERLAY` renders the SAME
+    push-in with no branding at all, so the composite check in the demo's scenario D has
+    something real to catch (see the red/green proof there) without the push-in itself
+    being mistaken for branding."""
     if _DEBUG_SKIP_OVERLAY:
-        filter_complex = f'[0:v]fps={fps}[outv]'
-    else:
-        block_path = tmp / 'end-card-block.png'
-        _branding_block(width, height, card).save(block_path)
-        cmd += ['-loop', '1', '-t', duration, '-i', block_path]
-        filter_complex = (
-            f'[1:v]fps={fps},format=rgba,fade=t=in:st=0.2:d=0.5:alpha=1[ov];'
-            f'[0:v][ov]overlay=0:0:format=auto,fps={fps}[outv]'
-        )
-
-    cmd += ['-filter_complex', filter_complex, '-map', '[outv]', '-t', duration, '-an',
-           '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p',
-           out_path]
-    _run(cmd)
+        _render_end_card_unbranded(last_frame, card.duration, width, height, fps, out_path)
+        return
+    endcard.animate(last_frame, card.style, card.brand_text, card.tagline, card.duration,
+                    out_path, fps=fps, size=(width, height), logo_path=card.logo,
+                    keep_case=card.keep_case)
 
 
 # --- 3. join: hard cuts via concat, dissolves via xfade ---------------------------------
@@ -295,7 +240,7 @@ def render(segments: list, end_card: EndCard, out_path: Path, aspect: str = '9:1
         near_end = _truncate_ms(max(segments[-1].duration - 1 / fps, 0))
         video._extract_frame(normalized[-1], near_end, last_frame)
         end_card_clip = tmp / 'end-card.mp4'
-        _render_end_card(last_frame, end_card, width, out_height, fps, end_card_clip, tmp)
+        _render_end_card(last_frame, end_card, width, out_height, fps, end_card_clip)
         on_progress('end_card', 1.0)
 
         transitions = [segment.transition_out for segment in segments]
@@ -327,7 +272,8 @@ def render(segments: list, end_card: EndCard, out_path: Path, aspect: str = '9:1
         'segments': [{'clip': str(s.clip), 'duration': s.duration,
                      'transition_out': s.transition_out} for s in segments],
         'end_card': {'duration': end_card.duration, 'brand_text': end_card.brand_text,
-                    'tagline': end_card.tagline,
+                    'tagline': end_card.tagline, 'style': end_card.style,
+                    'keep_case': end_card.keep_case,
                     'logo': str(end_card.logo) if end_card.logo else None},
         'music': str(music) if music else None,
         'loudness_lufs': loudness_lufs,
@@ -341,9 +287,10 @@ SCRATCH_DIR = Path('/private/tmp/claude-501/-Volumes-Suyash2TB-07-Tech-Projects-
                    '/01788ee8-70e3-46a8-8f8f-12b3970033f2/scratchpad/render')
 
 
-def _make_clip(path: Path, size: tuple, duration: float, pattern: str = 'testsrc2') -> None:
+def _make_clip(path: Path, size: tuple, duration: float, pattern: str = 'testsrc2',
+               extra: str = '') -> None:
     _run([FFMPEG, '-y', '-f', 'lavfi',
-          '-i', f'{pattern}=size={size[0]}x{size[1]}:rate=30:duration={duration}',
+          '-i', f'{pattern}=size={size[0]}x{size[1]}:rate=30:duration={duration}{extra}',
           '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'ultrafast', path])
 
 
@@ -379,34 +326,48 @@ def _mean_volume(path: Path, start: float, dur: float) -> float:
 
 def _assert_branding_visible(raw_path: Path, branded_path: Path, width: int,
                              height: int) -> None:
-    """The composite check: branding must have actually changed the frame, and the
-    changed region must be centred and fully inside the frame. This is the check the
-    brief calls out as needing to be a COMPOSITE check, not a per-element one."""
+    """The composite check: branding must have actually changed the frame, that change
+    must stay inside the frame, and it must NOT look like a filled rectangle (a scrim/
+    box/gradient/vignette) -- a real text+glyph change only lights up a modest fraction
+    of its own bounding box, where a filled backdrop lights up nearly all of it. This is
+    the check the brief calls out as needing to be a COMPOSITE check, not a per-element
+    one; endcard.py's own demo() carries the full per-style placement/contrast/no-scrim
+    suite (all three styles) -- this one just proves the real ffmpeg-encoded output
+    matches what that module promises. Not a horizontal-centre check any more: modern's
+    layout is deliberately corner-anchored, not centred."""
     raw = Image.open(raw_path).convert('L')
     branded = Image.open(branded_path).convert('L')
     mask = ImageChops.difference(raw, branded).point(lambda p: 255 if p > 25 else 0)
     bbox = mask.getbbox()
     assert bbox is not None, 'branding produced no visible difference from the raw frame'
     significant = mask.histogram()[255]         # mask is binary (0 or 255), no deprecated getdata
-    assert significant > 0.01 * width * height, (
+    assert significant > 0.003 * width * height, (
         f'change is only {significant} px, too small to be real branding')
-    cx = (bbox[0] + bbox[2]) / 2
-    assert abs(cx - width / 2) <= 0.05 * width, 'branding block not horizontally centred'
-    margin_x, margin_y = 0.05 * width, 0.05 * height
+    margin_x, margin_y = 0.02 * width, 0.02 * height
     assert bbox[0] >= margin_x and bbox[2] <= width - margin_x, 'branding runs off the sides'
     assert bbox[1] >= margin_y and bbox[3] <= height - margin_y, 'branding runs off top/bottom'
+    bbox_area = max(1, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
+    fill_ratio = significant / bbox_area
+    assert fill_ratio < 0.5, (
+        f'branding fills {fill_ratio:.0%} of its own bounding box -- looks like a filled '
+        f'scrim/box, not text+glyphs (see endcard.py\'s no-scrim rule)')
 
 
 def demo() -> None:
     """Self-check, fully offline: fixtures generated with ffmpeg, no network/paid calls."""
-    global _DEBUG_SKIP_OVERLAY
     SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp_str:
         tmp = Path(tmp_str)
         clip_a = tmp / 'a.mp4'; _make_clip(clip_a, (640, 480), 3.0, 'testsrc2')
         clip_b = tmp / 'b.mp4'; _make_clip(clip_b, (800, 600), 3.0, 'smptebars')
-        clip_c = tmp / 'c.mp4'; _make_clip(clip_c, (1072, 1928), 5.0, 'testsrc2')
+        # A flat colour, not testsrc2 -- the end card freezes this clip's last frame, and
+        # testsrc2's fine diagonal/checkerboard detail is exactly the content H.264
+        # compresses least predictably: two independent encodes of the SAME frame (the
+        # composite check's branded vs. unbranded end card) picked up several dozen px
+        # of pure quantisation noise on that content, which is not branding and was
+        # tripping the composite check for the wrong reason.
+        clip_c = tmp / 'c.mp4'; _make_clip(clip_c, (1072, 1928), 5.0, 'color', extra=':c=0x9c8060')
         music = tmp / 'music.wav'; _make_music(music)
 
         mark = Image.new('RGBA', (300, 100), (0, 0, 0, 0))
@@ -448,12 +409,34 @@ def demo() -> None:
         assert 'audio' in streams_c, streams_c
 
         # --- D: composite check of the end card ------------------------------------------
-        card_start = result_a['duration'] - card.duration
-        raw_frame = SCRATCH_DIR / 'end-card-raw.png'
+        # The push-in itself changes the WHOLE background continuously, so comparing an
+        # early vs. a late frame of the SAME branded output (the old check) would also
+        # register the zoom and call it "branding". Isolate branding instead by rendering
+        # the SAME frozen last-frame through _render_end_card (real path) and through
+        # _render_end_card_unbranded (same push-in, no text) and diffing at the SAME local
+        # timestamp -- only the branding differs between the two. (Re-deriving last_frame
+        # a second time from the clip independently, instead of sharing this one, was
+        # tried first and failed: testsrc2's pattern MOVES every frame, so two separate
+        # ffmpeg re-encodes landing even one frame apart hands back two different pictures
+        # entirely -- a false "branding" difference with nothing to do with branding.)
+        normalized_c = tmp / 'seg-c-normalized.mp4'
+        _normalize(segs_a[-1], result_a['width'], result_a['height'], 30, normalized_c)
+        last_frame = tmp / 'last-frame.png'
+        near_end = _truncate_ms(max(segs_a[-1].duration - 1 / 30, 0))
+        video._extract_frame(normalized_c, near_end, last_frame)
+
+        branded_card = tmp / 'end-card-branded.mp4'
+        _render_end_card(last_frame, card, result_a['width'], result_a['height'], 30, branded_card)
+        unbranded_card = tmp / 'end-card-unbranded.mp4'
+        _render_end_card_unbranded(last_frame, card.duration, result_a['width'],
+                                   result_a['height'], 30, unbranded_card)
+        t_local = card.duration - 0.5     # same instant, shared by both
+
+        unbranded_frame = SCRATCH_DIR / 'end-card-unbranded.png'
         branded_frame = SCRATCH_DIR / 'end-card-branded.png'
-        video._extract_frame(out_a, card_start + 0.05, raw_frame)     # before the fade starts
-        video._extract_frame(out_a, result_a['duration'] - 0.5, branded_frame)
-        _assert_branding_visible(raw_frame, branded_frame, result_a['width'],
+        video._extract_frame(unbranded_card, t_local, unbranded_frame)
+        video._extract_frame(branded_card, t_local, branded_frame)
+        _assert_branding_visible(unbranded_frame, branded_frame, result_a['width'],
                                  result_a['height'])
         mid_frame = SCRATCH_DIR / 'mid-shot.png'
         video._extract_frame(out_a, 3.0, mid_frame)
@@ -468,27 +451,21 @@ def demo() -> None:
             raise AssertionError('a too-short clip should have raised ValueError')
 
         # --- prove the composite check can actually fail ---------------------------------
-        _DEBUG_SKIP_OVERLAY = True
+        # Two frames of the SAME unbranded (push-in only, no text) clip: no branding
+        # exists anywhere, so the check must correctly report RED.
+        early_unbranded_frame = SCRATCH_DIR / 'end-card-unbranded-early.png'
+        video._extract_frame(unbranded_card, 0.05, early_unbranded_frame)
         try:
-            # Re-render scenario A's end card with the overlay skipped, and confirm the
-            # composite check now correctly reports RED.
-            broken_out = tmp / 'scenario-a-broken.mp4'
-            render(segs_a, card, broken_out, music=music)
-            broken_frame = tmp / 'broken-frame.png'
-            video._extract_frame(broken_out, result_a['duration'] - 0.5, broken_frame)
-            try:
-                _assert_branding_visible(raw_frame, broken_frame, result_a['width'],
-                                         result_a['height'])
-            except AssertionError as red:
-                print(f'RED (expected, overlay skipped): {red}')
-            else:
-                raise AssertionError('check should have failed with the overlay skipped')
-        finally:
-            _DEBUG_SKIP_OVERLAY = False
-        # Re-run for real: same scenario, overlay back on, must be GREEN again.
-        _assert_branding_visible(raw_frame, branded_frame, result_a['width'],
+            _assert_branding_visible(early_unbranded_frame, unbranded_frame,
+                                     result_a['width'], result_a['height'])
+        except AssertionError as red:
+            print(f'RED (expected, no branding present in either frame): {red}')
+        else:
+            raise AssertionError('check should have failed with no branding present')
+        # Re-run for real: unbranded vs. the actual branded output, must be GREEN again.
+        _assert_branding_visible(unbranded_frame, branded_frame, result_a['width'],
                                  result_a['height'])
-        print('GREEN (overlay restored): composite check passes again')
+        print('GREEN (real branding vs. the unbranded baseline): composite check passes again')
 
     print('render ok')
 

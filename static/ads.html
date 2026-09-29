@@ -308,6 +308,23 @@
   .frame-price { font-size: 11px; color: var(--faint); align-self: center; }
   .frame-empty { color: var(--faint); font-size: 12px; padding: 10px 0; }
 
+  /* --- end card: style picker --------------------------------------------------------- */
+  .style-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 16px; }
+  .style-tile { appearance: none; border: 2px solid var(--line); border-radius: 8px;
+    overflow: hidden; cursor: pointer; padding: 0; background: #17171a; text-align: left; }
+  .style-tile:hover { border-color: var(--copper-line); }
+  .style-tile.selected { border-color: var(--copper); box-shadow: 0 0 0 1px var(--copper); }
+  .style-tile img { width: 100%; aspect-ratio: 9/16; object-fit: cover; display: block; }
+  .style-tile .style-placeholder { width: 100%; aspect-ratio: 9/16; display: grid;
+    place-items: center; color: var(--faint); font-size: 11px; text-align: center; padding: 6px; }
+  .style-tile .style-label { display: block; padding: 6px 8px; font-size: 12px;
+    text-align: center; color: var(--ink); }
+  .style-tile.selected .style-label { color: var(--copper-light); }
+  .style-hint { color: var(--faint); font-size: 12px; margin: -6px 0 16px; }
+  .keep-case-row { display: flex; align-items: center; gap: 6px; font-size: 12px;
+    color: var(--faint); margin: 0 0 16px; cursor: pointer; }
+  .keep-case-row input { cursor: pointer; }
+
   /* --- videos tab --------------------------------------------------------------------- */
   .video-gallery { grid-template-columns: repeat(2, 1fr); }
   .video-thumb video { width: 100%; height: 100%; object-fit: cover; display: block;
@@ -2302,17 +2319,123 @@ function videosPanel(shot) {
   return wrap;
 }
 
+// The three end-card looks — keys must match endcard.STYLES (render.py/endcard.py).
+const ENDCARD_STYLES = [
+  { key: 'heritage', label: 'Heritage' },
+  { key: 'modern', label: 'Modern' },
+  { key: 'minimal', label: 'Minimal' },
+];
+
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+}
+
 function renderEndCardInspector(host, shot) {
   host.replaceChildren();
   const h3 = document.createElement('h3');
   h3.textContent = 'End card';
   host.appendChild(h3);
+
+  const styleRow = document.createElement('div');
+  styleRow.className = 'style-row';
+  const hint = document.createElement('p');
+  hint.className = 'style-hint';
+  hint.textContent = 'Previews appear once the last shot has a frame.';
+  hint.style.display = 'none';
+  host.appendChild(styleRow);
+  host.appendChild(hint);
+
+  const keepCaseLabel = document.createElement('label');
+  keepCaseLabel.className = 'keep-case-row';
+  const keepCaseInput = document.createElement('input');
+  keepCaseInput.type = 'checkbox';
+  keepCaseInput.checked = Boolean((shot.spec || {}).end_card_keep_case);
+  keepCaseLabel.append(keepCaseInput, document.createTextNode(' Keep my capitalisation'));
+  host.appendChild(keepCaseLabel);
+  keepCaseInput.addEventListener('change', () => setEndCardKeepCase(shot, keepCaseInput.checked));
+
+  // Live (unsaved) text if the fields below have already been typed into this render
+  // pass, else the shot's own saved spec — so the FIRST paint shows the real preview,
+  // not a blank one.
+  function liveText() {
+    const spec = shot.spec || {};
+    const brandEl = host.querySelector('[data-field="brand_text"]');
+    const tagEl = host.querySelector('[data-field="tagline"]');
+    return { brand: brandEl ? brandEl.value : (spec.brand_text || ''),
+            tagline: tagEl ? tagEl.value : (spec.tagline || ''),
+            keepCase: keepCaseInput.checked };
+  }
+
+  function refreshThumbnails() {
+    const { brand, tagline, keepCase } = liveText();
+    const selected = (shot.spec || {}).end_card_style || 'heritage';
+    let anyFailed = false;
+    styleRow.replaceChildren();
+    ENDCARD_STYLES.forEach(({ key, label }) => {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'style-tile' + (key === selected ? ' selected' : '');
+      const img = document.createElement('img');
+      img.alt = label;
+      img.src = `/api/shots/${shot.id}/endcard-preview?`
+        + new URLSearchParams({ style: key, brand_text: brand, tagline, keep_case: keepCase });
+      img.addEventListener('error', () => {
+        anyFailed = true;
+        hint.style.display = '';
+        img.replaceWith(Object.assign(document.createElement('div'),
+          { className: 'style-placeholder', textContent: label }));
+      });
+      const cap = document.createElement('span');
+      cap.className = 'style-label';
+      cap.textContent = label;
+      tile.append(img, cap);
+      tile.addEventListener('click', () => setEndCardStyle(shot, key));
+      styleRow.appendChild(tile);
+    });
+    if (!anyFailed) hint.style.display = 'none';
+  }
+  refreshThumbnails();
+
   const fields = document.createElement('div');
   fields.className = 'ifields';
-  fields.appendChild(specFieldRow(shot, 'brand_text', 'text', 'Brand text'));
-  fields.appendChild(specFieldRow(shot, 'tagline', 'text', 'Tagline'));
+  const brandRow = specFieldRow(shot, 'brand_text', 'text', 'Brand text');
+  const tagRow = specFieldRow(shot, 'tagline', 'text', 'Tagline');
+  const brandInput = brandRow.querySelector('input');
+  const tagInput = tagRow.querySelector('input');
+  brandInput.dataset.field = 'brand_text';
+  tagInput.dataset.field = 'tagline';
+  const debouncedRefresh = debounce(refreshThumbnails, 600);
+  brandInput.addEventListener('input', debouncedRefresh);
+  tagInput.addEventListener('input', debouncedRefresh);
+  fields.appendChild(brandRow);
+  fields.appendChild(tagRow);
   fields.appendChild(fieldRow(shot, 'duration', 'number', 'Duration (s)'));
   host.appendChild(fields);
+}
+
+async function setEndCardKeepCase(shot, keepCase) {
+  try {
+    const form = new FormData();
+    form.append('keep_case', keepCase ? 'true' : 'false');
+    const result = await api(`/api/shots/${shot.id}/end-card-keep-case`,
+      { method: 'POST', body: form });
+    await openVersion(result.version_id);        // never forks -- same version_id back
+  } catch (error) {
+    say('error', String(error.message || error));
+  }
+}
+
+async function setEndCardStyle(shot, style) {
+  try {
+    const form = new FormData();
+    form.append('style', style);
+    const result = await api(`/api/shots/${shot.id}/end-card-style`,
+      { method: 'POST', body: form });
+    await openVersion(result.version_id);        // never forks -- same version_id back
+  } catch (error) {
+    say('error', String(error.message || error));
+  }
 }
 
 // A field is either a real column (duration/image_prompt/motion_prompt) or one of
