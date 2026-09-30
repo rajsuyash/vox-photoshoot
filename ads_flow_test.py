@@ -242,6 +242,9 @@ def main() -> None:
                                              'owner', is_admin=True)
         made_users.append(str(admin_account['id']))
         admin_token = auth.start_session(str(admin_account['id']), ws_id)
+        db.query('UPDATE users SET mfa_secret=%s WHERE id=%s', (b'test-ciphertext', admin_account['id']))
+        db.query("UPDATE sessions SET mfa_verified_until=now()+interval '15 minutes' WHERE user_id=%s",
+                 (admin_account['id'],))
         client.cookies.set(auth.COOKIE, admin_token)
 
         member_account = admin.create_account(f'member-{uuid.uuid4().hex[:8]}@test', ws_id,
@@ -258,6 +261,9 @@ def main() -> None:
                                              other_ws_id, 'owner', is_admin=True)
         made_users.append(str(other_account['id']))
         other_token = auth.start_session(str(other_account['id']), other_ws_id)
+        db.query('UPDATE users SET mfa_secret=%s WHERE id=%s', (b'test-ciphertext', other_account['id']))
+        db.query("UPDATE sessions SET mfa_verified_until=now()+interval '15 minutes' WHERE user_id=%s",
+                 (other_account['id'],))
         other_client = TestClient(app_module.app)
         other_client.cookies.set(auth.COOKIE, other_token)
 

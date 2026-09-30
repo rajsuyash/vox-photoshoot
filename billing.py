@@ -191,7 +191,7 @@ def handle(raw_body: bytes, signature: str) -> dict:
     if invoice.get('subscription_id'):
         return subscriptions.handle(event)
 
-    row = db.query('SELECT workspace_id, credits FROM invoices WHERE razorpay_invoice_id=%s',
+    row = db.query('SELECT workspace_id, credits, short_url FROM invoices WHERE razorpay_invoice_id=%s',
                    (invoice.get('id'),), one=True)
     if not row:
         return {'ignored': 'invoice belongs to another application'}
@@ -204,6 +204,8 @@ def handle(raw_body: bytes, signature: str) -> dict:
                 or (payment.get('status') == 'refunded'
                     and payment.get('amount_refunded') != payment.get('amount'))):
             raise ValueError('invoice payment has not been captured')
+        existing = conn.execute('SELECT 1 FROM credit_ledger WHERE workspace_id=%s AND idempotency_key=%s',
+                                (row['workspace_id'], f'razorpay:{payment_id}')).fetchone()
         credits._append(conn, str(row['workspace_id']), row['credits'], 'purchase',
                         f'razorpay:{payment_id}', note=f'invoice {invoice["id"]}')
         conn.execute("UPDATE invoices SET status='paid', paid_at=COALESCE(paid_at,now()), "
@@ -213,6 +215,14 @@ def handle(raw_body: bytes, signature: str) -> dict:
             reverse_refund(conn, row, payment)
         balance = conn.execute('SELECT balance_after FROM credit_ledger WHERE workspace_id=%s '
                                'ORDER BY seq DESC LIMIT 1', (row['workspace_id'],)).fetchone()[0]
+        refunded = int(payment.get('amount_refunded') or 0)
+        if not existing and refunded < payment['amount']:
+            import notifications
+            notifications.financial(conn, f'receipt:{payment_id}', 'receipt', row['workspace_id'],
+                                    {'credits': row['credits'] - row['credits'] * refunded // payment['amount'],
+                                     'balance': balance, 'amount_paise': payment['amount'],
+                                     'payment_id': payment_id, 'invoice_url': row['short_url'],
+                                     'refunded_paise': refunded})
     return {'credited': row['credits'], 'workspace_id': str(row['workspace_id']), 'balance': balance}
 
 
@@ -286,6 +296,13 @@ def reverse_refund(conn, row, payment):
                         note=f'refund of payment {payment_id}: {refunded}/{total} paise')
     if refunded == total:
         conn.execute("UPDATE invoices SET status='refunded' WHERE razorpay_payment_id=%s", (payment_id,))
+    import notifications
+    balance = conn.execute('SELECT balance_after FROM credit_ledger WHERE workspace_id=%s '
+                           'ORDER BY seq DESC LIMIT 1', (row['workspace_id'],)).fetchone()[0]
+    # Cumulative amounts are explicit: reordered partial refunds cannot imply another refund.
+    notifications.financial(conn, f'refund:{payment_id}:{refunded}', 'refund', row['workspace_id'],
+                            {'credits': owed, 'balance': balance, 'amount_paise': refunded,
+                             'payment_id': payment_id})
     return delta
 
 
@@ -408,7 +425,7 @@ def demo() -> None:
 
         db.migrate()
         ws = str(db.query("INSERT INTO workspaces (name, billing_email) "
-                          "VALUES ('billing-check','b@test') RETURNING id",
+                          "VALUES ('billing-check','b@billing.test') RETURNING id",
                           one=True)['id'])
         credits.grant(ws, 0 + 5, 'seed')
 

@@ -97,10 +97,13 @@ def _append(conn, workspace_id: str, delta: int, kind: str, idempotency_key: str
             require_funds: bool = False) -> int:
     """Write one ledger row inside the caller's transaction. Returns the new balance.
 
-    Assumes the workspace row is already locked when require_funds is set — see
-    reserve(). Returns the current balance unchanged if this key was already written,
+    All writers take the workspace lock before reading sequence/balance. Returns the
+    recorded balance unchanged if this key was already written,
     which is what makes every caller safely repeatable.
     """
+    if not conn.execute('SELECT id FROM workspaces WHERE id=%s FOR UPDATE',
+                        (workspace_id,)).fetchone():
+        raise ValueError('workspace does not exist')
     existing = conn.execute(
         'SELECT balance_after FROM credit_ledger '
         'WHERE workspace_id = %s AND idempotency_key = %s',

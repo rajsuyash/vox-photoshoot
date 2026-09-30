@@ -44,6 +44,8 @@ import retouch
 import shoot
 import storage
 import talent
+import support_api
+import data_access
 
 # Named, not the root logger: uvicorn owns the root and App Runner ships whatever lands
 # on stdout to CloudWatch, which is where the sign-in failures need to be readable.
@@ -64,6 +66,8 @@ MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 app = FastAPI(title='Donna Photoshoot',
               docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(ads_api.router)
+app.include_router(support_api.router)
+app.include_router(data_access.router)
 
 
 @app.on_event('startup')
@@ -84,7 +88,7 @@ def boot() -> None:
 # Pages anyone may fetch without a session. Everything else redirects to the login page,
 # and every /api route additionally carries the current_session dependency — the gate
 # below is for humans typing URLs, the dependency is what actually protects the money.
-PUBLIC_PATHS = {'/login.html', '/healthz', '/api/auth/login',
+PUBLIC_PATHS = {'/login.html', '/account.html', '/healthz', '/api/auth/login',
                 '/api/auth/google', '/api/auth/google/callback',
                 '/api/webhooks/razorpay',
                 '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png'}
@@ -123,6 +127,13 @@ async def revalidate_shell(request: Request, call_next):
 @app.middleware('http')
 async def require_login(request: Request, call_next):
     path = request.url.path
+    if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        origin = request.headers.get('origin')
+        expected = os.environ.get('PUBLIC_ORIGIN', 'https://photo.voxdonna.com').rstrip('/')
+        if origin and origin != expected:
+            return JSONResponse({'detail': 'cross-origin request refused'}, status_code=403)
+        if request.headers.get('sec-fetch-site') == 'cross-site':
+            return JSONResponse({'detail': 'cross-origin request refused'}, status_code=403)
     if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
     if auth.lookup(request.cookies.get(auth.COOKIE)) is None:
@@ -1768,11 +1779,14 @@ def get_billing(session: dict = Depends(auth.current_session)):
 
 
 def can_manage_billing(session: dict) -> bool:
-    if session.get('is_admin'):
-        return True
     row = db.query('SELECT role FROM memberships WHERE user_id=%s AND workspace_id=%s',
                    (session['user_id'], auth.current_workspace(session)), one=True)
-    return bool(row and row['role'] == 'owner')
+    if row and row['role'] == 'owner':
+        return True
+    if session.get('is_admin'):
+        auth.require_admin(session)
+        return True
+    return False
 
 
 def billing_workspace(session: dict) -> str:
@@ -1820,51 +1834,6 @@ def admin_list(session: dict = Depends(auth.current_session)):
     ]
 
 
-@app.post('/api/admin/workspaces')
-def admin_create(name: str = Form(...), gstin: str = Form(''),
-                 billing_email: str = Form(''), owner_email: str = Form(''),
-                 credits_grant: int = Form(0, alias='credits'),
-                 session: dict = Depends(auth.current_session)):
-    """Provision a customer: workspace, owner login, and any starting credits."""
-    auth.require_admin(session)
-    if not name.strip():
-        raise HTTPException(400, 'the workspace needs a name')
-
-    workspace = admin.create_workspace(name, gstin, billing_email)
-    workspace_id = str(workspace['id'])
-    result = {'id': workspace_id, 'name': workspace['name']}
-
-    if owner_email.strip():
-        try:
-            account = admin.create_account(owner_email, workspace_id, 'owner')
-        except Exception as error:
-            # The workspace exists; say why the login did not rather than 500 and leave
-            # the admin guessing which half succeeded.
-            raise HTTPException(400, f'workspace created, but the owner login failed: '
-                                     f'{error}')
-        # The only time this is ever visible. It is not recoverable afterwards.
-        result |= {'owner': account['email'], 'password': account['password']}
-
-    if credits_grant > 0:
-        credits.grant(workspace_id, credits_grant, 'opening balance')
-    return result
-
-
-@app.post('/api/admin/grant')
-def admin_grant(workspace_id: str = Form(...), credits_amount: int = Form(..., alias='credits'),
-                note: str = Form('granted from admin'),
-                session: dict = Depends(auth.current_session)):
-    """Add credits by hand.
-
-    Also the goodwill mechanism: "was that bad image the customer's fault" is a human
-    decision recorded in the ledger, not a discount rule somebody has to maintain.
-    """
-    auth.require_admin(session)
-    if credits_amount == 0:
-        raise HTTPException(400, 'nothing to grant')
-    return {'balance': credits.grant(workspace_id, credits_amount, note)}
-
-
 @app.post('/api/webhooks/razorpay')
 async def razorpay_webhook(request: Request):
     """Signed raw-body webhook. Retryable failures return 503; duplicates return 200."""
@@ -1879,19 +1848,6 @@ async def razorpay_webhook(request: Request):
         raise HTTPException(503, 'payment processing will be retried')
     print(f'razorpay webhook: {result}', flush=True)
     return {'ok': True, **result}
-
-
-@app.post('/api/admin/invoices')
-def admin_invoice(workspace_id: str = Form(...), credits_count: int = Form(..., alias='credits'),
-                  session: dict = Depends(auth.current_session)):
-    """Raise a GST invoice for a credit pack and email it to the customer."""
-    auth.require_admin(session)
-    if not billing.configured():
-        raise HTTPException(503, 'Razorpay is not configured on this deployment')
-    try:
-        return billing.raise_invoice(workspace_id, credits_count)
-    except ValueError as error:
-        raise HTTPException(400, str(error))
 
 
 @app.get('/api/packs')

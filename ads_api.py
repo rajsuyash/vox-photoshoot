@@ -54,8 +54,8 @@ ENDCARD_CACHE_DIR = pathlib.Path('out/ads/endcard_cache')
 
 def ads_enabled(session: dict = Depends(auth.current_session)) -> dict:
     """Gate the whole router. Phase 5 removes this once frames/video/render ship."""
-    if not (session.get('is_admin') or os.environ.get('ADS_PUBLIC') == '1'):
-        raise HTTPException(403, 'video ads are not available on this account yet')
+    if os.environ.get('ADS_PUBLIC') != '1':
+        auth.require_admin(session)
     return session
 
 

@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Account · Donna Photoshoot</title>
+    <style>
+      body {
+        margin: 0;
+        background: #0a0a0c;
+        color: #f5f5f7;
+        font: 16px/1.6 system-ui;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+      }
+      main {
+        width: min(420px, calc(100% - 48px));
+      }
+      h1 {
+        font:
+          36px Georgia,
+          serif;
+        color: #d4a574;
+      }
+      label {
+        display: block;
+        margin-top: 20px;
+      }
+      input,
+      button {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 14px;
+        font: inherit;
+        border-radius: 10px;
+        border: 1px solid #454047;
+        margin-top: 8px;
+      }
+      input {
+        background: #17171a;
+        color: inherit;
+      }
+      button {
+        background: #c17f59;
+        color: #101014;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      a {
+        color: #d4a574;
+      }
+      p {
+        color: #c5bcc7;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Donna Photoshoot</h1>
+      <h2 id="title">Recover your account</h2>
+      <p id="message" role="status" aria-live="polite"></p>
+      <form id="form">
+        <label id="emailLabel"
+          >Email<input id="email" type="email" autocomplete="username" required
+        /></label>
+        <label id="passwordLabel" class="hidden"
+          >New password<input
+            id="password"
+            type="password"
+            minlength="10"
+            maxlength="256"
+            autocomplete="new-password"
+        /></label>
+        <button id="go">Send reset link</button>
+      </form>
+      <p><a id="login" href="/login.html?next=/account.html">Sign in</a></p>
+      <details>
+        <summary>Workspace data</summary>
+        <p>
+          Workspace owners can export records or request deletion. Requests are
+          reviewed; nothing is purged automatically.
+        </p>
+        <label
+          >Export page offset<input
+            id="exportOffset"
+            type="number"
+            value="0"
+            min="0"
+            step="100" /></label
+        ><button id="export" type="button">Download workspace records</button>
+        <form id="deletion">
+          <label
+            >Workspace name<input
+              id="confirmName"
+              required
+              maxlength="160" /></label
+          ><label
+            >Reason<input
+              id="deleteReason"
+              required
+              minlength="3"
+              maxlength="500" /></label
+          ><button>Request deletion review</button>
+        </form>
+      </details>
+    </main>
+    <script>
+      const el = (id) => document.getElementById(id);
+      let token =
+        new URLSearchParams(location.hash.slice(1)).get("token") ||
+        sessionStorage.getItem("donna-account-link");
+      if (token) {
+        sessionStorage.setItem("donna-account-link", token);
+        history.replaceState(null, "", "/account.html");
+      }
+      async function send(path, data) {
+        const r = await fetch(path, { method: "POST", body: data });
+        const body = await r.json();
+        if (!r.ok) throw Error(body.detail || "Please try again");
+        return body;
+      }
+      (async () => {
+        if (!token) return;
+        try {
+          const f = new FormData();
+          f.set("token", token);
+          const info = await send("/api/account/link", f);
+          el("title").textContent =
+            info.kind === "invite"
+              ? "Accept your invitation"
+              : "Reset your password";
+          el("emailLabel").classList.add("hidden");
+          el("email").required = false;
+          el("passwordLabel").classList.toggle(
+            "hidden",
+            !info.password_required,
+          );
+          el("password").required = info.password_required;
+          el("go").textContent =
+            info.kind === "invite" ? "Accept invitation" : "Save password";
+          el("go").disabled = info.login_required;
+          if (info.login_required)
+            el("message").textContent =
+              "Sign in with the invited email, then return here to accept.";
+        } catch (e) {
+          el("message").textContent = e.message;
+          el("go").disabled = true;
+        }
+      })();
+      el("form").onsubmit = async (e) => {
+        e.preventDefault();
+        el("go").disabled = true;
+        try {
+          const f = new FormData();
+          f.set("email", el("email").value);
+          if (token) {
+            f.set("token", token);
+            f.set("password", el("password").value);
+          }
+          const result = await send(
+            token ? "/api/account/accept" : "/api/account/recovery",
+            f,
+          );
+          el("message").textContent = token
+            ? "Complete. Sign in to continue."
+            : result.message;
+          if (token) {
+            sessionStorage.removeItem("donna-account-link");
+            token = null;
+          }
+          el("form").classList.add("hidden");
+        } catch (error) {
+          el("message").textContent = error.message;
+          el("go").disabled = false;
+        }
+      };
+      el("export").onclick = async () => {
+        try {
+          const r = await fetch(
+            "/api/account/export?offset=" + Number(el("exportOffset").value),
+          );
+          const data = await r.json();
+          if (!r.ok) throw Error(data.detail || "Export failed");
+          const url = URL.createObjectURL(
+            new Blob([JSON.stringify(data, null, 2)], {
+              type: "application/json",
+            }),
+          );
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "donna-workspace-records-" + data.page_offset + ".json";
+          a.click();
+          URL.revokeObjectURL(url);
+          el("message").textContent =
+            data.next_offset === null
+              ? "Export complete."
+              : "More records: download offset " + data.next_offset;
+        } catch (e) {
+          el("message").textContent = e.message;
+        }
+      };
+      el("deletion").onsubmit = async (e) => {
+        e.preventDefault();
+        const b = e.submitter;
+        b.disabled = true;
+        try {
+          if (!confirm("Request a review of workspace deletion?")) return;
+          let key = sessionStorage.getItem("donna-deletion-request");
+          if (!key) {
+            key = crypto.randomUUID();
+            sessionStorage.setItem("donna-deletion-request", key);
+          }
+          const f = new FormData();
+          f.set("request_key", key);
+          f.set("reason", el("deleteReason").value);
+          f.set("confirm_name", el("confirmName").value);
+          await send("/api/account/deletion", f);
+          el("message").textContent =
+            "Request recorded for review. Automatic purge is disabled.";
+          sessionStorage.removeItem("donna-deletion-request");
+        } catch (e) {
+          el("message").textContent = e.message;
+        } finally {
+          b.disabled = false;
+        }
+      };
+    </script>
+  </body>
+</html>

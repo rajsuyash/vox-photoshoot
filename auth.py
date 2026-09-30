@@ -1,8 +1,6 @@
 """Login, sessions, and who is allowed to spend a workspace's credits.
 
-Self-hosted rather than Clerk or Auth0: sales-led means there is no signup funnel to
-build, so what is left is a password check and a cookie, and that does not justify a
-per-seat vendor.
+Password and verified Google sign-in share the same server-side sessions.
 
 Password hashing is stdlib `hashlib.scrypt`. passlib is the usual reach here but it is
 a dependency with a shaky maintenance story, and scrypt is a memory-hard KDF that ships
@@ -16,6 +14,7 @@ import hashlib
 import hmac
 import os
 import secrets
+from datetime import datetime, timezone
 
 from fastapi import Cookie, HTTPException
 
@@ -89,11 +88,17 @@ def lookup(token: str | None) -> dict | None:
         return None
     return db.query(
         """SELECT s.token_hash, s.workspace_id, u.id AS user_id, u.email, u.name,
-                  u.is_admin, w.name AS workspace_name
+                  u.is_admin, w.name AS workspace_name, s.created_at AS session_created_at,
+                  s.mfa_verified_until, (u.mfa_secret IS NOT NULL) AS mfa_configured
              FROM sessions s
              JOIN users u ON u.id = s.user_id
         LEFT JOIN workspaces w ON w.id = s.workspace_id
-            WHERE s.token_hash = %s AND s.expires_at > now()""",
+            WHERE s.token_hash = %s AND s.expires_at > now()
+              AND u.suspended_at IS NULL
+              AND (s.workspace_id IS NULL OR
+                   (w.archived_at IS NULL AND w.suspended_at IS NULL
+                    AND EXISTS (SELECT 1 FROM memberships m
+                                WHERE m.user_id=u.id AND m.workspace_id=w.id)))""",
         (token_hash(token),), one=True)
 
 
@@ -112,7 +117,7 @@ def create_user(email: str, password: str, name: str = '', is_admin: bool = Fals
 
 
 def authenticate(email: str, password: str) -> dict | None:
-    row = db.query('SELECT id, password_hash FROM users WHERE lower(email) = lower(%s)',
+    row = db.query('SELECT id, password_hash, suspended_at FROM users WHERE lower(email) = lower(%s)',
                    (email.strip(),), one=True)
     # Hash anyway when the user does not exist, so a missing account and a wrong
     # password take the same time and the endpoint cannot be used to enumerate emails.
@@ -120,7 +125,7 @@ def authenticate(email: str, password: str) -> dict | None:
     # missing account — same message, same timing — or this endpoint reveals which
     # addresses signed up with Google.
     stored = (row['password_hash'] if row else None) or hash_password('no-such-user')
-    if not verify_password(password, stored) or not row:
+    if not verify_password(password, stored) or not row or row['suspended_at']:
         return None
     db.query('UPDATE users SET last_login_at = now() WHERE id = %s', (row['id'],))
     return row
@@ -138,10 +143,13 @@ def sign_in_with_google(claims: dict) -> dict:
     403 for it, and nothing in the app can repair that without you doing it by hand.
     """
     import credits
+    import notifications
 
     existing = db.query(
-        'SELECT id, email FROM users WHERE google_sub = %s', (claims['sub'],), one=True)
+        'SELECT id, email, suspended_at FROM users WHERE google_sub = %s', (claims['sub'],), one=True)
     if existing:
+        if existing['suspended_at']:
+            raise HTTPException(403, 'account unavailable; contact support')
         db.query('UPDATE users SET last_login_at = now() WHERE id = %s', (existing['id'],))
         return {'user_id': str(existing['id']), 'created': False, 'granted': 0,
                 'workspace_id': _first_workspace(str(existing['id']))}
@@ -150,9 +158,11 @@ def sign_in_with_google(claims: dict) -> dict:
     # lets a hand-provisioned client switch to Google without losing their workspace.
     # Safe ONLY because Google has asserted the address is verified — without that check
     # upstream, registering the address anywhere would inherit someone else's workspace.
-    by_email = db.query('SELECT id FROM users WHERE lower(email) = lower(%s)',
+    by_email = db.query('SELECT id, suspended_at FROM users WHERE lower(email) = lower(%s)',
                         (claims['email'],), one=True)
     if by_email:
+        if by_email['suspended_at']:
+            raise HTTPException(403, 'account unavailable; contact support')
         db.query('UPDATE users SET google_sub = %s, last_login_at = now() '
                  'WHERE id = %s', (claims['sub'], by_email['id']))
         return {'user_id': str(by_email['id']), 'created': False, 'granted': 0,
@@ -182,6 +192,10 @@ def sign_in_with_google(claims: dict) -> dict:
                           key=f'welcome:{user_id}', conn=conn)
             granted = credits.FREE_CREDITS
 
+        notifications.enqueue(conn, f'welcome:{user_id}', 'welcome', claims['email'],
+                              {'name': claims['name'], 'credits': granted},
+                              workspace_id=workspace_id, user_id=user_id)
+
     return {'user_id': user_id, 'workspace_id': workspace_id,
             'created': True, 'granted': granted}
 
@@ -195,7 +209,7 @@ def workspaces_for(user_id: str) -> list[dict]:
     return db.query(
         """SELECT w.id, w.name, m.role FROM memberships m
              JOIN workspaces w ON w.id = m.workspace_id
-            WHERE m.user_id = %s AND w.archived_at IS NULL
+            WHERE m.user_id = %s AND w.archived_at IS NULL AND w.suspended_at IS NULL
          ORDER BY w.name""", (user_id,))
 
 
@@ -220,6 +234,9 @@ def current_workspace(session: dict) -> str:
 def require_admin(session: dict) -> dict:
     if not session.get('is_admin'):
         raise HTTPException(403, 'admins only')
+    if (not session.get('mfa_configured') or not session.get('mfa_verified_until')
+            or session['mfa_verified_until'] <= datetime.now(timezone.utc)):
+        raise HTTPException(403, 'verify your authenticator on the Admin page')
     return session
 
 
@@ -259,7 +276,7 @@ def _check_google_signup() -> None:
 
     db.migrate()
     tag = uuid.uuid4().hex[:8]
-    claims = {'sub': f'sub-{tag}', 'email': f'g-{tag}@test', 'name': 'Test Jeweller'}
+    claims = {'sub': f'sub-{tag}', 'email': f'g-{tag}@example.com', 'name': 'Test Jeweller'}
     made = []
 
     try:
@@ -284,7 +301,7 @@ def _check_google_signup() -> None:
             'the welcome key was not idempotent'
 
         # A password account that later signs in with Google keeps its workspace.
-        pw_email = f'pw-{tag}@test'
+        pw_email = f'pw-{tag}@example.com'
         pw_user = create_user(pw_email, 'a-password', 'Legacy Client')
         linked = sign_in_with_google({'sub': f'sub2-{tag}', 'email': pw_email.upper(),
                                       'name': 'Legacy Client'})
@@ -307,7 +324,7 @@ def _check_google_signup() -> None:
         credits.MAX_FREE_GRANTS_PER_DAY = 0
         try:
             capped = sign_in_with_google({'sub': f'sub3-{tag}',
-                                          'email': f'capped-{tag}@test', 'name': 'Capped'})
+                                          'email': f'capped-{tag}@example.com', 'name': 'Capped'})
             made.append(capped)
             assert capped['created'] is True, 'the cap refused a signup'
             assert capped['granted'] == 0, 'the cap did not stop the grant'

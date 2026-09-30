@@ -23,6 +23,10 @@ const session = { me: null };
 
 async function loadSession() {
   session.me = await api('/api/me');
+  if (sessionStorage.getItem('donna-account-link') && location.pathname !== '/account.html') {
+    location.href = '/account.html';
+    return session.me;
+  }
   renderAccount();
   return session.me;
 }
@@ -88,6 +92,7 @@ function renderAccount() {
     ['/history.html', 'History', 'clock'],
     ['/settings.html', 'Branding', 'brand'],
     ['/billing.html', 'Billing', 'card'],
+    ['/account.html', 'Account', 'shield'],
   ];
   if (isAdmin) routes.push(['/ads.html', 'Video Ads', 'film']);
   if (isAdmin) routes.push(['/admin.html', 'Admin', 'shield']);

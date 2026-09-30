@@ -13,6 +13,7 @@ from psycopg.rows import dict_row
 import billing
 import credits
 import db
+import notifications
 
 TERMINAL = {'cancelled', 'completed', 'expired'}
 EVENTS = {f'subscription.{name}' for name in (
@@ -142,6 +143,13 @@ def _credit(conn, row, payment, invoice):
         billing.reverse_refund(conn, row, payment)
     balance = conn.execute('SELECT balance_after FROM credit_ledger WHERE workspace_id=%s '
                            'ORDER BY seq DESC LIMIT 1', (row['workspace_id'],)).fetchone()[0]
+    refunded = int(payment.get('amount_refunded') or 0)
+    if not existing and refunded < amount:
+        notifications.financial(conn, 'receipt:' + payment['id'], 'receipt', row['workspace_id'],
+                                {'credits': row['credits'] - row['credits'] * refunded // amount,
+                                 'balance': balance, 'amount_paise': amount, 'currency': 'INR',
+                                 'payment_id': payment['id'], 'plan': row['pack'].title(),
+                                 'refunded_paise': refunded, 'invoice_url': invoice.get('short_url')})
     return {'credited': 0 if existing else row['credits'], 'balance': balance}
 
 

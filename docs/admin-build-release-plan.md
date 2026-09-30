@@ -1,0 +1,189 @@
+# Donna Photoshoot admin features: build and live-release plan
+
+Prepared 2026-09-30 against commit `8526fbfdba02b6972fd3858be5c40954ef163470` for https://photo.voxdonna.com.
+
+Input: [preliminary audit and acceptance checklist](admin-audit-plan.md). The original plan below is retained; implementation status is recorded separately here.
+
+## Execution checkpoint — 2026-09-30
+
+The user approved all remaining verified batches through deployment. Account support, audited billing corrections, delivery history, failed-job inspection, mandatory authenticator step-up, and bounded owner/admin metadata exports and deletion review are implemented. Automatic purge is disabled pending a retention policy; no period is invented.
+
+Real disposable PostgreSQL checks pass for membership/session revocation, last-owner/admin protection, stable mutation keys, concurrent credit writes, invitation/reset single use and expiry, Google-only recovery exclusion, authenticator/recovery-code replay and lockout, tenant-scoped exports, and deletion review. Existing subscription/refund/auth/credit and video API checks pass with gateway/generation providers stubbed. Python compilation and JavaScript syntax checks pass; no configured type checker or linter exists.
+
+SES domain, DKIM and MAIL FROM are verified in Mumbai. The actual Lambda/SES/outbox/SNS feedback path delivered a welcome and receipt to the owned inbox using only an isolated restored database; the receipt explicitly represents a zero-value delivery test, not a real purchase. A synthetic CloudWatch metric triggered an alert that reached the owned inbox. Eight operational alarms are configured. Provider acceptance alone was not used as delivery proof.
+
+An isolated RDS point-in-time restore at `2026-09-30T20:17:56Z` matched 38 immutable credit entries across eight ledger workspaces, plus nine users, nine workspaces, 26 jobs and 12 invoices created before that cutoff. S3 versioning is enabled and a prior version was retrieved with matching bytes from an owned temporary test object. Existing 90-day storage-tier rules remain; there is no new automatic expiration.
+
+Customer email dispatch remains disabled: SES production access requires additional information in AWS case `179079869200146`. The [prepared response](admin-ses-support-response.md) awaits specific sharing approval after automatic approval review rejected browser entry. No response was submitted. Email-based provisioning, invitations, resend and recovery return a clear unavailable response until sending is enabled. Read-only support, existing Google/password login and safe audited support controls can ship independently.
+
+Local browser sign-in, mandatory verification screen, support directory and workspace billing controls were observed. A synthetic adjustment confirmation stalled in browser automation; HTTP/database checks independently verify adjustments and replay protection. Full browser confirmation completion is not claimed.
+
+App rollout, private RDS ingress enforcement, worker monitor activation and authenticated live checks are next. These checkpoints do not claim an unperformed deployment or completed email milestone.
+
+## Scope and release order
+
+Build the missing customer communications and support controls in the existing Python/FastAPI, PostgreSQL, static HTML, Razorpay, and AWS stack. Keep owner/member/global-admin roles unless a real permission requirement calls for more. Reuse the ledger, invoices, jobs, storage, and authentication modules.
+
+| Milestone | What becomes live | Release prerequisite |
+| --- | --- | --- |
+| 1. Reliable customer emails | Signup welcome, paid credit/renewal receipt, refund confirmation where provider coverage is insufficient, email delivery history/retries/resend; verified provider failure/cancellation notifications | Sender verified, recipient policy tested, duplicate events tested, delivered test email proven, basic admin/tenant access checks pass |
+| 2. Safe account support | Invitations, password recovery, customer search/detail, workspace/member management, suspend/reactivate, session revocation | Single-use tokens, account recovery and revoked-session tests pass |
+| 3. Billing and support console | Searchable payments/invoices/subscriptions, reconciliation, attributable credit adjustments, notification and failed-job support views | Money/event race tests pass; corrections and admin actions are auditable |
+| 4. Operational readiness | Admin authentication hardening, alerts, backup/restore proof, usage dashboard, controlled exports and data lifecycle | Tested alerts/restore, export isolation, retention rules settled; no unresolved critical access or financial defects |
+
+Ship each milestone independently after its acceptance gates. Any demonstrated critical access, money, or recovery defect blocks the affected release and is fixed before rollout. Low-credit reminders and completed-generation emails are optional follow-up work, not prerequisites for these milestones.
+
+## Decisions to resolve through preflight
+
+- **Email service:** inspect existing connected email integrations first. Composio is preferred for discovery, but no Composio tool is exposed in this session. At execution, use it if available, otherwise installed provider/AWS CLIs and existing scoped credentials. Reuse an existing production sender if suitable. AWS SES is the fallback candidate because AWS and `boto3` are already used; it is not yet verified as production-ready in this account.
+- **Sender:** propose `Donna Photoshoot <notifications@voxdonna.com>` with a working support reply-to; confirm the actual mailbox/domain configuration before enabling it. Welcome goes to the account email; financial mail uses a validated workspace billing contact, with a documented owner fallback.
+- **Message ownership:** retain working Razorpay payment-failure/cancellation notices. Add Donna's welcome and credit receipt because they explain product credits and balance. Confirm any additional refund/lifecycle gaps rather than duplicating every provider email. [Razorpay notification coverage](https://razorpay.com/docs/payments/subscriptions/notifications).
+- **Delivery:** inspect available scheduled workers. If none is reusable, use an EventBridge-scheduled Lambda dispatcher reading the PostgreSQL outbox. Do not depend exclusively on request-bound background tasks or an idle App Runner process. AWS documents CPU throttling when App Runner has no traffic. [AWS container guidance](https://docs.aws.amazon.com/pdfs/whitepapers/latest/containers-on-aws/containers-on-aws.pdf).
+- **Account recovery:** keep password recovery for existing password accounts; Google-only users retain Google sign-in unless an explicit account-setup flow is selected. An invite must not overwrite an existing user's password.
+- **Data handling:** inspect current policy and financial retention requirements before implementing irreversible deletion. This plan does not invent a legal retention period.
+
+Email preflight must check region-specific sandbox status, sending quotas, identity verification, DKIM/SPF/DMARC, and DNS access. SES sandbox restrictions prevent arbitrary customer delivery, so verification and production access are release gates. [SES production access](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html). If service approval or human consent is required, prepare all automatable configuration first and request only that specific missing input.
+
+## Implementation batches
+
+File lists below are proposed touch sets, not claims that new files exist. Each batch has at most approximately five files, including its migration/test. If the actual scope exceeds that, split it before editing. At each boundary, verify the batch, report what works and remains, and obtain the next-phase approval required by AGENTS.md. Deployment configuration counts as a changed file.
+
+### Batch 0 — Preflight and reproducible test baseline
+
+Inspect production configuration read-only, provider notification recipients, staging/database availability, DNS authority, backups, and alarms. Record current live image tag/digest. Preserve unrelated dirty files and choose an isolated checkout of the intended baseline.
+
+Run existing relevant self-checks against a disposable PostgreSQL database and stubbed providers. Establish a test-mode Razorpay integration and owned email test inbox for later authorized delivery checks. Record which tests exercise real services versus stubs.
+
+Output: implementation readiness and resolved provider/recipient choices in this plan. No real customer mail, charges, or production migrations in this batch.
+
+### Batch 1 — Durable notifications
+
+Proposed files: `migrations/017_notifications.sql`, `notifications.py`, `notification_worker.py`, `notification_test.py`, `db.py` only if migration coordination needs a fix.
+
+- Add a PostgreSQL outbox with business event key, workspace/user, recipient, immutable message data, state, attempts, next attempt time, lease, provider message ID, and timestamps. Retain enough history for support without storing secrets or reset tokens in delivery logs.
+- Add template rendering and one selected sender implementation. Escape all user-controlled HTML and validate links/recipients; no user-supplied email headers.
+- Claim small batches with database locking, commit the claim before the network call, use an expiring lease, retry transient failures with bounded backoff, and surface exhausted/permanent failures.
+- Unique business keys prevent repeated enqueue. Document ambiguous provider timeouts and the crash-after-send duplicate window; use provider idempotency where supported. Do not call an accepted send “delivered.”
+- Test two dispatchers, restart/recovery, provider outage, permanent rejection, template escaping, and rollback of enqueue with the originating transaction. Test simultaneous migration startup; fix coordination only if required.
+
+### Batch 2 — Sender infrastructure and delivery feedback
+
+Proposed files: `infra/email.json`, `tools/deploy_notifications.py`, `notification_worker.py`, `notifications.py`, `notification_test.py`.
+
+- Configure the selected sender, verified identity, narrowly scoped IAM, secrets, DNS records, and provider delivery/bounce/complaint events using available automated integrations.
+- If a new dispatcher is needed, deploy the scheduled Lambda with packaged runtime dependencies, bounded concurrency, network access to RDS, and scheduler failure handling. Keep connection use within the existing database capacity. Do not open broad database ingress to make it work.
+- For SES, route delivery feedback through native authenticated AWS events to a handler. For another provider, authenticate its callback and deduplicate feedback events. Correlate by provider message ID/business event tag; never downgrade delivered/bounced terminal state on a delayed accepted event.
+- Persist delivery results and suppress inappropriate retries after permanent bounces/complaints. Add queue-age and dispatcher-error monitoring.
+
+Gate: a permitted test message reaches the owned inbox and its delivery event is recorded; worker continues without browser requests. Infrastructure and provider approval are verified, not assumed.
+
+### Batch 3 — Welcome and credit receipts
+
+Proposed files: `auth.py`, `subscriptions.py`, `notifications.py`, `notification_test.py`.
+
+- Enqueue welcome in the new-account transaction, using the actual trial-credit grant. Do not send on returning login or retroactively email every existing account.
+- Enqueue one receipt per verified paid invoice/payment in the same transaction as credits and invoice. Both checkout confirmation and webhook handling must converge on the existing shared posting function.
+- Include plan, credits added, resulting balance at posting, paid amount/tax/currency, invoice link, payment reference, and support contact. Mandate authorization is not a monthly purchase.
+- Test concurrent confirmation/webhook, duplicate/reordered events, rollback, different owner/billing addresses, and full refund already present when a delayed charge arrives. Do not send a misleading “credits added” message for an already-reversed purchase.
+
+### Batch 4 — Refund/lifecycle coverage and email support
+
+Proposed files: `billing.py`, `subscriptions.py`, `notifications.py`, `app.py`, `static/admin.html`.
+
+- Add app messages only for verified provider gaps, including actual refund/credit-adjustment details. Reuse cumulative refund reconciliation and committed state.
+- Add an admin notification list with recipient, event, status, last error, attempts, and resend action. Record resend actor/reason and distinguish an intentional resend from automatic event deduplication.
+- Show delivery unknown when provider evidence is unavailable. Never substitute a successful API response for delivery proof.
+- Keep failed/cancelled/refund notices consistent with current state under delayed events; a stale failure event must not contradict a recovered subscription.
+
+Reuse the notification regression check and existing billing/subscription self-checks. If new cases cannot fit those checks without a sixth changed file, split this batch before editing.
+
+**Milestone 1 release:** reviewed branded templates, proven welcome/receipt delivery, reliable retries, admin visibility, and authenticated live smoke checks. Enable only new events after an activation timestamp; no historical purchase-mail flood.
+
+### Batch 5 — Invitations and password recovery
+
+Proposed files: `migrations/018_account_actions.sql`, `account_actions.py`, `auth.py`, `notifications.py`, `account_actions_test.py`.
+
+- Add hashed, expiring, single-use invitation/reset tokens bound to user and purpose. Deliver the secret link without exposing it in admin lists or logs; protect any stored delivery payload containing it and expire/purge it promptly.
+- Enforce token use and password change atomically. Revoke appropriate sessions after password reset. Return consistent recovery responses for existing/nonexistent accounts and apply rate limits.
+- For existing Google-only accounts, recovery must not silently create a password or bypass Google ownership checks.
+- Protect recovery links from Host-header injection and token leakage. [OWASP recovery guidance](https://cheatsheetseries.owasp.org/cheatsheets/Forgot_Password_Cheat_Sheet.html).
+
+### Batch 6 — Access controls, suspension, and audit attribution
+
+Proposed files: `migrations/019_admin_controls.sql`, `auth.py`, `admin.py`, `app.py`, `admin_test.py`.
+
+- Add account/workspace suspension and reactivation, global sign-out, and authorization checks against current membership/account/workspace state on every protected request. Revoke or deny already-issued sessions after access removal.
+- Add an admin action log: actor, action, target, outcome, reason, timestamp, correlation/idempotency key. Store safe metadata, not secrets.
+- Enforce ordinary-user/admin and owner/member boundaries through direct API tests. Protect mutations against cross-origin requests and audit account linking/session behavior.
+- Stage any necessary UI changes as a separate batch if the five-file limit would be exceeded. Reuse current roles rather than building a generalized permission framework.
+
+### Batch 7 — Account routes and customer support UI
+
+Proposed files: `app.py`, `admin.py`, `static/account.html`, `static/admin.html`, `account_actions_test.py`.
+
+- Wire invitation/reset acceptance and the admin invite action. Replace plaintext password handoff with setup links.
+- Make workspace/owner/membership provisioning atomic, including the welcome/invitation event.
+- Add paginated customer search and detail by email, name, and workspace, showing memberships and account state.
+- Add billing-contact/GST editing and member invite/remove/role actions with validation and the audit attribution added in Batch 6. Guard the last owner and last active administrator against accidental removal.
+- Expose suspension/reactivation and session-revocation controls implemented in Batch 6, with clear confirmation and reason capture.
+
+**Milestone 2 release:** secure invite/reset journeys, customer lookup, editable workspace support, revoked-session behavior, and audited administrative changes.
+
+### Batch 8 — Billing console and safe adjustments
+
+Proposed files: `credits.py`, `admin.py`, `app.py`, `static/admin.html`, `admin_test.py`.
+
+- Show customer credit ledger, payments, invoices, refund totals, subscription state, and provider references, with pagination and filters.
+- Require adjustment reason, acting administrator, and stable request idempotency. Keep grant/debit corrections append-only and define limits/confirmation for material debits.
+- Add provider-versus-local reconciliation results and safe refresh actions; do not let a refresh recreate paid credits or overwrite terminal state after a provider failure.
+- Keep refund and cancellation support actions tied to provider-verified outcomes, reason, and audit history. Separate read-only views from charge/refund actions and test their permissions.
+
+### Batch 9 — Failed-generation support and reporting
+
+Proposed files: `jobs.py`, `admin.py`, `app.py`, `static/admin.html`, `admin_test.py`.
+
+- Add failed/stalled job inspection with provider reference, stored output, reserved/settled/refunded credits, and errors safe for support.
+- Expose only retries that can avoid duplicate provider spend; uncertain external outcomes require reconciliation before retry, not blind regeneration.
+- Add basic totals: new accounts, paying workspaces, payments/refunds, credits consumed, failed jobs. Report provider cost only where actual evidence exists; label estimates explicitly.
+
+**Milestone 3 release:** support can investigate customer billing, change credits safely, trace communications, and resolve generation incidents from the admin console.
+
+### Batch 10 — Admin authentication and operational safeguards
+
+Split into small batches as needed, each no more than five files:
+
+- Add enforced administrator MFA/step-up appropriate to the existing identity setup, with enrollment, recovery, throttling, and session revocation tested. Google email verification alone must not be described as MFA. Prevent administrator lockout during enrollment and verify recovery before enforcement.
+- Configure existing CloudWatch/native service alerts for API errors, stalled jobs, payment webhook failures, email queue age/exhausted attempts, and spending anomalies. Test actual alert delivery.
+- Verify automated backup retention and perform an isolated RDS restore with record comparisons. Add a documented recovery procedure and confirm storage recovery/lifecycle configuration.
+- Add scoped exports and account-deletion requests with authorization and audit records. Implement data purge only after retention/policy decisions and backup implications are resolved; retain required financial records safely.
+
+Proposed touch areas: `auth.py`, `admin.py`, `app.py`, numbered SQL migrations, `static/admin.html`, bounded verification checks, and small infrastructure scripts. Final file sets depend on verified identity/provider/retention choices and are fixed before each batch.
+
+**Milestone 4 release:** enforce verified admin protection, enable tested alerts and recovery, and ship approved data workflows. Optional reminders can follow through the existing notification path without adding another delivery system.
+
+## Verification for every code release
+
+- Use disposable/staging PostgreSQL for migrations, transactions, concurrency, and rollback tests. Run migrations twice and verify the final schema; never run a destructive self-check against customer data.
+- Run relevant existing `demo()` checks and the smallest focused new checks for notifications/accounts/admin behavior. Real Razorpay test-mode capability tests supplement stubs; they do not prove live billing without an authorized live transaction.
+- Exercise signup, welcome, paid renewal, partial/full refund, delayed/duplicate webhook, revoked session, cross-workspace access, admin adjustment retry, and provider outage as applicable to the milestone.
+- Verify deployed UI/API behavior and delivery events; static text, hidden buttons, provider flags, and HTTP 200 alone are insufficient acceptance evidence.
+- Run configured type checks/lint. None are currently configured; report that explicitly and run Python compilation plus targeted behavioral checks. If adopting tools, add only narrowly scoped configuration that is feasible to keep green; do not disguise compilation as type checking.
+- Validate generated JSON, SQL migrations, and deployment configuration with their consumers. Re-run the checks after any merge/rebase/change to the shipping artifact.
+
+## Making each milestone live
+
+1. Build from a clean, reviewed commit/checkout; preserve unrelated SDK/video edits. Record the previous production revision/image digest and database backup/restore reference.
+2. Use additive backward-compatible migrations so the old app can still run during rollout. Apply once under migration coordination and validate; avoid destructive schema changes in the same release as new code.
+3. Provision email/worker settings with dispatch initially disabled. Wire secrets and narrowly scoped IAM; validate App Runner and worker configuration separately. Do not change checkout prices or subscriber mandates during this work.
+4. Run staging tests and permitted email delivery checks. Require milestone acceptance evidence, reviewed templates, and any required next-phase approval before enabling customer communications.
+5. Commit/push the reviewed release, build the exact committed archive, push an immutable ECR tag, and update the existing App Runner service in `ap-south-1`. Reuse `deploy.sh` where suitable, but prevent its build context/secret sync from shipping unrelated work or overwriting deployed settings.
+6. Wait for the deployment operation to succeed; confirm actual image identifier/digest, migrations, health, authenticated admin/customer routes, Products, campaigns, and billing. A service status alone is not sufficient.
+7. Enable dispatch for new events only, verify queue drain and provider delivery evidence from an authorized test account, then monitor failures, queue age, and billing/generation regressions. Report the live URL, commit, deployed image, test evidence, and remaining limits.
+
+**Rollback:** disable dispatch first if emails are wrong or duplicated; pause the scheduler and prevent resumed backlog from replaying until the cause is fixed. Revert the app to the previous immutable image using the compatible schema. Preserve credit/invoice/outbox/audit records. Do not restore a database over valid newer payments as a routine code rollback; reconcile financial discrepancies instead. Re-enable dispatch only after the corrected event set and templates are verified.
+
+## Definition of live and complete
+
+The features are complete only when all four milestones satisfy their acceptance gates on the deployed artifacts, automated emails have delivery evidence, support controls work for the intended roles, failures recover without changing money twice, and operations have tested alerts/restore. Record any provider-managed email whose delivery visibility remains limited as a known limitation.
+
+External sender approval, DNS propagation, identity enforcement, and retention policy can affect rollout timing. No delivery-date estimate is asserted before preflight resolves those dependencies. This plan contains no authorization to bulk-message existing customers or charge real payments for testing.

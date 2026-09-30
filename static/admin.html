@@ -1,168 +1,896 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Admin · Donna Photoshoot</title>
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/theme.css">
-</head>
-<body>
-<header>
-  <a class="logo" href="/">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
-      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
-      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
-    </svg>
-    <b>Donna</b>&nbsp;<span>Photoshoot</span>
-  </a>
-  <div class="account" id="account"></div>
-</header>
-<main>
-<h1 class="page">Admin</h1>
-<p class="lede">Provision workspaces, invite their owner, and grant credits.</p>
-<div id="error" class="error hidden"></div>
-<div id="done" class="notice hidden"></div>
-
-<div class="card-box" style="margin-bottom:32px">
-  <h2 style="font-size:16px;font-weight:600;margin:0 0 16px">New workspace</h2>
-  <div class="fields">
-    <label>Brand name<input id="wsName" placeholder="Tanishq"></label>
-    <label>GSTIN <em>needed for invoices</em><input id="wsGstin" placeholder="29ABCDE1234F1Z5"></label>
-    <label>Billing email<input id="wsEmail" type="email" placeholder="accounts@brand.com"></label>
-    <label>Owner login<input id="wsOwner" type="email" placeholder="owner@brand.com"></label>
-    <label>Starting credits<input id="wsCredits" type="number" value="0" min="0"></label>
-    <div style="justify-content:flex-end"><button class="go" id="createWs" type="button">Create</button></div>
-  </div>
-</div>
-
-<h2 style="font-size:17px;font-weight:600;margin:0 0 14px">Workspaces</h2>
-<div id="list"></div>
-</main>
-<script src="/app.js"></script>
-<script>
-
-function flash(node, text) {
-  node.textContent = text;
-  node.classList.remove('hidden');
-  setTimeout(() => node.classList.add('hidden'), 12000);
-}
-
-async function refreshList() {
-  const rows = await api('/api/admin/workspaces');
-  if (!rows.length) {
-    $('list').innerHTML = '<p class="empty-state">No workspaces yet.</p>';
-    return;
-  }
-  const table = document.createElement('table');
-  table.className = 'data';
-  table.innerHTML = '<thead><tr><th>Brand</th><th>GSTIN</th><th class="num">Members</th>' +
-                    '<th class="num">Credits</th><th class="num">Grant</th></tr></thead>';
-  const body = document.createElement('tbody');
-  rows.forEach((row) => {
-    const tr = document.createElement('tr');
-    [[row.name, 'strong'], [row.gstin || '—', ''],
-     [String(row.members), 'num'], [String(row.balance), 'num']]
-      .forEach(([text, cls]) => {
-        const td = document.createElement('td');
-        td.className = cls;
-        td.textContent = text;
-        tr.appendChild(td);
-      });
-    const action = document.createElement('td');
-    action.className = 'num';
-    const input = Object.assign(document.createElement('input'),
-      { type: 'number', value: '100', min: '1' });
-    input.style.cssText = 'width:80px;padding:6px 8px;border-radius:8px;' +
-      'border:1px solid var(--line);background:var(--raised);color:var(--ink);font:inherit;font-size:13px';
-    const button = Object.assign(document.createElement('button'),
-      { type: 'button', textContent: 'Grant' });
-    button.style.cssText = 'margin-left:8px;border:0;border-radius:999px;padding:6px 14px;' +
-      'background:var(--copper);color:var(--bg);font:inherit;font-size:13px;font-weight:600;cursor:pointer';
-    button.addEventListener('click', async () => {
-      button.disabled = true;
-      try {
-        const form = new FormData();
-        form.append('workspace_id', row.id);
-        form.append('credits', input.value);
-        form.append('note', 'granted from admin');
-        const result = await api('/api/admin/grant', { method: 'POST', body: form });
-        flash($('done'), `${row.name}: balance now ${result.balance}`);
-        await refreshList();
-      } catch (error) {
-        flash($('error'), String(error.message || error));
-      } finally {
-        button.disabled = false;
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Admin · Donna Photoshoot</title>
+    <link rel="icon" href="/favicon.ico" />
+    <link rel="stylesheet" href="/theme.css" />
+    <style>
+      .card-box {
+        margin-bottom: 24px;
       }
-    });
-    const invoice = Object.assign(document.createElement('button'),
-      { type: 'button', textContent: 'Invoice' });
-    invoice.style.cssText = 'margin-left:6px;border:1px solid var(--copper-line);' +
-      'border-radius:999px;padding:6px 12px;background:none;color:var(--copper-light);' +
-      'font:inherit;font-size:13px;font-weight:600;cursor:pointer';
-    invoice.title = 'Raise a GST invoice for this many credits and email it';
-    invoice.addEventListener('click', async () => {
-      invoice.disabled = true;
-      try {
-        const form = new FormData();
-        form.append('workspace_id', row.id);
-        form.append('credits', input.value);
-        const result = await api('/api/admin/invoices', { method: 'POST', body: form });
-        flash($('done'), `Invoice for ${result.credits} credits sent — ${result.short_url || result.invoice_id}`);
-      } catch (error) {
-        flash($('error'), String(error.message || error));
-      } finally {
-        invoice.disabled = false;
+      .tools {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin: 16px 0;
       }
-    });
-    action.append(input, button, invoice);
-    tr.appendChild(action);
-    body.appendChild(tr);
-  });
-  table.appendChild(body);
-  $('list').replaceChildren(table);
-}
-
-$('createWs').addEventListener('click', async () => {
-  const button = $('createWs');
-  button.disabled = true;
-  try {
-    const form = new FormData();
-    form.append('name', $('wsName').value);
-    form.append('gstin', $('wsGstin').value);
-    form.append('billing_email', $('wsEmail').value);
-    form.append('owner_email', $('wsOwner').value);
-    form.append('credits', $('wsCredits').value || '0');
-    const result = await api('/api/admin/workspaces', { method: 'POST', body: form });
-    // Shown once and never recoverable, so it has to be copied now.
-    flash($('done'), result.password
-      ? `Created ${result.name}. Owner ${result.owner} — password ${result.password} (shown once)`
-      : `Created ${result.name}.`);
-    ['wsName', 'wsGstin', 'wsEmail', 'wsOwner'].forEach((id) => { $(id).value = ''; });
-    await refreshList();
-  } catch (error) {
-    flash($('error'), String(error.message || error));
-  } finally {
-    button.disabled = false;
-  }
-});
-
-(async () => {
-  await loadSession();
-  await loadBalance();
-  if (!session.me.is_admin) {
-    document.querySelector('main').innerHTML =
-      '<p class="empty-state">This page is for administrators.</p>';
-    return;
-  }
-  await refreshList();
-})();
-
-</script>
-</body>
+      .tools input {
+        width: min(320px, 100%);
+      }
+      button.small {
+        padding: 8px 15px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--raised);
+        color: var(--ink);
+        font: inherit;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      .scroll {
+        overflow-x: auto;
+      }
+      .support-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 16px;
+      }
+      .support-grid b {
+        font-size: 28px;
+        color: var(--copper-light);
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 13px;
+      }
+      summary {
+        cursor: pointer;
+        font-size: 18px;
+        margin: 12px 0;
+      }
+      #detail h2 {
+        margin-top: 24px;
+      }
+      select {
+        font: inherit;
+        padding: 8px;
+        background: var(--raised);
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a class="logo" href="/"><b>Donna</b>&nbsp;<span>Photoshoot</span></a>
+      <div class="account" id="account"></div>
+    </header>
+    <main>
+      <h1 class="page">Admin</h1>
+      <p class="lede">Customers, credits, delivery and support in one place.</p>
+      <p id="error" class="error hidden" role="alert"></p>
+      <p id="done" class="notice hidden" role="status"></p>
+      <section class="card-box" id="security">
+        <h2>Administrator security</h2>
+        <p id="securityStatus">Checking access…</p>
+        <div id="securityControls"></div>
+      </section>
+      <div id="console" class="hidden">
+        <div class="support-grid card-box" id="summary"></div>
+        <label
+          >Reason for support changes
+          <input
+            id="reason"
+            maxlength="500"
+            minlength="3"
+            placeholder="Customer request or support ticket reference"
+        /></label>
+        <details class="card-box">
+          <summary>New workspace</summary>
+          <form id="provision" class="fields">
+            <label
+              >Brand name<input id="wsName" required maxlength="160" /></label
+            ><label
+              >Owner email<input id="wsOwner" type="email" required
+            /></label>
+            <label>Billing email<input id="wsEmail" type="email" /></label
+            ><label>GSTIN<input id="wsGstin" maxlength="15" /></label>
+            <label
+              >Starting credits<input
+                id="wsCredits"
+                type="number"
+                min="0"
+                max="10000"
+                value="0" /></label
+            ><button class="go" type="submit">Create and invite owner</button>
+          </form>
+        </details>
+        <section class="card-box">
+          <h2>Customers</h2>
+          <form class="tools" id="customerSearch">
+            <label
+              >Find customer<input
+                id="customerQuery"
+                placeholder="Email, name or brand"
+                maxlength="160" /></label
+            ><button class="small">Search</button>
+          </form>
+          <div id="customers" class="scroll"></div>
+          <div class="tools" id="customerPages"></div>
+        </section>
+        <section class="card-box">
+          <h2>Workspaces</h2>
+          <form class="tools" id="workspaceSearch">
+            <label
+              >Find workspace<input
+                id="workspaceQuery"
+                placeholder="Brand or billing email"
+                maxlength="160" /></label
+            ><button class="small">Search</button>
+          </form>
+          <div id="workspaces" class="scroll"></div>
+          <div class="tools" id="workspacePages"></div>
+        </section>
+        <section id="detail" class="card-box hidden" tabindex="-1"></section>
+        <details class="card-box" id="mailSection">
+          <summary>Email delivery</summary>
+          <form id="mailSearch" class="tools">
+            <label
+              >Recipient<input
+                id="mailQuery"
+                type="search"
+                maxlength="160" /></label
+            ><label
+              >Status<select id="mailStatus">
+                <option value="">All</option>
+                <option>queued</option>
+                <option>accepted</option>
+                <option>delivered</option>
+                <option>failed</option>
+                <option>bounced</option>
+                <option>complained</option>
+                <option>suppressed</option>
+              </select></label
+            ><button class="small">Search</button>
+          </form>
+          <p>
+            Accepted means delivery is still unknown. Resend is an intentional
+            new message.
+          </p>
+          <div id="emails" class="scroll"></div>
+          <div class="tools" id="mailPages"></div>
+        </details>
+        <details class="card-box" id="jobSection">
+          <summary>Failed or stalled generations</summary>
+          <p>
+            External outcomes must be reconciled before regenerating. Existing
+            output and credit entries are preserved.
+          </p>
+          <div id="jobs" class="scroll"></div>
+          <div class="tools" id="jobPages"></div>
+        </details>
+        <details class="card-box" id="dataSection">
+          <summary>Data requests</summary>
+          <p>
+            Review requests here. Automatic purge stays disabled until retention
+            and financial-record handling are approved.
+          </p>
+          <div id="dataRequests" class="scroll"></div>
+          <div class="tools" id="dataPages"></div>
+        </details>
+      </div>
+    </main>
+    <script src="/app.js"></script>
+    <script>
+      const node = (tag, text) =>
+        Object.assign(document.createElement(tag), { textContent: text ?? "" });
+      function notice(text, error = false) {
+        const host = $(error ? "error" : "done");
+        host.textContent = text;
+        host.classList.remove("hidden");
+      }
+      function button(label, fn) {
+        const b = node("button", label);
+        b.type = "button";
+        b.className = "small";
+        b.onclick = async () => {
+          b.disabled = true;
+          try {
+            await fn(b);
+          } catch (e) {
+            notice(e.message, true);
+          } finally {
+            b.disabled = false;
+          }
+        };
+        return b;
+      }
+      function table(host, rows, fields, actions) {
+        host.replaceChildren();
+        if (!rows.length) {
+          host.append(node("p", "No records found."));
+          return;
+        }
+        const t = node("table");
+        t.className = "data";
+        const head = node("tr");
+        fields.forEach(([label]) => head.append(node("th", label)));
+        if (actions) head.append(node("th", "Actions"));
+        const h = node("thead");
+        h.append(head);
+        t.append(h);
+        const body = node("tbody");
+        rows.forEach((row) => {
+          const tr = node("tr");
+          fields.forEach(([, key]) =>
+            tr.append(
+              node(
+                "td",
+                typeof key === "function" ? key(row) : (row[key] ?? "—"),
+              ),
+            ),
+          );
+          if (actions) {
+            const td = node("td");
+            actions(row, td);
+            tr.append(td);
+          }
+          body.append(tr);
+        });
+        t.append(body);
+        host.append(t);
+      }
+      function pages(host, offset, length, load) {
+        host.replaceChildren(
+          button("Previous", () => load(Math.max(0, offset - 50))),
+          button("Next", () => load(offset + 50)),
+        );
+        host.firstChild.disabled = offset === 0;
+        host.lastChild.disabled = length < 50;
+      }
+      async function mutate(action, target, data = {}) {
+        const reason = $("reason").value.trim();
+        if (reason.length < 3)
+          throw Error("Enter a reason before changing customer data.");
+        if (
+          !confirm(
+            `${action.replaceAll("_", " ")} for ${target}\n${JSON.stringify(data)}\nReason: ${reason}?`,
+          )
+        )
+          throw Error("Cancelled");
+        const signature = JSON.stringify({ action, target, data, reason }),
+          slot = "donna-admin-request:" + signature;
+        let key = sessionStorage.getItem(slot);
+        if (!key) {
+          key = crypto.randomUUID();
+          sessionStorage.setItem(slot, key);
+        }
+        const result = await api("/api/admin/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            request_key: key,
+            action,
+            target_id: target,
+            reason,
+            data,
+          }),
+        });
+        sessionStorage.removeItem(slot);
+        notice("Change recorded.");
+        return result;
+      }
+      async function customers(offset = 0) {
+        const rows = await api(
+          "/api/admin/customers?q=" +
+            encodeURIComponent($("customerQuery").value) +
+            "&offset=" +
+            offset,
+        );
+        table(
+          $("customers"),
+          rows,
+          [
+            ["Email", "email"],
+            ["Name", "name"],
+            ["Status", (r) => (r.suspended_at ? "Suspended" : "Active")],
+            ["Last login", "last_login_at"],
+          ],
+          (r, td) => td.append(button("View", () => customer(r.id))),
+        );
+        pages($("customerPages"), offset, rows.length, customers);
+      }
+      async function workspaces(offset = 0) {
+        const rows = await api(
+          "/api/admin/directory?q=" +
+            encodeURIComponent($("workspaceQuery").value) +
+            "&offset=" +
+            offset,
+        );
+        table(
+          $("workspaces"),
+          rows,
+          [
+            ["Brand", "name"],
+            ["Billing", "billing_email"],
+            ["Members", "members"],
+            ["Credits", "balance"],
+            ["Status", (r) => (r.suspended_at ? "Suspended" : "Active")],
+          ],
+          (r, td) => td.append(button("View", () => workspace(r.id))),
+        );
+        pages($("workspacePages"), offset, rows.length, workspaces);
+      }
+      function detail(title) {
+        const host = $("detail");
+        host.replaceChildren(node("h2", title));
+        host.classList.remove("hidden");
+        host.focus();
+        return host;
+      }
+      function dataTable(host, title, rows, fields, actions) {
+        host.append(node("h3", title));
+        const d = node("div");
+        d.className = "scroll";
+        host.append(d);
+        table(d, rows, fields, actions);
+      }
+      async function customer(id) {
+        const result = await api("/api/admin/customer/" + id),
+          u = result.user,
+          host = detail(u.name || u.email);
+        host.append(
+          node(
+            "p",
+            u.email + " · " + (u.suspended_at ? "Suspended" : "Active"),
+          ),
+        );
+        const controls = node("div");
+        controls.className = "tools";
+        controls.append(
+          button(u.suspended_at ? "Reactivate" : "Suspend", async () => {
+            await mutate("suspend_user", id, { suspended: !u.suspended_at });
+            await customer(id);
+            await customers();
+          }),
+          button("Sign out all sessions", () => mutate("revoke_sessions", id)),
+        );
+        host.append(controls);
+        dataTable(
+          host,
+          "Workspaces",
+          result.memberships,
+          [
+            ["Brand", "name"],
+            ["Role", "role"],
+          ],
+          (r, td) => td.append(button("View", () => workspace(r.id))),
+        );
+        dataTable(host, "Audit history", result.audit, [
+          ["Action", "action"],
+          ["Outcome", "outcome"],
+          ["Reason", "reason"],
+          ["Administrator", "actor_id"],
+          ["When", "created_at"],
+        ]);
+      }
+      async function workspace(id, offset = 0) {
+        const result = await api(
+            "/api/admin/workspace/" + id + "?offset=" + offset,
+          ),
+          w = result.workspace,
+          host = detail(w.name);
+        host.append(
+          node(
+            "p",
+            `${result.balance} credits · ${w.suspended_at ? "Suspended" : "Active"}`,
+          ),
+        );
+        const controls = node("div");
+        controls.className = "tools";
+        controls.append(
+          button(w.suspended_at ? "Reactivate" : "Suspend", async () => {
+            await mutate("suspend_workspace", id, {
+              suspended: !w.suspended_at,
+            });
+            await workspace(id);
+            await workspaces();
+          }),
+          button("Reconcile billing", async () => {
+            const r = await api("/api/admin/reconcile/" + id);
+            const p = node("pre", JSON.stringify(r, null, 2));
+            host.append(p);
+          }),
+          button("Export workspace", () => exportWorkspace(id)),
+        );
+        host.append(controls);
+        const form = node("form");
+        form.className = "fields";
+        for (const [label, key, value] of [
+          ["Brand name", "name", w.name],
+          ["Billing email", "billing_email", w.billing_email],
+          ["GSTIN", "gstin", w.gstin],
+        ]) {
+          const l = node("label", label),
+            i = node("input");
+          i.name = key;
+          i.value = value || "";
+          if (key === "billing_email") i.type = "email";
+          i.required = key !== "gstin";
+          l.append(i);
+          form.append(l);
+        }
+        const save = node("button", "Save billing details");
+        save.className = "go";
+        form.append(save);
+        form.onsubmit = async (e) => {
+          e.preventDefault();
+          save.disabled = true;
+          try {
+            await mutate(
+              "billing_contact",
+              id,
+              Object.fromEntries(new FormData(form)),
+            );
+            await workspace(id);
+            await workspaces();
+          } catch (e) {
+            notice(e.message, true);
+          } finally {
+            save.disabled = false;
+          }
+        };
+        host.append(form);
+        const adjustments = node("div");
+        adjustments.className = "tools";
+        const label = node("label", "Credit adjustment (negative to debit)"),
+          amount = node("input");
+        amount.type = "number";
+        amount.min = "-10000";
+        amount.max = "10000";
+        amount.value = "0";
+        label.append(amount);
+        adjustments.append(
+          label,
+          button("Record adjustment", async () => {
+            const n = Number(amount.value);
+            if (!Number.isInteger(n) || !n)
+              throw Error("Enter a nonzero whole number.");
+            await mutate("credit_adjustment", id, {
+              amount: n,
+              confirm_debit: n < 0,
+            });
+            await workspace(id);
+            await workspaces();
+          }),
+        );
+        host.append(adjustments);
+        const invite = node("form");
+        invite.className = "tools";
+        const emailLabel = node("label", "Invite email"),
+          email = node("input");
+        email.type = "email";
+        email.required = true;
+        emailLabel.append(email);
+        const roleLabel = node("label", "Role"),
+          role = node("select");
+        ["member", "owner"].forEach((x) => {
+          const o = node("option", x);
+          o.value = x;
+          role.append(o);
+        });
+        roleLabel.append(role);
+        const inviteButton = node("button", "Send invitation");
+        inviteButton.className = "small";
+        invite.append(emailLabel, roleLabel, inviteButton);
+        invite.onsubmit = async (e) => {
+          e.preventDefault();
+          inviteButton.disabled = true;
+          try {
+            await mutate("invite", id, {
+              email: email.value,
+              role: role.value,
+            });
+            notice("Invitation queued.");
+          } catch (e) {
+            notice(e.message, true);
+          } finally {
+            inviteButton.disabled = false;
+          }
+        };
+        host.append(invite);
+        dataTable(
+          host,
+          "Members",
+          result.members,
+          [
+            ["Email", "email"],
+            ["Role", "role"],
+          ],
+          (r, td) => {
+            const select = node("select");
+            select.setAttribute("aria-label", "Role for " + r.email);
+            ["member", "owner", "remove"].forEach((x) => {
+              const o = node("option", x);
+              o.value = x;
+              o.selected = x === r.role;
+              select.append(o);
+            });
+            td.append(
+              select,
+              button("Apply", async () => {
+                await mutate("member", id, {
+                  user_id: r.id,
+                  role: select.value,
+                });
+                await workspace(id);
+              }),
+            );
+          },
+        );
+        dataTable(host, "Credit ledger", result.ledger, [
+          ["Change", "delta"],
+          ["Balance", "balance_after"],
+          ["Type", "kind"],
+          ["Reason", "note"],
+          ["When", "created_at"],
+        ]);
+        dataTable(host, "Invoices and payments", result.invoices, [
+          ["Invoice", "razorpay_invoice_id"],
+          ["Payment", "razorpay_payment_id"],
+          ["Status", "status"],
+          ["Paid INR", (r) => (Number(r.amount_paise) / 100).toFixed(2)],
+          ["When", "paid_at"],
+        ]);
+        const pagination = node("div");
+        pagination.className = "tools";
+        host.append(pagination);
+        pages(
+          pagination,
+          offset,
+          Math.max(result.ledger.length, result.invoices.length),
+          (n) => workspace(id, n),
+        );
+        dataTable(host, "Subscriptions", result.subscriptions, [
+          ["Reference", "id"],
+          ["Plan", "pack"],
+          ["Status", "status"],
+        ]);
+        dataTable(host, "Audit history", result.audit, [
+          ["Action", "action"],
+          ["Outcome", "outcome"],
+          ["Reason", "reason"],
+          ["Administrator", "actor_id"],
+          ["When", "created_at"],
+        ]);
+      }
+      async function exportWorkspace(id, offset = 0) {
+        const data = await api(`/api/admin/export/${id}?offset=${offset}`);
+        const url = URL.createObjectURL(
+          new Blob([JSON.stringify(data, null, 2)], {
+            type: "application/json",
+          }),
+        );
+        const link = node("a");
+        link.href = url;
+        link.download = `donna-workspace-${id}-${offset}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+        if (data.next_offset !== null) {
+          $("detail").append(
+            button("Export next page", () =>
+              exportWorkspace(id, data.next_offset),
+            ),
+          );
+        }
+      }
+      async function emails(offset = 0) {
+        const rows = await api(
+          "/api/admin/notifications?q=" +
+            encodeURIComponent($("mailQuery").value) +
+            "&status=" +
+            encodeURIComponent($("mailStatus").value) +
+            "&offset=" +
+            offset,
+        );
+        table(
+          $("emails"),
+          rows,
+          [
+            ["Recipient", "recipient"],
+            ["Event", "kind"],
+            [
+              "Status",
+              (r) =>
+                r.status === "accepted"
+                  ? "Accepted (delivery unknown)"
+                  : r.status,
+            ],
+            ["Attempts", "attempts"],
+            ["Error", "last_error"],
+            ["When", "created_at"],
+          ],
+          (r, td) => {
+            if (["failed", "accepted", "delivered"].includes(r.status))
+              td.append(
+                button("Resend", async () => {
+                  await mutate("resend", r.id);
+                  await emails(offset);
+                }),
+              );
+          },
+        );
+        pages($("mailPages"), offset, rows.length, emails);
+      }
+      async function jobs(offset = 0) {
+        const rows = await api("/api/admin/jobs?offset=" + offset);
+        table(
+          $("jobs"),
+          rows,
+          [
+            ["Workspace", "name"],
+            ["Job", "id"],
+            ["Type", "kind"],
+            ["State", "status"],
+            ["Reserved", "reserved_credits"],
+            ["Settled", "settled_credits"],
+            ["Returned", "returned_credits"],
+            ["Images", "images"],
+          ],
+          (r, td) =>
+            td.append(
+              button("Inspect job", () => inspectJob(r.id)),
+              button("Billing history", () => workspace(r.workspace_id)),
+            ),
+        );
+        pages($("jobPages"), offset, rows.length, jobs);
+      }
+      async function inspectJob(id) {
+        const r = await api("/api/admin/job/" + id),
+          host = detail("Generation " + id);
+        host.append(
+          node("pre", JSON.stringify(r.job, null, 2)),
+          node("p", r.error || "No diagnostic recorded."),
+          node(
+            "p",
+            "Provider reference: " +
+              (r.provider_reference || "not recorded") +
+              " · " +
+              r.provider_outcome,
+          ),
+        );
+        dataTable(host, "Credit entries", r.ledger, [
+          ["Change", "delta"],
+          ["Type", "kind"],
+          ["Reason", "note"],
+        ]);
+        dataTable(
+          host,
+          "Stored output",
+          r.outputs,
+          [
+            ["Type", "type"],
+            ["Provider", "provider"],
+            ["Key", "key"],
+          ],
+          (o, td) => {
+            const a = node("a", "Open output");
+            a.href = o.url;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            td.append(a);
+          },
+        );
+        host.append(
+          button("Workspace billing", () => workspace(r.job.workspace_id)),
+        );
+      }
+      async function dataRequests(offset = 0) {
+        const rows = await api("/api/admin/data-requests?offset=" + offset);
+        table(
+          $("dataRequests"),
+          rows,
+          [
+            ["Workspace", "name"],
+            ["Request", "reason"],
+            ["Status", "status"],
+            ["Review", "review_note"],
+            ["When", "created_at"],
+          ],
+          (r, td) => {
+            td.append(
+              button("Review", async () => {
+                await mutate("review_deletion", r.id, { status: "reviewing" });
+                await dataRequests(offset);
+              }),
+              button("Reject", async () => {
+                await mutate("review_deletion", r.id, { status: "rejected" });
+                await dataRequests(offset);
+              }),
+            );
+          },
+        );
+        pages($("dataPages"), offset, rows.length, dataRequests);
+      }
+      $("dataSection").ontoggle = () => {
+        if ($("dataSection").open)
+          dataRequests().catch((e) => notice(e.message, true));
+      };
+      async function dashboard() {
+        const r = await api("/api/admin/summary");
+        $("summary").replaceChildren();
+        for (const [label, key] of [
+          ["Accounts", "accounts"],
+          ["New accounts (30 days)", "new_accounts_30d"],
+          ["Paying workspaces", "paying_workspaces"],
+          ["Credits consumed", "credits_consumed"],
+          ["Failed generations", "failed_jobs"],
+          ["Failed emails", "failed_emails"],
+        ]) {
+          const d = node("div");
+          d.append(node("b", r[key]), node("p", label));
+          $("summary").append(d);
+        }
+      }
+      $("customerSearch").onsubmit = (e) => {
+        e.preventDefault();
+        customers().catch((e) => notice(e.message, true));
+      };
+      $("workspaceSearch").onsubmit = (e) => {
+        e.preventDefault();
+        workspaces().catch((e) => notice(e.message, true));
+      };
+      $("mailSearch").onsubmit = (e) => {
+        e.preventDefault();
+        emails().catch((e) => notice(e.message, true));
+      };
+      $("mailSection").ontoggle = () => {
+        if ($("mailSection").open)
+          emails().catch((e) => notice(e.message, true));
+      };
+      $("jobSection").ontoggle = () => {
+        if ($("jobSection").open) jobs().catch((e) => notice(e.message, true));
+      };
+      $("provision").onsubmit = async (e) => {
+        e.preventDefault();
+        const b = e.submitter;
+        b.disabled = true;
+        try {
+          let target = sessionStorage.getItem("donna-new-workspace");
+          if (!target) {
+            target = crypto.randomUUID();
+            sessionStorage.setItem("donna-new-workspace", target);
+          }
+          await mutate("provision", target, {
+            name: $("wsName").value,
+            gstin: $("wsGstin").value,
+            billing_email: $("wsEmail").value,
+            owner_email: $("wsOwner").value,
+            credits: Number($("wsCredits").value),
+          });
+          sessionStorage.removeItem("donna-new-workspace");
+          $("provision").reset();
+          await workspaces();
+          await customers();
+          notice("Workspace created. Owner invitation queued.");
+        } catch (e) {
+          notice(e.message, true);
+        } finally {
+          b.disabled = false;
+        }
+      };
+      async function openConsole() {
+        $("console").classList.remove("hidden");
+        await Promise.all([dashboard(), customers(), workspaces()]);
+      }
+      async function security() {
+        const state = await api("/api/admin/security"),
+          controls = $("securityControls");
+        controls.replaceChildren();
+        $("console").classList.add("hidden");
+        if (state.verified) {
+          $("securityStatus").textContent =
+            "Authenticator verified. Support access lasts 15 minutes.";
+          controls.append(button("Rotate authenticator", () => enroll()));
+          await openConsole();
+          return;
+        }
+        $("securityStatus").textContent = state.configured
+          ? "Enter an authenticator code or a single-use recovery code."
+          : "Set up an authenticator to open the support console. Sign in again first if your session is older than five minutes.";
+        if (state.configured) {
+          controls.append(verificationForm(false));
+          return;
+        }
+        controls.append(button("Set up authenticator", () => enroll()));
+      }
+      function verificationForm(enrollment) {
+        const form = node("form");
+        form.className = "tools";
+        const label = node("label", "Authenticator or recovery code"),
+          input = node("input");
+        input.type = "password";
+        input.autocomplete = "one-time-code";
+        input.required = true;
+        input.maxLength = 80;
+        label.append(input);
+        const submit = node("button", "Verify");
+        submit.className = "small";
+        form.append(label, submit);
+        form.onsubmit = async (e) => {
+          e.preventDefault();
+          submit.disabled = true;
+          try {
+            const f = new FormData();
+            f.set("code", input.value);
+            f.set("enrollment", String(enrollment));
+            const result = await api("/api/admin/security/verify", {
+              method: "POST",
+              body: f,
+            });
+            await loadSession();
+            await security();
+            if (result.recovery_codes.length) {
+              const codes = node("div");
+              codes.append(
+                node("h3", "Save these recovery codes now"),
+                node(
+                  "p",
+                  "Each works once. Keep them somewhere private; they will not be shown again.",
+                ),
+                node("pre", result.recovery_codes.join("\n")),
+                button("Copy recovery codes", () =>
+                  navigator.clipboard.writeText(
+                    result.recovery_codes.join("\n"),
+                  ),
+                ),
+              );
+              $("securityControls").append(codes);
+            }
+          } catch (e) {
+            notice(e.message, true);
+          } finally {
+            submit.disabled = false;
+          }
+        };
+        return form;
+      }
+      async function enroll() {
+        const result = await api("/api/admin/security/enroll", {
+            method: "POST",
+          }),
+          controls = $("securityControls");
+        controls.replaceChildren(
+          node(
+            "p",
+            "Add Donna Photoshoot to your authenticator using this setup key. Then enter its six-digit code.",
+          ),
+          node("pre", result.secret),
+        );
+        const link = node("a", "Open authenticator");
+        link.href = result.uri;
+        controls.append(link, verificationForm(true));
+      }
+      (async () => {
+        try {
+          await loadSession();
+          if (!session.me.is_admin) {
+            $("securityStatus").textContent = "Administrator access required.";
+            return;
+          }
+          await security();
+        } catch (e) {
+          notice(e.message, true);
+        }
+      })();
+    </script>
+  </body>
 </html>

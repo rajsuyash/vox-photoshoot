@@ -102,21 +102,23 @@ def migrate() -> list[str]:
         raise RuntimeError(f'{MIGRATIONS}/ has no .sql files')
 
     applied = []
-    with connect() as conn:
+    with tx() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('vox:schema-migrations',0))")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 name       text PRIMARY KEY,
                 applied_at timestamptz NOT NULL DEFAULT now()
             )
         """)
-        done = {row[0] for row in conn.execute('SELECT name FROM schema_migrations')}
 
     for path in sorted(MIGRATIONS.glob('*.sql')):
-        if path.name in done:
-            continue
         # Each migration is its own transaction: a failure half way leaves the ones
         # before it applied and recorded, so a re-run resumes rather than restarts.
         with tx() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('vox:schema-migrations',0))")
+            if conn.execute('SELECT 1 FROM schema_migrations WHERE name=%s',
+                            (path.name,)).fetchone():
+                continue
             conn.execute(path.read_text())
             conn.execute('INSERT INTO schema_migrations (name) VALUES (%s)', (path.name,))
         applied.append(path.name)
