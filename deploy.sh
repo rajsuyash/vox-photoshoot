@@ -27,6 +27,9 @@ export PUBLIC_ORIGIN="https://photo.voxdonna.com"
 export SECRET_KEYS="FAL_KEY HF_KEY ANTHROPIC_API_KEY DATABASE_URL RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET"
 
 cd "$(dirname "$0")"
+# Legacy products recover their original extension through a lookup in uploads/.
+aws iam put-role-policy --role-name "${INSTANCE_ROLE##*/}" --policy-name S3UploadLookup \
+  --policy-document file://infra/uploads-list.json
 [ -f .env ] || { echo "no .env — need at least FAL_KEY, ANTHROPIC_API_KEY, DATABASE_URL" >&2; exit 1; }
 set -a; . ./.env; set +a
 : "${FAL_KEY:?FAL_KEY missing}"

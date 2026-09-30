@@ -288,8 +288,10 @@ def history(workspace_id: str, limit: int = 50, search: str = '') -> list[dict]:
     if search.strip():
         # ILIKE on params->>'description' cannot use an index, but it only ever runs
         # against one workspace's rows, which is a scale nobody will notice.
-        sql += " AND (j.sku ILIKE %s OR j.params->>'description' ILIKE %s)"
-        args += [f'%{search.strip()}%'] * 2
+        sql += (" AND (j.sku ILIKE %s OR j.params->>'description' ILIKE %s "
+                "OR j.params->>'occasion' ILIKE %s OR j.params->>'audience' ILIKE %s "
+                "OR j.params->>'cta' ILIKE %s)")
+        args += [f'%{search.strip()}%'] * 5
     sql += ' ORDER BY j.created_at DESC LIMIT %s'
     args.append(limit)
     return db.query(sql, tuple(args))
@@ -329,6 +331,8 @@ def sweep() -> list[dict]:
                           SET status = 'failed', finished_at = now(),
                               error = 'interrupted — the server restarted mid-job'
                         WHERE status = 'running'
+                          -- Campaigns refund atomically through campaign.recover().
+                          AND kind <> 'campaign'
                           AND heartbeat_at < now() - make_interval(mins => %s)
                     RETURNING id, workspace_id, reserved_credits,
                               -- A video's job_images rows are not one-credit-each like a

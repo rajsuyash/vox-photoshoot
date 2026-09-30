@@ -7,6 +7,7 @@ Everything a photographer would decide is preset in locations.py.
 """
 
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -26,8 +27,10 @@ import admin
 import ads_api
 import auth
 import billing
+import subscriptions
 import branding
 import cast
+import campaign
 import composition
 import credits
 import db
@@ -906,10 +909,193 @@ def sweep_if_due() -> None:
     if time.monotonic() - _last_sweep < SWEEP_EVERY:
         return
     _last_sweep = time.monotonic()
+    campaign.recover()
     for orphan in jobs.sweep():
         # Refund what was reserved minus what actually landed. Exact, because images are
         # persisted as each one arrives rather than in a batch at the end.
         credits.settle(str(orphan['id']), delivered=int(orphan['delivered']))
+
+
+@app.get('/api/campaign-options')
+def campaign_options(session: dict = Depends(auth.current_session)):
+    auth.current_workspace(session)
+    return {'occasions': campaign.OCCASIONS, 'aspects': list(campaign.SIZES),
+            'default_aspect': '4:5', 'credits': campaign.COST,
+            'model': 'GPT Image 2', 'resolution': '2K'}
+
+
+@app.post('/api/marketing-campaigns')
+def create_campaign(background: BackgroundTasks, upload: UploadFile,
+                    occasion: str = Form(...), audience: str = Form(...),
+                    cta: str = Form(...), aspect: str = Form('4:5'),
+                    idempotency_key: str = Form(...), brand_name: str = Form(''),
+                    person_mode: str = Form('none'), person_key: str = Form(''),
+                    person_upload: UploadFile | None = None, person_consent: str = Form(''),
+                    logo_upload: UploadFile | None = None, use_brand_logo: str = Form(''),
+                    session: dict = Depends(auth.current_session)):
+    workspace_id = auth.current_workspace(session)
+    try:
+        params = campaign.brief(occasion, audience, cta, aspect, brand_name)
+        key = f'campaign:{uuid.UUID(idempotency_key)}'
+    except (ValueError, AttributeError) as error:
+        raise HTTPException(422, str(error)) from error
+    person_upload = person_upload if person_upload and person_upload.filename else None
+    logo_upload = logo_upload if logo_upload and logo_upload.filename else None
+    person_key = person_key.strip()
+    if person_mode not in {'none', 'library', 'upload'} or len(person_key) > 120:
+        raise HTTPException(422, 'choose a supported model option')
+    if (person_mode != 'upload' and person_upload) or (person_mode != 'library' and person_key):
+        raise HTTPException(422, 'send only the reference for the selected model option')
+    if person_mode == 'library' and not person_key:
+        raise HTTPException(422, 'choose a model from the library')
+    if person_mode == 'upload':
+        if not person_upload:
+            raise HTTPException(422, 'upload a model or brand ambassador photo')
+        if person_consent.strip().lower() not in {'1', 'true', 'yes', 'on'}:
+            raise HTTPException(422, 'confirm you have permission to use this person’s likeness for this brand')
+    wants_saved_logo = use_brand_logo.strip().lower() in {'1', 'true', 'yes', 'on'}
+    params.update(person_mode=person_mode, person_key=person_key,
+                  person_digest='', logo_digest='',
+                  logo_mode='upload' if logo_upload else 'saved' if wants_saved_logo else 'none')
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    upload_id = uuid.uuid4().hex
+    raw_files = []
+    normalized = {}
+    persisted = False
+
+    def raw_path(role):
+        path = UPLOADS / f'{upload_id}-{role}.raw'
+        raw_files.append(path)
+        return path
+
+    try:
+        raw = raw_path('product')
+        save_upload(upload, raw)
+        references = {'source_key': raw}
+        params['source_digest'] = hashlib.sha256(raw.read_bytes()).hexdigest()
+        if person_upload:
+            person = raw_path('person')
+            save_upload(person_upload, person)
+            references['person_source_key'] = person
+            params['person_digest'] = hashlib.sha256(person.read_bytes()).hexdigest()
+        if logo_upload:
+            logo = raw_path('logo')
+            save_upload(logo_upload, logo)
+            references['logo_source_key'] = logo
+        if 'logo_source_key' in references:
+            params['logo_digest'] = hashlib.sha256(references['logo_source_key'].read_bytes()).hexdigest()
+        defaults = {'person_mode': 'none', 'person_key': '', 'person_digest': '',
+                    'logo_digest': '', 'brand_name': '', 'logo_mode': 'none'}
+
+        def matches(saved):
+            previous = {**defaults, **saved}
+            return all(previous.get(k) == v for k, v in params.items())
+
+        existing = db.query('SELECT id, params FROM jobs WHERE workspace_id=%s '
+                            'AND idempotency_key=%s', (workspace_id, key), one=True)
+        if existing:
+            # A retry refers to the accepted asset snapshot, even if the library
+            # model was archived or the workspace logo has since changed.
+            if person_mode == 'library':
+                params['person_digest'] = existing['params'].get('person_digest', '')
+            if params['logo_mode'] == 'saved':
+                params['logo_digest'] = existing['params'].get('logo_digest', '')
+            if not matches(existing['params']):
+                raise HTTPException(409, 'this request key belongs to another campaign')
+            return {'job_id': str(existing['id']), 'created': False}
+        if credits.balance(workspace_id) < campaign.COST:
+            raise HTTPException(402, 'not enough credits — add credits in Billing')
+        if person_mode == 'library':
+            selected = shoot.load_cast().get(person_key)
+            own = None if selected else talent.owned(person_key, workspace_id)
+            if not selected and not own:
+                raise HTTPException(404, 'model not found in this workspace')
+            person = raw_path('person')
+            if own:
+                storage.fetch(own['s3_key'], person)
+            else:
+                person.write_bytes(pathlib.Path(selected['file']).read_bytes())
+            references['person_source_key'] = person
+            params['person_digest'] = hashlib.sha256(person.read_bytes()).hexdigest()
+        if params['logo_mode'] == 'saved':
+            brand = db.query('SELECT brand_logo_key FROM workspaces WHERE id=%s',
+                             (workspace_id,), one=True)
+            if not brand or not brand['brand_logo_key']:
+                raise HTTPException(422, 'this workspace has no saved logo — upload one instead')
+            logo = raw_path('logo')
+            storage.fetch(brand['brand_logo_key'], logo)
+            references['logo_source_key'] = logo
+            params['logo_digest'] = hashlib.sha256(logo.read_bytes()).hexdigest()
+        params.update(model=campaign.MODEL, resolution='2K')
+        # Snapshot references onto the job: archived models or changed workspace
+        # branding must not alter an already-paid campaign while it is queued.
+        for field, raw in references.items():
+            path = raw.with_suffix('.png')
+            normalized[field] = path
+            try:
+                campaign.normalize(raw, path)
+            except (ValueError, OSError, Image.DecompressionBombError) as error:
+                raise HTTPException(422, 'upload valid JPEG, PNG, WebP or HEIC '
+                                    'photos and logos, up to 40 megapixels each') from error
+        try:
+            with db.tx() as conn:
+                job = jobs.create(workspace_id, str(session['user_id']), 'campaign',
+                                  key, params, reserved_credits=campaign.COST, conn=conn)
+                if job['created']:
+                    credits.reserve(conn, workspace_id, str(job['id']), campaign.COST)
+                    for field, path in normalized.items():
+                        params[field] = storage.put(path, f'uploads/{path.name}')
+                    conn.execute('UPDATE jobs SET params=%s::jsonb WHERE id=%s',
+                                 (json.dumps(params), job['id']))
+                else:
+                    saved = conn.execute('SELECT params FROM jobs WHERE id=%s',
+                                         (job['id'],)).fetchone()[0]
+                    if person_mode == 'library':
+                        params['person_digest'] = saved.get('person_digest', '')
+                    if params['logo_mode'] == 'saved':
+                        params['logo_digest'] = saved.get('logo_digest', '')
+                    if not matches(saved):
+                        raise HTTPException(409, 'this request key belongs to another campaign')
+        except credits.Insufficient as error:
+            raise HTTPException(402, 'not enough credits — add credits in Billing') from error
+        job_id = str(job['id'])
+        if job['created']:
+            persisted = True
+            background.add_task(campaign.run, job_id, params)
+        return {'job_id': job_id, 'created': job['created']}
+    finally:
+        for path in raw_files:
+            path.unlink(missing_ok=True)
+        if storage.bucket() or not persisted:
+            for path in normalized.values():
+                path.unlink(missing_ok=True)
+
+
+@app.get('/api/marketing-campaigns')
+def recent_campaigns(session: dict = Depends(auth.current_session)):
+    workspace_id = auth.current_workspace(session)
+    sweep_if_due()
+    rows = db.query("SELECT j.id AS job_id, j.status, j.params->>'occasion' AS occasion, "
+                    "j.params->>'audience' AS audience, j.params->>'cta' AS cta, "
+                    'j.created_at, (SELECT count(*) FROM job_images i WHERE i.job_id=j.id) '
+                    "AS images FROM jobs j WHERE j.workspace_id=%s AND j.kind='campaign' "
+                    'ORDER BY j.created_at DESC LIMIT 20', (workspace_id,))
+    return rows
+
+
+@app.get('/api/marketing-campaigns/{job_id}')
+def get_campaign(job_id: uuid.UUID, session: dict = Depends(auth.current_session)):
+    workspace_id = auth.current_workspace(session)
+    sweep_if_due()
+    job = jobs.get(str(job_id), workspace_id)
+    if not job or job['kind'] != 'campaign':
+        raise HTTPException(404, 'campaign not found')
+    job['job_id'] = str(job['id'])
+    job['images'] = [{'url': storage.presign(image['s3_key']), 'framing': 'campaign',
+                      'download': f'/api/images/{job_id}/campaign'}
+                     for image in job['images']]
+    job['balance'] = credits.balance(workspace_id)
+    return job
 
 
 @app.get('/api/credits')
@@ -1569,6 +1755,7 @@ def get_billing(session: dict = Depends(auth.current_session)):
     workspace_id = auth.current_workspace(session)
     return {
         'balance': credits.balance(workspace_id),
+        'can_manage': can_manage_billing(session),
         'costs': credits.COST,
         'rupees_per_credit': billing.RUPEES_PER_CREDIT,
         'ledger': [
@@ -1578,6 +1765,49 @@ def get_billing(session: dict = Depends(auth.current_session)):
             for row in credits.ledger(workspace_id)
         ],
     }
+
+
+def can_manage_billing(session: dict) -> bool:
+    if session.get('is_admin'):
+        return True
+    row = db.query('SELECT role FROM memberships WHERE user_id=%s AND workspace_id=%s',
+                   (session['user_id'], auth.current_workspace(session)), one=True)
+    return bool(row and row['role'] == 'owner')
+
+
+def billing_workspace(session: dict) -> str:
+    workspace_id = auth.current_workspace(session)
+    if not can_manage_billing(session):
+        raise HTTPException(403, 'only the workspace owner can manage subscriptions')
+    return workspace_id
+
+
+@app.get('/api/subscription')
+def get_subscription(session: dict = Depends(auth.current_session)):
+    return {'subscription': subscriptions.current(auth.current_workspace(session), refresh=True)}
+
+
+@app.post('/api/subscription/verify')
+def verify_subscription(razorpay_subscription_id: str = Form(..., max_length=80),
+                        razorpay_payment_id: str = Form(..., max_length=80),
+                        razorpay_signature: str = Form(..., max_length=128),
+                        session: dict = Depends(auth.current_session)):
+    try:
+        return subscriptions.confirm(billing_workspace(session), razorpay_subscription_id,
+                                     razorpay_payment_id, razorpay_signature)
+    except PermissionError as error:
+        raise HTTPException(400, str(error))
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+
+
+@app.post('/api/subscription/cancel')
+def cancel_subscription(subscription_id: str = Form(..., max_length=80),
+                        session: dict = Depends(auth.current_session)):
+    try:
+        return {'subscription': subscriptions.cancel(billing_workspace(session), subscription_id)}
+    except ValueError as error:
+        raise HTTPException(400, str(error))
 
 
 @app.get('/api/admin/workspaces')
@@ -1637,20 +1867,16 @@ def admin_grant(workspace_id: str = Form(...), credits_amount: int = Form(..., a
 
 @app.post('/api/webhooks/razorpay')
 async def razorpay_webhook(request: Request):
-    """Razorpay calls this. Authenticated by HMAC, not by session.
-
-    Always answers 200 once the signature is good: a non-200 makes Razorpay retry
-    forever, and a duplicate delivery is normal rather than an error.
-    """
+    """Signed raw-body webhook. Retryable failures return 503; duplicates return 200."""
     raw = await request.body()          # the exact bytes, before any parsing
     signature = request.headers.get('x-razorpay-signature', '')
     try:
         result = billing.handle(raw, signature)
     except PermissionError:
         raise HTTPException(400, 'bad signature')
-    except Exception as error:          # noqa: BLE001 - never retry-loop on our own bug
-        print(f'razorpay webhook failed: {error!r}', flush=True)
-        return {'ok': False}
+    except Exception:
+        log.exception('razorpay webhook failed')
+        raise HTTPException(503, 'payment processing will be retried')
     print(f'razorpay webhook: {result}', flush=True)
     return {'ok': True, **result}
 
@@ -1675,6 +1901,7 @@ def list_packs(session: dict = Depends(auth.current_session)):
     return {
         'available': billing.configured(),
         'rupees_per_credit': billing.RUPEES_PER_CREDIT,
+        'interval': 'monthly',
         'packs': [{'key': key, 'credits': size,
                    'rupees': billing.price_paise(size) // 100,
                    'shoots': size // credits.COST['shoot']}
@@ -1684,36 +1911,21 @@ def list_packs(session: dict = Depends(auth.current_session)):
 
 @app.post('/api/checkout')
 def checkout(pack: str = Form(...), session: dict = Depends(auth.current_session)):
-    """Start a purchase. Returns what Razorpay Checkout needs to open.
-
-    Takes a pack NAME, never an amount or a credit count. The size is resolved from
-    billing.PACKS here, so the browser cannot ask for three hundred credits at the
-    thirty-credit price — the only thing it gets to choose is which row of the table.
-    """
-    workspace_id = auth.current_workspace(session)
+    """Start or resume one monthly mandate, priced entirely on the server."""
+    workspace_id = billing_workspace(session)
     if not billing.configured():
         raise HTTPException(503, 'payments are not configured on this deployment')
     if pack not in billing.PACKS:
         raise HTTPException(400, 'no such pack')
 
     try:
-        invoice = billing.raise_invoice(workspace_id, billing.PACKS[pack])
+        subscription = subscriptions.checkout(workspace_id, pack)
     except ValueError as error:
         raise HTTPException(400, str(error))
 
-    if not invoice.get('order_id'):
-        # Checkout cannot open without one. Falling through to the modal with a null
-        # order id would fail in the browser with nothing useful in it, so fail here
-        # where the hosted page is still a working answer.
-        log.error('invoice %s has no order_id; falling back to the hosted page',
-                  invoice['invoice_id'])
-
     return {
         'key_id': os.environ['RAZORPAY_KEY_ID'],   # publishable, not the secret
-        'order_id': invoice.get('order_id'),
-        'short_url': invoice.get('short_url'),     # the fallback, and the receipt link
-        'amount_paise': invoice['gross_paise'],
-        'credits': invoice['credits'],
+        **subscription,
         'name': session.get('workspace_name') or '',
         'email': session.get('email') or '',
     }

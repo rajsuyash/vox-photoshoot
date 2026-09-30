@@ -25,12 +25,12 @@
 </header>
 <main>
 <h1 class="page">History</h1>
-<p class="lede">Every shoot and retouch in this workspace. Your images are kept indefinitely.</p>
+<p class="lede">Your shoots, retouches and marketing campaigns in this workspace.</p>
 <div id="error" class="error hidden"></div>
 <div class="fields" style="margin-bottom:22px">
-  <label class="wide"><span class="lbl">Find a piece</span>
+  <label class="wide"><span class="lbl">Find your work</span>
     <input id="q" type="search" autocomplete="off"
-           placeholder="SKU or description — e.g. RG-4471, emerald, signet">
+           placeholder="SKU, product or campaign — e.g. RG-4471, emerald, Diwali">
   </label>
 </div>
 <div id="list"></div>
@@ -38,10 +38,11 @@
 <script src="/app.js"></script>
 <script>
 
-const KIND = { shoot: 'Shoot', retouch: 'Retouch', reshoot: 'Reshoot' };
+const KIND = { shoot: 'Shoot', retouch: 'Retouch', reshoot: 'Reshoot', campaign: 'Marketing campaign' };
 
 function describe(row) {
   const p = row.params || {};
+  if (row.kind === 'campaign') return [p.occasion, p.audience, p.cta].filter(Boolean).join(' · ');
   if (row.kind === 'retouch') return `${p.mode || 'faithful'} · stones ${p.retouch_stones ? 'polished' : 'kept true'}`;
   return [p.description, p.model, p.location].filter(Boolean).join(' · ');
 }
@@ -58,7 +59,7 @@ async function render(query = '') {
   if (!rows.length) {
     $('list').innerHTML = query
       ? '<p class="empty-state">Nothing matches that.</p>'
-      : '<p class="empty-state">Nothing shot yet.</p>';
+      : '<p class="empty-state">No work yet.</p>';
     return;
   }
   const table = document.createElement('table');
@@ -84,9 +85,10 @@ async function render(query = '') {
     });
     const last = document.createElement('td');
     last.className = 'num';
-    if (row.images) {
+    if (row.images || row.kind === 'campaign') {
       last.appendChild(Object.assign(document.createElement('a'),
-        { href: `/?job=${row.job_id}`, textContent: 'Open' }));
+        { href: row.kind === 'campaign' ? `/campaigns.html?job=${encodeURIComponent(row.job_id)}`
+                                        : `/?job=${encodeURIComponent(row.job_id)}`, textContent: 'Open' }));
     } else {
       last.textContent = row.status === 'failed' ? 'failed' : '—';
     }

@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marketing Campaigns · Donna Photoshoot</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<style>
+  .campaign-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(290px, .85fr); gap: 24px; align-items: start; }
+  .campaign-panel { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); padding: 26px; min-width: 0; }
+  .campaign-panel h2 { font-size: 17px; font-weight: 600; letter-spacing: -.02em; margin: 0 0 5px; }
+  .campaign-panel > p { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
+  .campaign-fields { display: grid; gap: 19px; }
+  .campaign-fields label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
+  .campaign-fields label span { color: var(--ink); font-weight: 500; }
+  .campaign-fields input:not([type="file"]):not([type="checkbox"]), .campaign-fields select { width: 100%; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); color: var(--ink); font: inherit; font-size: 15px; }
+  .campaign-fields input::placeholder { color: var(--faint); }
+  .campaign-fields input:focus-visible, .campaign-fields select:focus-visible, .campaign-fields input[type="file"]:focus-visible, .campaign-actions a:focus-visible { outline: 2px solid var(--copper-light); outline-offset: 3px; }
+  .campaign-fields input[type="file"] { width: 100%; font: inherit; color: var(--muted); font-size: 13px; cursor: pointer; }
+  .campaign-fields input[type="file"]::file-selector-button { border: 1px solid var(--copper-line); border-radius: 8px; padding: 9px 12px; margin-right: 12px; color: var(--copper-light); background: var(--copper-soft); font: inherit; cursor: pointer; }
+  .campaign-fields select { appearance: auto; }
+  .campaign-fields small { font-size: 12px; color: var(--faint); line-height: 1.5; }
+  .campaign-fields .person-fields, .campaign-fields .brand-fields { display: grid; gap: 13px; }
+  .campaign-fields .check-label { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; line-height: 1.5; }
+  .campaign-fields .check-label input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--copper); }
+  .campaign-fields .check-label span { color: var(--muted); font-weight: 400; }
+  .preview { display: grid; place-items: center; min-height: 180px; border: 1px dashed var(--line); border-radius: 12px; background: var(--raised); color: var(--faint); text-align: center; overflow: hidden; font-size: 13px; }
+  .preview img { display: block; width: 100%; height: 220px; object-fit: contain; }
+  .campaign-submit { width: 100%; margin-top: 6px; }
+  .campaign-caption { text-align: center; margin: -6px 0 0; color: var(--faint); font-size: 12px; }
+  .campaign-result { display: grid; gap: 18px; }
+  .result-stage { display: grid; place-items: center; min-height: 360px; border: 1px solid var(--line); border-radius: 14px; background: radial-gradient(circle at 50% 30%, var(--copper-soft), transparent 65%), var(--raised); overflow: hidden; color: var(--faint); text-align: center; padding: 20px; font-size: 14px; }
+  .result-stage img { display: block; max-width: 100%; max-height: 620px; object-fit: contain; }
+  .result-stage:has(img) { padding: 0; }
+  .campaign-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .campaign-actions a, .campaign-actions button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; border: 1px solid var(--copper-line); border-radius: 999px; padding: 8px 16px; color: var(--copper-light); background: var(--copper-soft); font: inherit; font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer; }
+  .campaign-actions a:hover, .campaign-actions button:hover { border-color: var(--copper); }
+  .campaign-status { margin: 0; color: var(--muted); font-size: 13px; }
+  .campaign-error { margin: 0 0 18px; }
+  .recent { margin-top: 32px; }
+  .recent h2 { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
+  .recent-list { display: grid; gap: 1px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .recent-list a { display: flex; justify-content: space-between; gap: 16px; padding: 12px 15px; background: var(--surface); color: var(--ink); text-decoration: none; font-size: 13px; }
+  .recent-list a:hover { background: var(--raised); }
+  .recent-list small { color: var(--faint); white-space: nowrap; }
+  @media (max-width: 850px) { .campaign-layout { grid-template-columns: 1fr; } }
+  @media (max-width: 720px) { .campaign-panel { padding: 20px; } .campaign-fields input:not([type="file"]), .campaign-fields select { font-size: 16px; } .result-stage { min-height: 260px; } .recent-list a { align-items: flex-start; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2L2 8L12 14L22 8L12 2Z" fill="#c17f59"/>
+      <path d="M2 16L12 22L22 16" stroke="#c17f59" stroke-width="2" fill="none"/>
+      <path d="M2 12L12 18L22 12" stroke="#c17f59" stroke-width="2" fill="none" opacity="0.5"/>
+    </svg>
+    <b>Donna</b>&nbsp;<span>Photoshoot</span>
+  </a>
+  <div class="account" id="account"></div>
+</header>
+<main>
+  <h1 class="page">Marketing Campaigns</h1>
+  <p class="lede">Turn one product photo into an occasion-ready ad for your audience.</p>
+  <div id="error" class="error campaign-error hidden" role="alert"></div>
+  <div class="campaign-layout">
+    <section class="campaign-panel" aria-labelledby="create-title">
+      <h2 id="create-title">Create your campaign</h2>
+      <p>Give us the product and the message. GPT Image 2 creates one polished 2K image.</p>
+      <form id="campaign-form" class="campaign-fields">
+        <label for="upload"><span>Product photo</span>
+          <input id="upload" name="upload" type="file" accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" required aria-describedby="upload-hint">
+          <small id="upload-hint">JPEG, PNG, WebP or HEIC · up to 15 MB</small>
+        </label>
+        <div id="preview" class="preview" aria-label="Product photo preview">Your product photo will appear here</div>
+        <label for="person-mode"><span>Person in the campaign</span>
+          <select id="person-mode" name="person_mode">
+            <option value="none" selected>Product only</option>
+            <option value="library">Choose a model</option>
+            <option value="upload">Upload model / ambassador photo</option>
+          </select>
+        </label>
+        <div id="person-library-fields" class="person-fields hidden">
+          <label for="person-key"><span>Model</span>
+            <select id="person-key" name="person_key" disabled>
+              <option value="">Choose a model</option>
+            </select>
+          </label>
+          <div id="person-library-preview" class="preview" aria-label="Selected model preview">Choose a model to preview</div>
+        </div>
+        <div id="person-upload-fields" class="person-fields hidden">
+          <label for="person-upload"><span>Model or ambassador photo</span>
+            <input id="person-upload" name="person_upload" type="file" accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" aria-describedby="person-upload-hint" disabled>
+            <small id="person-upload-hint">One person with a clear face · JPEG, PNG, WebP or HEIC · up to 15 MB</small>
+          </label>
+          <div id="person-upload-preview" class="preview" aria-label="Model or ambassador photo preview">Your model photo will appear here</div>
+          <label for="person-consent" class="check-label">
+            <input id="person-consent" name="person_consent" type="checkbox" value="on" disabled>
+            <span>I have permission to use this person’s likeness for this brand.</span>
+          </label>
+        </div>
+        <label for="occasion"><span>Occasion</span>
+          <input id="occasion" name="occasion" list="occasion-options" autocomplete="off" placeholder="e.g. Diwali" maxlength="120" required>
+          <datalist id="occasion-options">
+            <option value="Diwali"><option value="Akshaya Tritiya"><option value="Dhanteras"><option value="Wedding season"><option value="Valentine's Day">
+          </datalist>
+        </label>
+        <label for="audience"><span>Target audience</span>
+          <input id="audience" name="audience" placeholder="e.g. couples shopping for wedding jewellery" maxlength="500" required>
+        </label>
+        <label for="cta"><span>Call to action</span>
+          <input id="cta" name="cta" placeholder="e.g. Explore the collection" maxlength="160" required>
+        </label>
+        <div class="brand-fields">
+          <label for="brand-name"><span>Brand name <small>(optional)</small></span>
+            <input id="brand-name" name="brand_name" maxlength="120" placeholder="e.g. Maison Amara">
+          </label>
+          <label for="logo-upload"><span>Brand logo <small>(optional)</small></span>
+            <input id="logo-upload" name="logo_upload" type="file" accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" aria-describedby="logo-hint">
+            <small id="logo-hint">PNG with a transparent background works best · up to 15 MB</small>
+          </label>
+          <div id="logo-preview" class="preview" aria-label="Brand logo preview">Your logo will appear here</div>
+          <label for="use-brand-logo" id="use-brand-logo-label" class="check-label hidden">
+            <input id="use-brand-logo" name="use_brand_logo" type="checkbox" value="on" disabled>
+            <span>Use my saved workspace logo</span>
+          </label>
+        </div>
+        <label for="aspect"><span>Image format</span>
+          <select id="aspect" name="aspect">
+            <option value="1:1">Square · 1:1</option>
+            <option value="4:5" selected>Portrait · 4:5</option>
+            <option value="9:16">Story · 9:16</option>
+            <option value="16:9">Wide · 16:9</option>
+          </select>
+        </label>
+        <button id="submit" class="go campaign-submit" type="submit">Generate campaign</button>
+        <p class="campaign-caption">One image · one credit</p>
+      </form>
+    </section>
+    <section class="campaign-panel campaign-result" aria-labelledby="result-title">
+      <div>
+        <h2 id="result-title">Your campaign image</h2>
+        <p id="result-intro">Your finished ad will appear here.</p>
+      </div>
+      <div id="result-stage" class="result-stage">Ready when you are</div>
+      <p id="status" class="campaign-status" role="status" aria-live="polite"></p>
+      <div id="actions" class="campaign-actions hidden"></div>
+    </section>
+  </div>
+  <section id="recent" class="recent hidden" aria-labelledby="recent-title">
+    <h2 id="recent-title">Recent campaigns</h2>
+    <div id="recent-list" class="recent-list"></div>
+  </section>
+</main>
+<script src="/app.js"></script>
+<script>
+const form = $('campaign-form');
+const controls = [...form.elements];
+const maxBytes = 15 * 1024 * 1024;
+const allowed = new Set(['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif']);
+const jobPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+let storageKey, draft = {}, busy = false, brandHasLogo = false, savedLogoUrl = null, models = [];
+const previewUrls = { product: null, person: null, logo: null };
+
+function saveDraft() {
+  if (!storageKey) return;
+  try { localStorage.setItem(storageKey, JSON.stringify(draft)); } catch (_) { /* Storage may be disabled. */ }
+}
+
+function message(value, billing = false) {
+  const box = $('error');
+  box.replaceChildren(document.createTextNode(value));
+  if (billing) box.append(' ', Object.assign(document.createElement('a'), { href: '/billing.html', textContent: 'Buy credits' }));
+  box.classList.remove('hidden');
+}
+
+function clearMessage() { $('error').classList.add('hidden'); }
+
+function setBusy(value) {
+  busy = value;
+  controls.forEach((control) => { control.disabled = value; });
+  if (!value) syncConditionalFields();
+  $('submit').textContent = value ? 'Creating your image…' : 'Generate campaign';
+}
+
+function syncConditionalFields() {
+  const mode = $('person-mode').value;
+  $('person-library-fields').classList.toggle('hidden', mode !== 'library');
+  $('person-upload-fields').classList.toggle('hidden', mode !== 'upload');
+  $('person-key').disabled = busy || mode !== 'library';
+  $('person-key').required = mode === 'library';
+  $('person-upload').disabled = busy || mode !== 'upload';
+  $('person-upload').required = mode === 'upload';
+  $('person-consent').disabled = busy || mode !== 'upload';
+  $('person-consent').required = mode === 'upload';
+  $('use-brand-logo-label').classList.toggle('hidden', !brandHasLogo);
+  const useSaved = brandHasLogo && !$('logo-upload').files.length;
+  $('use-brand-logo').disabled = busy || !useSaved;
+  $('use-brand-logo').checked = useSaved && draft.values?.use_brand_logo !== false;
+}
+
+function fileSignature(file) { return [file.name, file.size, file.lastModified].join(':'); }
+
+function imageUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const url = new URL(value, location.href);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+  } catch (_) { return null; }
+}
+
+function updatePreview(file, kind, host) {
+  if (previewUrls[kind]) URL.revokeObjectURL(previewUrls[kind]);
+  previewUrls[kind] = null;
+  const preview = $(host);
+  preview.replaceChildren();
+  if (!file) { preview.textContent = kind === 'product' ? 'Your product photo will appear here' : kind === 'person' ? 'Your model photo will appear here' : 'Your logo will appear here'; return; }
+  if (/\.hei[cf]$/i.test(file.name) || /image\/hei[cf]/i.test(file.type)) {
+    preview.textContent = `${file.name} selected · preview unavailable in this browser`;
+    return;
+  }
+  previewUrls[kind] = URL.createObjectURL(file);
+  const img = new Image();
+  img.src = previewUrls[kind];
+  img.alt = `Preview of ${file.name}`;
+  img.addEventListener('error', () => { preview.textContent = `${file.name} selected · preview unavailable`; });
+  preview.appendChild(img);
+}
+
+function showLibraryPreview() {
+  const preview = $('person-library-preview');
+  const model = models.find((entry) => entry.key === $('person-key').value);
+  preview.replaceChildren();
+  const url = model && imageUrl(model.image);
+  if (!url) { preview.textContent = model ? model.name || model.key : 'Choose a model to preview'; return; }
+  const img = new Image();
+  img.src = url;
+  img.alt = model.name || model.key;
+  img.addEventListener('error', () => { preview.textContent = 'Model preview unavailable'; });
+  preview.appendChild(img);
+}
+
+function showSavedLogo() {
+  if (!savedLogoUrl) return;
+  const img = new Image();
+  img.src = savedLogoUrl;
+  img.alt = 'Saved workspace logo';
+  $('logo-preview').replaceChildren(img);
+}
+
+function result(job) {
+  const stage = $('result-stage');
+  const actions = $('actions');
+  actions.replaceChildren();
+  actions.classList.add('hidden');
+  if (job.status === 'queued' || job.status === 'running') {
+    stage.textContent = 'Preparing your campaign image…';
+    $('status').textContent = job.status === 'queued' ? 'Your campaign is queued.' : 'Creating your campaign image…';
+  } else if (job.status === 'succeeded' && job.images && job.images[0] && imageUrl(job.images[0].url)) {
+    const image = job.images[0];
+    const img = new Image();
+    img.src = imageUrl(image.url);
+    img.alt = `Campaign image for ${job.params?.occasion || 'your occasion'}`;
+    stage.replaceChildren(img);
+    $('status').textContent = 'Your 2K campaign image is ready.';
+    const open = Object.assign(document.createElement('a'), { href: img.src, target: '_blank', rel: 'noopener', textContent: 'View full size' });
+    const download = Object.assign(document.createElement('a'), { href: imageUrl(image.download) || img.src, textContent: 'Download image', download: '' });
+    actions.replaceChildren(download, open);
+    actions.classList.remove('hidden');
+  } else if (job.status === 'failed') {
+    stage.textContent = 'This campaign could not be completed.';
+    $('status').textContent = 'Generation failed. You can try again.';
+    message(job.error || 'Generation failed. Please try again.');
+  } else {
+    stage.textContent = 'Image unavailable';
+    $('status').textContent = 'The job finished without an image.';
+  }
+}
+
+async function watchJob(id) {
+  if (busy) return;
+  setBusy(true);
+  clearMessage();
+  try {
+    const job = await pollJob(`/api/marketing-campaigns/${encodeURIComponent(id)}`, {
+      maxMinutes: 15,
+      onUpdate: result,
+    });
+    if (job.status !== 'queued' && job.status !== 'running') {
+      if (draft.job_id === id) {
+        draft.job_id = null;
+        draft.key = null;
+        saveDraft();
+      }
+      loadRecent();
+      await loadBalance();
+    }
+  } catch (error) {
+    $('status').textContent = 'Could not check this job. Your campaign link is saved; refresh to check again.';
+    message(String(error.message || error));
+  } finally { setBusy(false); }
+}
+
+async function loadRecent() {
+  try {
+    const rows = await api('/api/marketing-campaigns');
+    const list = $('recent-list');
+    list.replaceChildren();
+    rows.slice(0, 5).forEach((row) => {
+      if (!jobPattern.test(row.job_id)) return;
+      const link = Object.assign(document.createElement('a'), { href: `?job=${encodeURIComponent(row.job_id)}` });
+      const title = document.createElement('span');
+      title.textContent = row.occasion || 'Campaign';
+      const meta = document.createElement('small');
+      meta.textContent = `${row.status} · ${new Date(row.created_at).toLocaleDateString()}`;
+      link.append(title, meta);
+      list.appendChild(link);
+    });
+    $('recent').classList.toggle('hidden', !list.childElementCount);
+  } catch (_) { /* Recent history is supplementary. */ }
+}
+
+form.addEventListener('input', (event) => {
+  if (event.target.type === 'file') return;
+  draft.key = null;
+  draft.values = {
+    ...draft.values,
+    occasion: $('occasion').value, audience: $('audience').value,
+    cta: $('cta').value, aspect: $('aspect').value,
+    person_mode: $('person-mode').value, person_key: $('person-key').value,
+    brand_name: $('brand-name').value,
+    person_consent: $('person-consent').checked,
+    use_brand_logo: event.target === $('use-brand-logo')
+      ? $('use-brand-logo').checked : draft.values?.use_brand_logo,
+  };
+  if (event.target === $('person-mode')) syncConditionalFields();
+  if (event.target === $('person-key')) showLibraryPreview();
+  saveDraft();
+});
+form.addEventListener('change', (event) => {
+  const fields = {
+    upload: ['file', 'product', 'preview'],
+    'person-upload': ['personFile', 'person', 'person-upload-preview'],
+    'logo-upload': ['logoFile', 'logo', 'logo-preview'],
+  };
+  const config = fields[event.target.id];
+  if (!config) return;
+  const file = event.target.files[0];
+  const signature = file ? fileSignature(file) : null;
+  if (signature !== draft[config[0]]) draft.key = null;
+  draft[config[0]] = signature;
+  saveDraft();
+  updatePreview(file, config[1], config[2]);
+  if (event.target === $('logo-upload')) {
+    if (!file) showSavedLogo();
+    syncConditionalFields();
+  }
+  clearMessage();
+});
+
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (busy) return;
+  const file = $('upload').files[0];
+  const extension = file?.name.split('.').pop().toLowerCase();
+  if (!file || !allowed.has(extension) || file.size > maxBytes || file.size === 0) {
+    message('Choose a JPEG, PNG, WebP or HEIC product photo up to 15 MB.');
+    return;
+  }
+  for (const [input, label] of [[$('person-upload'), 'model or ambassador'], [$('logo-upload'), 'brand logo']]) {
+    if (input.disabled || !input.files.length) continue;
+    const selected = input.files[0];
+    if (!allowed.has(selected.name.split('.').pop().toLowerCase()) || selected.size > maxBytes || selected.size === 0) {
+      message(`Choose a JPEG, PNG, WebP or HEIC ${label} photo up to 15 MB.`);
+      return;
+    }
+  }
+  if (!form.reportValidity()) return;
+  if (![$('occasion'), $('audience'), $('cta')].every((input) => input.value.trim())) {
+    message('Fill in the occasion, target audience and call to action.');
+    return;
+  }
+  clearMessage();
+  draft.key ||= crypto.randomUUID();
+  saveDraft();
+  const body = new FormData(form);
+  body.set('occasion', $('occasion').value.trim());
+  body.set('audience', $('audience').value.trim());
+  body.set('cta', $('cta').value.trim());
+  body.set('brand_name', $('brand-name').value.trim());
+  body.set('idempotency_key', draft.key);
+  setBusy(true);
+  $('status').textContent = 'Submitting your campaign…';
+  try {
+    const response = await api('/api/marketing-campaigns', { method: 'POST', body });
+    if (!jobPattern.test(response.job_id)) throw new Error('The server returned an invalid job link.');
+    draft.job_id = response.job_id;
+    saveDraft();
+    history.replaceState({}, '', `?job=${encodeURIComponent(response.job_id)}`);
+    $('status').textContent = 'Your campaign is queued.';
+  } catch (error) {
+    $('status').textContent = 'Could not confirm submission. Retry with the same details to check this request.';
+    const detail = String(error.message || error);
+    message(detail, /\b402\b|credit|payment|balance/i.test(detail));
+    setBusy(false);
+    return;
+  }
+  setBusy(false);
+  watchJob(draft.job_id);
+});
+
+window.addEventListener('pagehide', () => {
+  Object.values(previewUrls).forEach((url) => { if (url) URL.revokeObjectURL(url); });
+});
+
+(async () => {
+  try {
+    const me = await loadSession();
+    await loadBalance();
+    storageKey = `campaign:${me.workspace?.id || 'personal'}`;
+    try { draft = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch (_) { draft = {}; }
+    for (const [name, value] of Object.entries(draft.values || {})) {
+      const ids = { occasion: 'occasion', audience: 'audience', cta: 'cta', aspect: 'aspect',
+        person_mode: 'person-mode', person_key: 'person-key', brand_name: 'brand-name' };
+      if (ids[name] && typeof value === 'string') $(ids[name]).value = value;
+    }
+    $('person-consent').checked = draft.values?.person_consent === true;
+    syncConditionalFields();
+    loadRecent();
+    const requested = new URLSearchParams(location.search).get('job');
+    const id = requested || draft.job_id;
+    if (id && jobPattern.test(id)) {
+      if (!requested) history.replaceState({}, '', `?job=${encodeURIComponent(id)}`);
+      watchJob(id);
+    } else if (requested) message('This campaign link is invalid.');
+    try {
+      const cast = await api('/api/models');
+      models = cast.models || [];
+      const select = $('person-key');
+      models.forEach((model) => {
+        if (!model.key) return;
+        select.appendChild(Object.assign(document.createElement('option'),
+          { value: model.key, textContent: `${model.name || model.key}${model.mine ? ' · Your model' : ''}` }));
+      });
+      if (models.some((model) => model.key === draft.values?.person_key)) select.value = draft.values.person_key;
+      showLibraryPreview();
+    } catch (error) { if ($('person-mode').value === 'library') message(String(error.message || error)); }
+    try {
+      const brand = await api('/api/brand');
+      brandHasLogo = !!brand.has_logo;
+      if (draft.values?.brand_name === undefined) {
+        const savedText = typeof brand.text === 'string' ? brand.text : '';
+        $('brand-name').value = savedText.length <= 120 && !/[\x00-\x1f]/.test(savedText) ? savedText : '';
+        draft.values = { ...draft.values, brand_name: $('brand-name').value };
+        saveDraft();
+      }
+      savedLogoUrl = imageUrl(brand.logo_url);
+      showSavedLogo();
+      syncConditionalFields();
+    } catch (_) { /* An optional saved brand does not block a campaign. */ }
+    try {
+      const options = await api('/api/campaign-options');
+      const list = $('occasion-options');
+      if (Array.isArray(options.occasions)) list.replaceChildren(...options.occasions.map((value) => Object.assign(document.createElement('option'), { value })));
+      if (Array.isArray(options.aspects)) {
+        for (const option of $('aspect').options) option.disabled = !options.aspects.includes(option.value);
+        if (!options.aspects.includes($('aspect').value) && options.aspects.includes(options.default_aspect)) $('aspect').value = options.default_aspect;
+      }
+    } catch (error) { message(String(error.message || error)); }
+  } catch (error) { message(String(error.message || error)); }
+})();
+</script>
+</body>
+</html>

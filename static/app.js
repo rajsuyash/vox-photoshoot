@@ -84,6 +84,7 @@ function renderAccount() {
     ['/', 'New photoshoot', 'camera', true],
     ['/models.html', 'Models', 'face'],
     ['/products.html', 'Products', 'box'],
+    ['/campaigns.html', 'Marketing Campaigns', 'brand'],
     ['/history.html', 'History', 'clock'],
     ['/settings.html', 'Branding', 'brand'],
     ['/billing.html', 'Billing', 'card'],

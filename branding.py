@@ -25,6 +25,7 @@ FONTS = pathlib.Path('assets/fonts')
 # Latin, the rupee sign and the punctuation a contact line actually uses. Inter is the
 # app's own typeface, so a stamped image looks like it came from the same place.
 LATIN_FONT = FONTS / 'Inter-SemiBold.ttf'
+CAMPAIGN_FONT = FONTS / 'CormorantGaramond-Variable.ttf'
 
 # Inter has no Indic coverage at all — Devanagari, Tamil, Gujarati and Arabic all render
 # as the SAME .notdef box, which would burn tofu onto an image a client paid for. Hindi
@@ -58,7 +59,7 @@ DEFAULT_OPACITY = 70            # percent
 MIN_TEXT_PX = 13                # below this it is decoration, not contact information
 
 
-def font_for(text: str, size: int) -> ImageFont.FreeTypeFont:
+def font_for(text: str, size: int, campaign: bool = False) -> ImageFont.FreeTypeFont:
     """Pick the face that can actually draw this string.
 
     Per-string rather than per-character: mixing faces mid-line lands glyphs on
@@ -66,6 +67,11 @@ def font_for(text: str, size: int) -> ImageFont.FreeTypeFont:
     """
     if any(ord(c) in DEVANAGARI_RANGE for c in text) and DEVANAGARI_FONT.exists():
         return ImageFont.truetype(str(DEVANAGARI_FONT), size)
+    if campaign:
+        font = ImageFont.truetype(str(CAMPAIGN_FONT), size)
+        font.set_variation_by_name('Medium')
+        if all(c.isspace() or _drawable(font, c) for c in text):
+            return font
     return ImageFont.truetype(str(LATIN_FONT), size)
 
 
@@ -119,25 +125,25 @@ def _prepare_logo(logo_bytes: bytes | None, width: int) -> Image.Image | None:
     return logo.resize((target_width, max(1, int(logo.height * scale))), Image.LANCZOS)
 
 
-def _fit_text(text: str, width: int, height: int, pad: int):
+def _fit_text(text: str, width: int, height: int, pad: int, campaign: bool = False):
     """The largest font that still fits TEXT_MAX_WIDTH_FRACTION, and its box.
 
     Shrink to fit. A long contact line — and Indian ones are long, with a name, a +91
     number and a domain — otherwise runs to the padding edge or past it, which is the
     difference between branding and damage.
     """
-    size = max(MIN_TEXT_PX, int(height * TEXT_HEIGHT_FRACTION))
-    font = font_for(text, size)
+    size = max(MIN_TEXT_PX, int(height * (0.032 if campaign else TEXT_HEIGHT_FRACTION)))
+    font = font_for(text, size, campaign)
     usable = min(width - 2 * pad, int(width * TEXT_MAX_WIDTH_FRACTION))
     while size > MIN_TEXT_PX and font.getlength(text) > usable:
         size -= 1
-        font = font_for(text, size)
+        font = font_for(text, size, campaign)
     box = font.getbbox(text)
     return font, box[2] - box[0], box[3] - box[1]
 
 
 def _draw_logo_block(layer: Image.Image, logo: Image.Image, left: int, block_width: int,
-                     top: int, gap: int) -> int:
+                     top: int, gap: int, halo: bool = True) -> int:
     """Paste `logo`, centred in `block_width` at `top`, with its own contrast halo.
 
     The halo contrasts the LOGO, not the backdrop. We cannot recolour a client's mark, so
@@ -147,6 +153,9 @@ def _draw_logo_block(layer: Image.Image, logo: Image.Image, left: int, block_wid
     Returns the y cursor after the logo (top + logo.height + gap).
     """
     spot = (left + (block_width - logo.width) // 2, top)
+    if not halo:
+        layer.alpha_composite(logo, spot)
+        return top + logo.height + gap
     logo_halo = (0, 0, 0, 190) if _is_light(logo) else (255, 255, 255, 200)
     halo = Image.new('RGBA', layer.size, (0, 0, 0, 0))
     halo.paste(Image.new('RGBA', logo.size, logo_halo), spot, logo.getchannel('A'))
@@ -161,7 +170,7 @@ def _draw_logo_block(layer: Image.Image, logo: Image.Image, left: int, block_wid
 
 def _draw_text_block(layer: Image.Image, text: str, font: ImageFont.FreeTypeFont,
                      left: int, block_width: int, text_width: int, top: int,
-                     ink: tuple, halo_colour: tuple) -> None:
+                     ink: tuple, halo_colour: tuple | None) -> None:
     """Draw `text` centred in `block_width` at `top`, with a blurred contrast halo.
 
     A BLURRED shadow, not a hard offset. Two-pixel hard shadows are invisible against a
@@ -170,16 +179,18 @@ def _draw_text_block(layer: Image.Image, text: str, font: ImageFont.FreeTypeFont
     """
     x = left + (block_width - text_width) // 2
     offset = font.getbbox(text)[1]
-    halo = Image.new('RGBA', layer.size, (0, 0, 0, 0))
-    ImageDraw.Draw(halo).text((x, top - offset), text, font=font, fill=halo_colour)
-    halo = halo.filter(ImageFilter.GaussianBlur(max(2, font.size // 6)))
-    layer.alpha_composite(halo)
-    layer.alpha_composite(halo)
+    if halo_colour is not None:
+        halo = Image.new('RGBA', layer.size, (0, 0, 0, 0))
+        ImageDraw.Draw(halo).text((x, top - offset), text, font=font, fill=halo_colour)
+        halo = halo.filter(ImageFilter.GaussianBlur(max(2, font.size // 6)))
+        layer.alpha_composite(halo)
+        layer.alpha_composite(halo)
     ImageDraw.Draw(layer).text((x, top - offset), text, font=font, fill=ink)
 
 
 def apply(image_bytes: bytes, logo_bytes: bytes | None = None, text: str = '',
-          position: str = DEFAULT_POSITION, opacity: int = DEFAULT_OPACITY) -> bytes:
+          position: str = DEFAULT_POSITION, opacity: int = DEFAULT_OPACITY,
+          campaign: bool = False) -> bytes:
     """Return a new PNG with the branding stamped on. The input is never modified."""
     if position not in POSITIONS:
         position = DEFAULT_POSITION
@@ -200,7 +211,7 @@ def apply(image_bytes: bytes, logo_bytes: bytes | None = None, text: str = '',
     font = None
     text_width = text_height = 0
     if text:
-        font, text_width, text_height = _fit_text(text, width, height, pad)
+        font, text_width, text_height = _fit_text(text, width, height, pad, campaign)
         block_width = max(block_width, text_width)
         block_height += (gap if logo else 0) + text_height
 
@@ -218,10 +229,13 @@ def apply(image_bytes: bytes, logo_bytes: bytes | None = None, text: str = '',
     light_backdrop = (sum(patch.tobytes()) / max(1, len(patch.tobytes()))) > LIGHT_BACKDROP
     ink = (28, 26, 24, 255) if light_backdrop else (255, 255, 255, 255)
     halo_colour = (255, 255, 255, 170) if light_backdrop else (0, 0, 0, 190)
+    if campaign:
+        ink = (139, 83, 48, 255) if light_backdrop else (231, 200, 139, 255)
+        halo_colour = None
 
     cursor = top
     if logo is not None:
-        cursor = _draw_logo_block(layer, logo, left, block_width, cursor, gap)
+        cursor = _draw_logo_block(layer, logo, left, block_width, cursor, gap, halo=not campaign)
     if text and font is not None:
         _draw_text_block(layer, text, font, left, block_width, text_width, cursor,
                          ink, halo_colour)
@@ -322,6 +336,19 @@ def demo() -> None:
     assert tamil, 'Tamil is not bundled and must be reported, not silently boxed'
 
     assert LATIN_FONT.exists() and DEVANAGARI_FONT.exists(), 'a font is missing'
+
+    # Campaign names use the serif face and gold/bronze ink, with no blurred layer.
+    from unittest.mock import patch
+    assert font_for('Luke Diamond', 64, campaign=True).getname()[0] == 'Cormorant Garamond'
+    for backdrop, ink in (((220, 200, 180), (139, 83, 48)), ((35, 25, 20), (231, 200, 139))):
+        canvas = Image.new('RGB', (800, 1000), backdrop)
+        buf = io.BytesIO(); canvas.save(buf, format='PNG')
+        with patch.object(Image.Image, 'filter', side_effect=AssertionError('campaign added a halo')):
+            clean = apply(buf.getvalue(), logo_bytes, 'Luke Diamond', position='top-right', opacity=100, campaign=True)
+        pixels = Image.open(io.BytesIO(clean)).convert('RGB')
+        assert ink in {colour for _, colour in pixels.getcolors(pixels.width * pixels.height)}
+        assert pixels.getpixel((799, 100)) == backdrop, 'branding changed its surrounding background'
+    assert font_for('कल्याण ज्वेलर्स', 40, campaign=True).getname() == font_for('कल्याण ज्वेलर्स', 40).getname()
 
     print('branding ok')
 
