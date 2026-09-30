@@ -2,6 +2,8 @@
 
 Region: `ap-south-1`. App Runner: `vox-photoshoot`, service ID `74c51f50e3014e2587ea8fa9caed99f0`. Production RDS: `vox-photoshoot-db`. Output bucket: `vox-photoshoot-085193942944`.
 
+Current application release: `32ef82b`, image `32ef82b-admin-20260930231413`, digest `sha256:de6a0f19e3631115659b7a9b50f6fdea9da69781abcc8e64b0f90d349e405247`. App Runner operation `68a53efdeddb48a28667eae6a2bd28f3` succeeded. Served page hashes and browser navigation were checked after rollout. Documentation-only follow-up commits do not change the shipped runtime files.
+
 ## Support access
 
 Sign in, open Admin, and enroll an authenticator from a fresh session. Save the ten recovery codes privately; each works once. Support access requires a verified factor and expires after 15 minutes. Enrollment revokes other sessions. Existing Google sign-in is not described as MFA.
