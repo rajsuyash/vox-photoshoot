@@ -18,7 +18,11 @@ Customer email dispatch remains disabled: SES production access requires additio
 
 Local browser sign-in, mandatory verification screen, support directory and workspace billing controls were observed. A synthetic adjustment confirmation stalled in browser automation; HTTP/database checks independently verify adjustments and replay protection. Full browser confirmation completion is not claimed.
 
-App rollout, private RDS ingress enforcement, worker monitor activation and authenticated live checks are next. These checkpoints do not claim an unperformed deployment or completed email milestone.
+A final account-page regression check reproduced an expired-link redirect trap. The page now clears its pending-link marker only on terminal invalid/expired responses, retaining it for retry after temporary server failures. `node account_link_check.js` exercises the actual inline page script with terminal and temporary responses; its red/green check passes.
+
+Release `47484623055bab0bacff3a39be8401d6b21a8229` is pushed and live. App Runner operation `8dde15c13df441d0a02ea17f55ec567a` succeeded with image `4748462-admin-20260930225807`, digest `sha256:b5dde84f744fa5b27c06b255200f1fbc9d50fd8789b0020d1d55a30c30b3f2be`. Real HTTPS smoke checks verified login, KMS-backed MFA, stable credit adjustment replay, zero net fixture credits, export boundaries, removed-member session denial, cross-origin denial, sender gating and authenticated pages. Owned temporary fixture accounts/workspace were removed; no customer email or real charges occurred. The signed-in browser loaded all ten real product images successfully.
+
+Public PostgreSQL ingress was removed after live verification. A fresh worker connection succeeded through the private app/worker security group afterward. The one-minute monitor is producing actual CloudWatch samples while customer sending stays disabled. The temporary RDS restore and its verification security group were removed. The [operations runbook](admin-operations.md) records recovery, rollback, thresholds and known ceilings. Milestone 1 and email-based account setup remain gated on sender approval; full-plan completion is not claimed.
 
 ## Scope and release order
 

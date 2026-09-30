@@ -20,10 +20,10 @@ Recipient source: verified Google account emails, explicitly invited workspace c
 
 Verified sender: voxdonna.com in ap-south-1; Easy DKIM and dedicated MAIL FROM photoshoot-mail.voxdonna.com are SUCCESS. SPF is configured and the existing DMARC policy is preserved. Visible sender: Donna Photoshoot <notifications@voxdonna.com>. Support reply-to: suyash@voxdonna.com.
 
-Bounce/complaint controls: the implementation uses a PostgreSQL outbox with stable event keys, expiring leases and bounded retry/backoff. SES delivery/bounce/complaint events will be consumed through an IAM-authenticated SNS/Lambda path. Permanent bounces and complaints suppress subsequent sends. Accepted messages remain distinct from confirmed delivery. Queue age, worker errors and failed messages will be monitored. Customer dispatch stays disabled until production approval and actual delivery checks pass.
+Bounce/complaint controls: the implementation uses a PostgreSQL outbox with stable event keys, expiring leases and bounded retry/backoff. SES delivery/bounce/complaint events are consumed through an IAM-authenticated SNS/Lambda path. Permanent bounces and complaints suppress subsequent sends. Accepted messages remain distinct from confirmed delivery. Queue age, worker errors and failed messages are monitored. Customer dispatch stays disabled until production approval.
 
 Sample welcome: “Welcome to Donna Photoshoot. Your account is ready with 6 credits. Create a product photoshoot or marketing campaign from your product photo. Start a photoshoot: https://photo.voxdonna.com/index.html. Reply to this email for help.” The actual message uses the credits granted, including zero when the trial cap applies.
 
 Sample receipt (illustrative amounts only): “Plan: Starter. Payment received: INR 1,239.00, including applicable tax. 30 credits added. Balance after this purchase: 30 credits.” The message includes the verified payment reference and invoice link. Mandate authorization does not trigger a purchase receipt; an already reversed purchase does not claim credits were added.
 
-We can provide permitted test-delivery evidence after worker deployment. Please let us know if further information is needed.
+On 2026-09-30, the deployed worker delivered a welcome and receipt to our owned test inbox using an isolated restored database. Both delivery events were recorded. The receipt was a clearly labeled zero-value delivery check; no real payment or customer mailing occurred. Please let us know if further information is needed.
