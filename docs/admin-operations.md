@@ -2,7 +2,7 @@
 
 Region: `ap-south-1`. App Runner: `vox-photoshoot`, service ID `74c51f50e3014e2587ea8fa9caed99f0`. Production RDS: `vox-photoshoot-db`. Output bucket: `vox-photoshoot-085193942944`.
 
-Current application release: `32ef82b`, image `32ef82b-admin-20260930231413`, digest `sha256:de6a0f19e3631115659b7a9b50f6fdea9da69781abcc8e64b0f90d349e405247`. App Runner operation `68a53efdeddb48a28667eae6a2bd28f3` succeeded. Served page hashes and browser navigation were checked after rollout. Documentation-only follow-up commits do not change the shipped runtime files.
+Current application release: `d00a9be`, image `d00a9be-admin-20261001155007`, digest `sha256:82f21d6bed765dd4086fcb0d186b778439435af3dc157eedf19b65a81f059b71`. App Runner operation `cccd8820ccdd4be68bf948112238cfb6` succeeded. Exact archive checks, health, and a private deployed-code/production-fixture probe verified migration 022 and atomic password-change notice behavior. The worker ZIP SHA-256 is `lpfa1FORK4zpAfIp7iM6WOf3nQWrCmbg9oqo1tp0Goc=`. Prior release `32ef82b` remains the rollback image, with the compatible additive schema. Documentation-only follow-up commits do not change runtime files.
 
 ## Support access
 
@@ -17,6 +17,10 @@ SES sender: `notifications@voxdonna.com`; support reply-to: `suyash@voxdonna.com
 `vox-photoshoot-notifications` runs every minute through EventBridge. Lambda reads only its own `vox-photoshoot/notifications` secret. It publishes monitoring even when sending is disabled. SES delivery/bounce/complaint events reach the same handler through the scoped SNS feedback topic; permanent bounces and complaints suppress future sends. Accepted is not delivered. SES has no send idempotency key: an accepted remote send followed by a crash before local acceptance can produce a retry duplicate.
 
 After approval, activate customer sending with an activation timestamp in both worker/app configuration. Preserve existing secret/environment entries. Do not replay historical notification rows. First verify one explicitly permitted new event and its delivery feedback, then inspect queue drain. These are future activation instructions, not a claim activation occurred.
+
+Completed password resets enqueue a password-change notice to the account email in the same transaction as password/session changes. Link replay cannot enqueue it twice; initial invitation setup does not claim a password was changed. Sender outage does not prevent committing the local outbox event. The 2026-10-01 private verification sent no mail and removed its owned fixture.
+
+Razorpay failure/cancellation notification flags do not prove customer delivery. Real test-mode capability and provider delivery evidence remain outstanding; regression checks use stubs and no live payment was charged.
 
 Operational alarms send to the confirmed owned inbox:
 
