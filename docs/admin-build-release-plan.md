@@ -6,6 +6,8 @@ Input: [preliminary audit and acceptance checklist](admin-audit-plan.md). The or
 
 ## Execution checkpoint — 2026-09-30
 
+Update 2026-10-01: the user specifically approved sharing the prepared AWS response. It was submitted unchanged to case `179079869200146` at `08:29:14Z`; the correspondence is visible and case status is **Customer action completed**. Customer dispatch remains disabled pending SES production access. This documentation update does not change deployed runtime release `32ef82b`.
+
 The user approved all remaining verified batches through deployment. Account support, audited billing corrections, delivery history, failed-job inspection, mandatory authenticator step-up, and bounded owner/admin metadata exports and deletion review are implemented. Automatic purge is disabled pending a retention policy; no period is invented.
 
 Real disposable PostgreSQL checks pass for membership/session revocation, last-owner/admin protection, stable mutation keys, concurrent credit writes, invitation/reset single use and expiry, Google-only recovery exclusion, authenticator/recovery-code replay and lockout, tenant-scoped exports, and deletion review. Existing subscription/refund/auth/credit and video API checks pass with gateway/generation providers stubbed. Python compilation and JavaScript syntax checks pass; no configured type checker or linter exists.

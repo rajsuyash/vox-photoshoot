@@ -2,7 +2,7 @@
 
 Recipient: AWS Support, existing SES case `179079869200146`, account `085193942944`, region `ap-south-1`.
 
-The response below is prepared for approval. It has not been submitted.
+The user approved this response on 2026-10-01. It was submitted unchanged to the existing AWS Support case at `2026-10-01T08:29:14Z`; the console displays the correspondence and status **Customer action completed**. SES production access remains disabled pending AWS review. Screenshot: `/private/tmp/vox-ses-support-submitted.jpg`.
 
 ---
 

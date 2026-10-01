@@ -12,7 +12,7 @@ Every support mutation requires a reason and stable request key. Credit correcti
 
 ## Email and monitoring
 
-SES sender: `notifications@voxdonna.com`; support reply-to: `suyash@voxdonna.com`. Identity/DKIM/dedicated MAIL FROM are verified. Customer dispatch and email-based invitations/provisioning/recovery/resend remain disabled until production access is approved. Case: `179079869200146`; prepared response: [admin-ses-support-response.md](admin-ses-support-response.md). Specific sharing approval is pending.
+SES sender: `notifications@voxdonna.com`; support reply-to: `suyash@voxdonna.com`. Identity/DKIM/dedicated MAIL FROM are verified. Customer dispatch and email-based invitations/provisioning/recovery/resend remain disabled until production access is approved. Case: `179079869200146`; the [approved response](admin-ses-support-response.md) was submitted unchanged on `2026-10-01T08:29:14Z`. Correspondence and **Customer action completed** status are visible in the console; AWS review is pending.
 
 `vox-photoshoot-notifications` runs every minute through EventBridge. Lambda reads only its own `vox-photoshoot/notifications` secret. It publishes monitoring even when sending is disabled. SES delivery/bounce/complaint events reach the same handler through the scoped SNS feedback topic; permanent bounces and complaints suppress future sends. Accepted is not delivered. SES has no send idempotency key: an accepted remote send followed by a crash before local acceptance can produce a retry duplicate.
 
