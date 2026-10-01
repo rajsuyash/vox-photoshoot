@@ -20,7 +20,7 @@ After approval, activate customer sending with an activation timestamp in both w
 
 Completed password resets enqueue a password-change notice to the account email in the same transaction as password/session changes. Link replay cannot enqueue it twice; initial invitation setup does not claim a password was changed. Sender outage does not prevent committing the local outbox event. The 2026-10-01 private verification sent no mail and removed its owned fixture.
 
-Razorpay failure/cancellation notification flags do not prove customer delivery. Real test-mode capability and provider delivery evidence remain outstanding; regression checks use stubs and no live payment was charged.
+[Real Test Mode acceptance](admin-razorpay-acceptance.md) verifies all three pack purchases, Starter renewal, cumulative refunds, duplicate/delayed signed HTTP deliveries and House UI cancellation. Start and cancellation emails reached the owned inbox. Failure-email delivery remains unproven: its simulator payment was still created before disposable mandates were cancelled. No live charge occurred; local signed deliveries are not provider-to-host webhook evidence. Sandbox invoice tax was zero, so these checks do not establish production GST configuration.
 
 Operational alarms send to the confirmed owned inbox:
 
