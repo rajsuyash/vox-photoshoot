@@ -2,7 +2,7 @@
 
 Region: `ap-south-1`. App Runner: `vox-photoshoot`, service ID `74c51f50e3014e2587ea8fa9caed99f0`. Production RDS: `vox-photoshoot-db`. Output bucket: `vox-photoshoot-085193942944`.
 
-Current application release: `d00a9be`, image `d00a9be-admin-20261001155007`, digest `sha256:82f21d6bed765dd4086fcb0d186b778439435af3dc157eedf19b65a81f059b71`. App Runner operation `cccd8820ccdd4be68bf948112238cfb6` succeeded. Exact archive checks, health, and a private deployed-code/production-fixture probe verified migration 022 and atomic password-change notice behavior. The worker ZIP SHA-256 is `lpfa1FORK4zpAfIp7iM6WOf3nQWrCmbg9oqo1tp0Goc=`. Prior release `32ef82b` remains the rollback image, with the compatible additive schema. Documentation-only follow-up commits do not change runtime files.
+Current application release: `86ef88e`, image `86ef88e-clothing-20261001162841`, digest `sha256:fb4a96021d5e71db61d53df2aac6d3cf24755c69ae9db0acd99e32301d5b5135`. App Runner operation `dfa00c599830418b9444c59325157818` succeeded. This release adds model clothing choices while preserving admin runtime, credentials, private egress and disabled customer sending. Exact-archive notification/support regression checks and live health/form checks pass. The prior admin release `d00a9be` verified migration 022 and atomic password-change notices with a private production-owned fixture; it is the immediate rollback image (`d00a9be-admin-20261001155007`, digest `sha256:82f21d6bed765dd4086fcb0d186b778439435af3dc157eedf19b65a81f059b71`) with compatible additive schema. The unchanged worker ZIP SHA-256 is `lpfa1FORK4zpAfIp7iM6WOf3nQWrCmbg9oqo1tp0Goc=`. Documentation-only follow-up commits do not change runtime files.
 
 ## Support access
 
