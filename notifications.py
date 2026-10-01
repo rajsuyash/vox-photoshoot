@@ -68,6 +68,11 @@ def render(kind, payload):
                       'This link works once and expires in ' + ('24 hours.' if kind == 'invite' else '30 minutes.')]
         link = origin + '/account.html#token=' + account_actions.delivery(payload['action_id'])
         label = 'Accept invitation' if kind == 'invite' else 'Reset password'
+    elif kind == 'password_changed':
+        subject, title = 'Your Donna Photoshoot password was changed', 'Password changed'
+        paragraphs = ['Your password was changed and your previous sessions were signed out.',
+                      'If you did not make this change, contact support immediately and request a password reset.']
+        link, label = origin + '/account.html', 'Review account'
     elif kind in {'receipt', 'refund'}:
         count = _integer(payload, 'credits', 0)
         balance = _integer(payload, 'balance')

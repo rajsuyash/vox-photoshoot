@@ -69,7 +69,7 @@ def accept(raw, password='', session=None):
     hashed = auth.token_hash(raw)
     with db.tx() as conn:
         # Consistent user-before-action locking avoids reset/reissue deadlocks.
-        user = conn.execute('SELECT u.id,u.suspended_at,u.password_hash,u.google_sub '
+        user = conn.execute('SELECT u.id,u.suspended_at,u.password_hash,u.google_sub,u.email '
                             'FROM users u JOIN account_actions a ON a.user_id=u.id '
                             'WHERE a.token_hash=%s FOR UPDATE OF u', (hashed,)).fetchone()
         if not user or user[1]:
@@ -89,6 +89,9 @@ def accept(raw, password='', session=None):
             conn.execute('UPDATE users SET password_hash=%s WHERE id=%s',
                          (auth.hash_password(password), user[0]))
             conn.execute('DELETE FROM sessions WHERE user_id=%s', (user[0],))
+            if action['kind'] == 'reset':
+                notifications.enqueue(conn, f"password_changed:{action['id']}",
+                                      'password_changed', user[4], {}, user_id=user[0])
         elif not session or str(session['user_id']) != str(user[0]):
             raise PermissionError('sign in with the invited email first')
         if action['kind'] == 'invite':

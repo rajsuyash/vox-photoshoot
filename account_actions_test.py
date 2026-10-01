@@ -21,6 +21,7 @@ def main():
     os.environ.update(DATABASE_URL=urlunsplit(url._replace(path='/' + name)), ACCOUNT_LINK_KEY='a'*64)
     try:
         db.migrate()
+        db.migrate()
         import auth
         import account_actions as a
         from fastapi.testclient import TestClient
@@ -48,6 +49,27 @@ def main():
         assert not auth.lookup(session)
         assert auth.authenticate('owner@example.com', 'new secure password')
         assert not auth.authenticate('owner@example.com', 'old password')
+        notices = db.query("SELECT recipient,payload FROM notifications WHERE kind='password_changed'")
+        assert len(notices) == 1 and notices[0]['recipient'] == 'owner@example.com', notices
+        import notifications
+        notice = notifications.render('password_changed', notices[0]['payload'])
+        assert 'password was changed' in notice['subject']
+        assert raw not in str(notice) and 'new secure password' not in str(notice)
+        from unittest.mock import patch
+        with db.tx() as conn:
+            reset_id = a.issue(conn, 'reset', uid, 'owner@example.com')
+        reset_token = a.delivery(reset_id)
+        rollback_session = auth.start_session(uid, None)
+        with patch.object(notifications, 'enqueue', side_effect=RuntimeError('outbox unavailable')):
+            try:
+                a.accept(reset_token, 'must roll back password')
+                raise AssertionError('password reset committed without its notice')
+            except RuntimeError:
+                pass
+        assert auth.authenticate('owner@example.com', 'new secure password')
+        assert not auth.authenticate('owner@example.com', 'must roll back password')
+        assert auth.lookup(rollback_session) and a.delivery(reset_id) == reset_token
+        assert len(db.query("SELECT id FROM notifications WHERE kind='password_changed'")) == 1
         google = db.query("INSERT INTO users(email,password_hash,google_sub) VALUES('google@example.com',NULL,'sub') RETURNING id", one=True)['id']
         for email in ['missing@example.com', 'google@example.com', 'owner@example.com']:
             for _ in range(4):
@@ -85,6 +107,7 @@ def main():
         assert client.post('/api/account/accept', data={'token': invite_token,
                             'password': 'new owner password'}).status_code == 200
         assert auth.authenticate('new@example.com', 'new owner password')
+        assert len(db.query("SELECT id FROM notifications WHERE kind='password_changed'")) == 1
         assert client.post('/api/account/accept', data={'token': invite_token,
                             'password': 'new owner password'}).status_code == 400
         assert client.get('/api/admin/workspace/' + new_ws).json()['balance'] == 6
@@ -95,7 +118,7 @@ def main():
             raise AssertionError('expired link accepted')
         except ValueError:
             pass
-        print('account actions ok: single-use races, expiry, session revocation, Google-only exclusion, invite ownership')
+        print('account actions ok: single-use races, expiry, session revocation, atomic password-change notice, Google-only exclusion, invite ownership')
     finally:
         db.close()
         with psycopg.connect(base, autocommit=True) as conn:
