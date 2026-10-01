@@ -568,6 +568,14 @@ def compose(product: str, category, model_description: str, location_key: str,
     else:
         frame_line = f'{category.framings[framing]} {comp.direction(category.key)}'.strip()
 
+    wardrobe = composition_module.CLOTHING_CATEGORIES.get(comp.clothing_category,
+                                                         location.wardrobe)
+    style = composition_module.DRESSING_STYLES.get(comp.dressing_style, '')
+    clothing_note = (
+        'Keep clothing, sleeves, drapes and embellishments clear of the featured '
+        'jewellery. Do not add jewellery or accessories that compete with it. '
+        if comp.clothing_category or style else ''
+    )
     return (
         # Expression sits near the front deliberately: at the end of the prompt it was
         # ignored and every shot came back neutral. It used to be a hardcoded smile,
@@ -579,8 +587,10 @@ def compose(product: str, category, model_description: str, location_key: str,
         # though CRAFT_BASE restates fidelity later: the early anchor is what stopped
         # the model redesigning the piece, and CRAFT_BASE alone did not.
         f'wearing {product} from the reference image {category.worn(options)} '
-        f'She wears a {location.wardrobe}. '
-        f'Behind her: {location.scene}. '
+        f'She wears a {wardrobe}. '
+        + (f'{style} ' if style else '')
+        + clothing_note
+        + f'Behind her: {location.scene}. '
         f'Lighting: {location.light}. '
         f'Framing: {frame_line} '
         f'{CRAFT_BASE} {category.craft} '

@@ -659,6 +659,8 @@ def create_shoot(
     pose: str = Form(''),
     aspect: str = Form(''),
     resolution: str = Form(''),
+    clothing_category: str = Form('', max_length=40),
+    dressing_style: str = Form('', max_length=40),
     # Custom mode only. Frame and distance are owned by hero/profile/detail otherwise.
     custom_shot: str = Form(''),
     frame: str = Form(''),
@@ -679,6 +681,12 @@ def create_shoot(
         raise HTTPException(400, f'unknown location {location_key}')
     if category not in product.CATEGORIES:
         raise HTTPException(400, f'unknown category {category}')
+    for field, value, choices in (
+        ('clothing category', clothing_category, composition.CLOTHING_CATEGORIES),
+        ('dressing style', dressing_style, composition.DRESSING_STYLES),
+    ):
+        if value and value not in choices:
+            raise HTTPException(400, f'unknown {field}')
     if not description.strip():
         raise HTTPException(400, 'the piece needs a description')
     # product.identify never raises; it falls back to the client's earrings and says so.
@@ -709,6 +717,7 @@ def create_shoot(
     comp = composition.parse({
         'expression': expression, 'view': view, 'angle': angle, 'pose': pose,
         'aspect': aspect, 'resolution': resolution,
+        'clothing_category': clothing_category, 'dressing_style': dressing_style,
         'frame': frame if wants_custom else '',
         'distance': distance if wants_custom else '',
     }, category)

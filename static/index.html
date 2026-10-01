@@ -159,6 +159,8 @@
      down the choices rather than hunting for headings. */
   .comp { border: 1px solid var(--line); border-radius: var(--radius);
     background: var(--surface); padding: 22px 24px; }
+  .model-clothing { margin-bottom: 24px; }
+  .model-clothing h3 { margin: 0 0 8px; font-size: 16px; }
   .comp-row { display: flex; align-items: flex-start; gap: 16px; padding: 11px 0;
     border-top: 1px solid var(--line); flex-wrap: wrap; }
   .comp-row:first-child { border-top: 0; padding-top: 0; }
@@ -411,6 +413,18 @@
     <p class="empty-state" id="compWaiting">Available once we have read your piece.</p>
 
     <div class="comp hidden" id="compBody">
+      <div class="model-clothing" role="group" aria-labelledby="clothingHeading">
+        <h3 id="clothingHeading">Model clothing</h3>
+        <p class="hint">Choose the outfit and its style. Automatic uses the location's look.</p>
+        <div class="fields">
+          <label>Clothing category
+            <select id="cClothing"><option value="">Automatic · match the location</option></select>
+          </label>
+          <label>Dressing style
+            <select id="cDressing"><option value="">Automatic · suit the outfit</option></select>
+          </label>
+        </div>
+      </div>
       <div class="comp-row">
         <span class="comp-label">Shape</span>
         <div class="chips" id="cAspect"></div>
@@ -1006,6 +1020,17 @@ const COMP_ROWS = [
   ['cResolution', 'resolutions', 'resolution'],
 ];
 
+const CLOTHING_SELECTS = [
+  ['cClothing', 'clothing_categories', 'clothing_category', 'Automatic · match the location'],
+  ['cDressing', 'dressing_styles', 'dressing_style', 'Automatic · suit the outfit'],
+];
+CLOTHING_SELECTS.forEach(([id, , field]) => {
+  $(id).addEventListener('change', (event) => {
+    state.comp[field] = event.target.value;
+    refresh();
+  });
+});
+
 function drawChips(hostId, items, field, { clearable = false } = {}) {
   const host = $(hostId);
   if (!host) return;
@@ -1032,6 +1057,12 @@ function drawChips(hostId, items, field, { clearable = false } = {}) {
 function drawComposition() {
   const opts = state.compOptions;
   if (!opts) return;
+  CLOTHING_SELECTS.forEach(([id, listName, field, automatic]) => {
+    const select = $(id);
+    select.replaceChildren(new Option(automatic, ''),
+      ...(opts[listName] || []).map((item) => new Option(item.label, item.key)));
+    select.value = state.comp[field] || '';
+  });
   COMP_ROWS.forEach(([hostId, listName, field]) => {
     drawChips(hostId, opts[listName] || [], field, { clearable: field === 'pose' });
   });
@@ -1165,7 +1196,8 @@ $('go').addEventListener('click', async () => {
   body.append('sku', $('pieceSku').value.trim());
   // Composition. Keys only — the server resolves each against its own vocabulary, so
   // nothing typed in a browser can reach a prompt.
-  ['expression', 'view', 'angle', 'pose', 'aspect', 'resolution', 'frame', 'distance']
+  ['expression', 'view', 'angle', 'pose', 'aspect', 'resolution', 'frame', 'distance',
+    'clothing_category', 'dressing_style']
     .forEach((field) => body.append(field, state.comp[field] || ''));
   body.append('custom_shot', $('cCustom').checked ? '1' : '');
   body.append('detected', String(state.piece.detected !== false));

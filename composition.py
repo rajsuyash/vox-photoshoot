@@ -85,6 +85,29 @@ DEFAULT_RESOLUTION = '2K'
 # turns out to cost the same this drops to 1 rather than quietly becoming margin.
 RESOLUTION_MULTIPLIER = {'2K': 1, '4K': 2}
 
+CLOTHING_CATEGORIES = {
+    'western': 'refined Western blouse and tailored trousers',
+    'indian': 'traditional Indian saree with a neatly draped pallu and fitted blouse',
+    'formal': 'tailored formal suit with a refined blouse',
+    'semi-formal': 'polished semi-formal blouse and tailored separates',
+    'ethnic': 'traditional ethnic kurta ensemble with a neatly arranged dupatta',
+    'indo-western': 'contemporary Indo-Western ensemble blending Indian textiles with tailored separates',
+    'casual': 'relaxed casual blouse and clean-cut trousers',
+    'festive': 'festive Indian ensemble in rich fabric with restrained embroidery',
+    'bridal': 'bridal lehenga ensemble with a neatly draped dupatta and restrained embroidery',
+    'evening': 'sophisticated evening dress in flowing fabric',
+    'streetwear': 'modern streetwear ensemble with a structured jacket and relaxed trousers',
+    'resortwear': 'lightweight resortwear ensemble in airy linen',
+}
+
+DRESSING_STYLES = {
+    'conservative': 'Conservative styling: modest coverage, opaque fabrics and relaxed silhouettes.',
+    'classic-timeless': 'Classic timeless styling: clean lines, balanced tailoring and understated colours.',
+    'bold': 'Bold styling: confident colour, striking tailoring and a strong silhouette.',
+    'edgy': 'Edgy styling: contemporary asymmetric cuts, structured layers and contrasting textures.',
+    'bohemian': 'Bohemian styling: flowing silhouettes, natural textures and relaxed draping.',
+}
+
 
 # --- per-category frames and poses ---------------------------------------------------
 
@@ -180,6 +203,8 @@ class Composition:
     # hero/profile/detail already ARE frames and distances.
     frame: str = ''
     distance: str = ''
+    clothing_category: str = ''          # '' keeps the location's wardrobe
+    dressing_style: str = ''
 
     @property
     def quality(self) -> str:
@@ -240,6 +265,8 @@ def parse(raw: dict | None, category_key: str) -> Composition:
         pose=pick(raw.get('pose'), poses, ''),
         frame=pick(raw.get('frame'), frames, ''),
         distance=pick(raw.get('distance'), DISTANCES, ''),
+        clothing_category=pick(raw.get('clothing_category'), CLOTHING_CATEGORIES, ''),
+        dressing_style=pick(raw.get('dressing_style'), DRESSING_STYLES, ''),
     )
 
 
@@ -257,6 +284,8 @@ def options_for(category_key: str) -> dict:
                         for k in RESOLUTIONS],
         'frames': labelled(FRAMES.get(category_key, {})),
         'poses': labelled(POSES.get(category_key, {})),
+        'clothing_categories': labelled(CLOTHING_CATEGORIES),
+        'dressing_styles': labelled(DRESSING_STYLES),
         'defaults': {'expression': DEFAULT_EXPRESSION, 'view': DEFAULT_VIEW,
                      'angle': DEFAULT_ANGLE, 'aspect': DEFAULT_ASPECT,
                      'resolution': DEFAULT_RESOLUTION, 'distance': DEFAULT_DISTANCE},
