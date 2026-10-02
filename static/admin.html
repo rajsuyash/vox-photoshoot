@@ -193,9 +193,11 @@
       const node = (tag, text) =>
         Object.assign(document.createElement(tag), { textContent: text ?? "" });
       function notice(text, error = false) {
+        $(error ? "done" : "error").classList.add("hidden");
         const host = $(error ? "error" : "done");
         host.textContent = text;
         host.classList.remove("hidden");
+        host.scrollIntoView({ behavior: "smooth", block: "center" });
       }
       function button(label, fn) {
         const b = node("button", label);
@@ -258,8 +260,10 @@
       }
       async function mutate(action, target, data = {}) {
         const reason = $("reason").value.trim();
-        if (reason.length < 3)
+        if (reason.length < 3) {
+          setTimeout(() => $("reason").focus(), 0);
           throw Error("Enter a reason before changing customer data.");
+        }
         if (
           !confirm(
             `${action.replaceAll("_", " ")} for ${target}\n${JSON.stringify(data)}\nReason: ${reason}?`,
