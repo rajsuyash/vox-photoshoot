@@ -48,6 +48,21 @@ Application rollback uses the previous immutable image and the additive compatib
 
 ## Data requests and ceilings
 
-Workspace owners can download bounded metadata pages from Account. Administrators can export a workspace with attribution. Tokens, passwords and internal prompts are excluded; media remains available through History. Each page is a separate snapshot, so multi-page exports should occur during a quiet period. Deletion requests require workspace-name confirmation and admin review. Automatic purge is disabled pending retention/financial-record rules and backup implications.
+Workspace owners can download bounded metadata pages from Account. Administrators can export a workspace with attribution. Tokens, passwords and internal prompts are excluded; media remains available through History. Each page is a separate snapshot, so multi-page exports should occur during a quiet period. Deletion requests require workspace-name confirmation and admin review. Automatic purge remains disabled; see Data retention policy below for the adopted schedule.
+
+## Data retention policy
+
+Adopted by the owner on 2026-10-01. Automatic deletion stays disabled; deletion remains manual through the admin deletion-review flow above.
+
+| Data category | Retention |
+| --- | --- |
+| Financial records (invoices, payments, refunds, credit ledger, GST data) | 8 years from the end of the financial year (Companies Act / GST). Never auto-deleted; exempt from account deletion — anonymise the linkage only where legally allowed. |
+| Account and profile data | Delete or anonymise 30–90 days after account closure (grace period for reactivation). |
+| Generated images and uploads | Keep while the account is active; delete 30 days after account closure. |
+| Admin audit log | 1–3 years. |
+| Email delivery records (notification outbox, delivery feedback) | ~90 days. |
+| Backups | Rolling 30–35 day expiry so deleted data ages out. |
+
+Automatic purge remains off. Before enabling it: review a dry-run report of what would be deleted, and confirm the 8-year financial period with the company's accountant — the figure above is not legal advice. DPDP Act (India) and GDPR (if EU customers) require erasing personal data once it is no longer needed; customer deletion requests continue through the admin deletion review above.
 
 The app and worker use private VPC egress; public PostgreSQL ingress is removed. A new worker connection was tested after removal. The private network uses one NAT gateway at this scale. Its failure is an egress availability ceiling; use one per availability zone when that requirement changes. There is one shared support mutation lock; split by workspace if measured throughput warrants it. Provider currency spend is not fabricated from credit counts.
