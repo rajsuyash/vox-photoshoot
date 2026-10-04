@@ -77,13 +77,20 @@ instant rollback target.
   0 errors / max 311 ms after cutover; `healthz` 200.
 - **Proof of translation:** MASQUERADE counter **92 packets**, FORWARD **129 packets / 40 KB**.
 
+## 24-hour soak and cleanup (2026-10-04 06:04 UTC)
+
+- Notifications Lambda: **1,440 runs / 0 errors**, max 2.2 s. Instance 2/2 ok, both alarms OK,
+  uptime 1 day. FORWARD **91,423 pkts / 29 MB**; 282 MB RAM available, swap 23 MB used.
+  Old gateway carried **0 bytes** in the 24 h.
+- `cleanup --confirm-delete-nat nat-092ef3b01ff293f14`: gateway **deleted**, EIP
+  `eipalloc-0761877c58d6c6319` (65.0.243.0) released; `healthz` 200 afterwards.
+  **~$37/month saving now live.** No rollback target remains — a managed gateway must be
+  re-created to go back (see `docs/admin-operations.md`).
+
 ## Remaining
 
-- After a clean 24 h (not before 2026-10-04 ~06:05 UTC):
-  `.venv/bin/python tools/admin_nat_instance.py cleanup --confirm-delete-nat nat-092ef3b01ff293f14`
-  — this is the step that actually removes the ~$40/month. Until then both are billed.
-- Then update `docs/admin-operations.md` (line 68 still says "one NAT gateway").
-- Rollback any time before cleanup: `.venv/bin/python tools/admin_nat_instance.py rollback`.
+- Nothing. Cleanup done 2026-10-04 and `docs/admin-operations.md` updated. `rollback` no
+  longer applies (its target gateway is deleted).
 - Run the tool with `.venv/bin/python` — system `python3` has no boto3.
 
 ## Lessons worth keeping
