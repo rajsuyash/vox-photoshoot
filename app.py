@@ -504,6 +504,20 @@ def _make_talent(workspace_id: str, user_id: str, name: str, description: str,
     if not job['created']:
         raise HTTPException(409, 'that model is already being made')
 
+    # Run inline, but jobs.finish() below still only closes a job it OWNS — status
+    # 'running' AND claimed_by itself — the same fencing every background job uses to
+    # stop a reaped container overwriting one that was already refunded. A model job
+    # that is never claimed is never 'running', so finish() always matched zero rows and
+    # silently did nothing on both the success and the failure path below: the row sat
+    # at 'queued' forever with no heartbeat, which is exactly what the stalled-job
+    # monitor alarms on (migrations/023_model_jobs_finished.sql repairs the two rows
+    # this left in production). claim() failing here would mean something else claimed
+    # a job id that was just created in this request — it should never happen, and
+    # settling or refunding a job we no longer own would race whatever does own it, so
+    # fail the request the same way a duplicate idempotency key does rather than guess.
+    if not jobs.claim(job_id):
+        raise HTTPException(409, 'that model is already being made')
+
     try:
         path = talent.portrait(prompt, reference)
         row = talent.create(workspace_id, user_id, name, description, path, source)
