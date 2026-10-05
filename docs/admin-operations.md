@@ -2,7 +2,7 @@
 
 Region: `ap-south-1`. App Runner: `vox-photoshoot`, service ID `74c51f50e3014e2587ea8fa9caed99f0`. Production RDS: `vox-photoshoot-db`. Output bucket: `vox-photoshoot-085193942944`.
 
-Current application release: `86ef88e`, image `86ef88e-clothing-20261001162841`, digest `sha256:fb4a96021d5e71db61d53df2aac6d3cf24755c69ae9db0acd99e32301d5b5135`. App Runner operation `dfa00c599830418b9444c59325157818` succeeded. This release adds model clothing choices while preserving admin runtime, credentials, private egress and disabled customer sending. Exact-archive notification/support regression checks and live health/form checks pass. The prior admin release `d00a9be` verified migration 022 and atomic password-change notices with a private production-owned fixture; it is the immediate rollback image (`d00a9be-admin-20261001155007`, digest `sha256:82f21d6bed765dd4086fcb0d186b778439435af3dc157eedf19b65a81f059b71`) with compatible additive schema. The unchanged worker ZIP SHA-256 is `lpfa1FORK4zpAfIp7iM6WOf3nQWrCmbg9oqo1tp0Goc=`. Documentation-only follow-up commits do not change runtime files.
+Current application release: `846ead8`, image `846ead8-modeljobs-20261005052809`, digest `sha256:4b978bd3fe57f5fd4c42d6a5bfedf9d3deeee57ba73d40a1f873a2c87d2e3820`, deployed ~05:28 UTC 2026-10-05. Fixes the model-job claim/finish mismatch that left every model job stuck `'queued'` (alarm back to OK 05:30:44 UTC); also ships the previously-undeployed `45723f5` admin notice fix. Deployed by copying the live `SourceConfiguration` and swapping only the image — see `docs/stalled-jobs-2026-10-05.md`. The immediate rollback image is `86ef88e-clothing-20261001162841`. The unchanged worker ZIP SHA-256 is `lpfa1FORK4zpAfIp7iM6WOf3nQWrCmbg9oqo1tp0Goc=` — the worker was not redeployed. Documentation-only follow-up commits do not change runtime files.
 
 ## Support access
 
@@ -43,6 +43,10 @@ RDS is encrypted and retains seven days of automated backups. Restore to a **new
 Verified drill: restore at `2026-09-30T20:17:56Z` matched 38 credit entries across eight ledger workspaces, nine users, nine workspaces, 26 jobs and 12 invoices. The isolated restored database also proved the real Lambda/SES/feedback path using two labeled zero-value owned-inbox messages, without customer mail or charges. The temporary restore and its security group were removed after verification.
 
 S3 versioning is enabled. Recover an object by retrieving its prior version and comparing expected bytes before choosing that version as current. The 2026-09-30 drill retrieved an original version after overwrite; only the owned test versions were removed afterward. Existing output/upload transitions to STANDARD_IA after 90 days remain. No expiration/purge period was added.
+
+`deploy.sh` is stale against the live service's env vars and secret mappings and
+overwrites Secrets Manager from local `.env`; until it is fixed, deploy by copying the
+live `SourceConfiguration` and swapping only the image (`docs/stalled-jobs-2026-10-05.md`).
 
 Application rollback uses the previous immutable image and the additive compatible schema. If rolling back to code predating support authentication hardening, revoke test/support sessions and account for the older access behavior; do not assume the older app enforces new suspension or MFA fields. Keep private VPC egress. Preserve ledger, invoice, outbox and audit records. Disable sending first if communication behavior is wrong; pause the scheduler only if the worker itself is unsafe, since that also pauses its metrics. Restore prior application configuration without discarding new Secrets Manager values.
 
